@@ -27,6 +27,10 @@ jobs:
     needs: release-please
     if: ${{ needs.release-please.outputs.release_created }}
     steps:
+      - name: Lowercase repo name
+        run: |
+          echo "REPO=${GITHUB_REPOSITORY,,}" >> ${GITHUB_ENV}
+
       - name: Checkout
         uses: actions/checkout@v4
         with:
@@ -51,7 +55,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository }}
+          images: ghcr.io/${{ env.REPO }}
           tags: |
             type=semver,pattern={{version}},value=${{ needs.release-please.outputs.tag_name }}
             type=raw,value=latest
@@ -76,7 +80,8 @@ jobs:
           mkdir -p dist
           # We use a temporary container to extract the /dist folder from the builder stage
           # Since we pushed multi-arch, we pick one (amd64) to extract from
-          docker create --name extract-container ghcr.io/${{ github.repository }}:${{ needs.release-please.outputs.tag_name }}
+          docker create --name extract-container-native ghcr.io/${{ env.REPO }}:${{ needs.release-please.outputs.tag_name }}
+          docker rm extract-container-native
           # Check if /dist exists in the final image (it doesn't, it was in builder)
           # BETTER: Build the builder stage separately or use the 'target' to build just the artifacts
           # For simplicity here, we'll build a small temporary image that just has the dist files.
