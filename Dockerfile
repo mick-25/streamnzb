@@ -8,6 +8,8 @@ RUN apk add --no-cache git
 
 # Copy dependency files
 COPY go.mod go.sum ./
+# Copy submodule go.mod and source for replacement
+COPY pkg/external/sevenzip/ ./pkg/external/sevenzip/
 RUN go mod download
 
 # Copy source code (including submodules if present on host)
