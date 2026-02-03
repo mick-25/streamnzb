@@ -13,9 +13,13 @@ RUN go mod download
 # Copy source code (including submodules if present on host)
 COPY . .
 
+# Build args set by buildx
+ARG TARGETOS
+ARG TARGETARCH
+
 # Build the application
-# We use -ldflags="-s -w" to reduce binary size
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o streamnzb ./cmd/streamnzb
+# Use TARGETOS and TARGETARCH to cross-compile for the target platform
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -ldflags="-s -w" -o streamnzb ./cmd/streamnzb
 
 # Final stage
 FROM alpine:latest
@@ -35,4 +39,4 @@ EXPOSE 7000
 EXPOSE 1119
 
 # Run the application
-ENTRYPOINT ["./streamnzb"]
+CMD ["./streamnzb"]
