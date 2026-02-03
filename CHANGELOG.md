@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.1](https://github.com/Gaisberg/streamnzb/compare/streamnzb-v1.0.0...streamnzb-v1.0.1) (2026-02-03)
+
+
+### Bug Fixes
+
+* Lowercase repository name for Docker ([98d69b6](https://github.com/Gaisberg/streamnzb/commit/98d69b675008f7c7abf3ab0dfa261e46d44645b6))
+
 ## [1.0.0](https://github.com/Gaisberg/streamnzb/compare/streamnzb-v0.0.1...streamnzb-v1.0.0) (2026-02-03)
 
 
