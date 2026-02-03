@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.0.5](https://github.com/Gaisberg/streamnzb/compare/streamnzb-v0.0.4...streamnzb-v0.0.5) (2026-02-03)
+
+
+### Bug Fixes
+
+* Copy submodule before go mod download ([385e52e](https://github.com/Gaisberg/streamnzb/commit/385e52e96536205c16a68354b09d0693b4ebcad7))
+
 ## [0.0.4](https://github.com/Gaisberg/streamnzb/compare/streamnzb-v0.0.3...streamnzb-v0.0.4) (2026-02-03)
 
 
