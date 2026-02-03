@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.0.3](https://github.com/Gaisberg/streamnzb/compare/streamnzb-v0.0.2...streamnzb-v0.0.3) (2026-02-03)
+
+
+### Bug Fixes
+
+* Build 2 ([8547b82](https://github.com/Gaisberg/streamnzb/commit/8547b8257c2dadc86383404fa226e15ac637d307))
+
 ## [0.0.2](https://github.com/Gaisberg/streamnzb/compare/streamnzb-v0.0.1...streamnzb-v0.0.2) (2026-02-03)
 
 
