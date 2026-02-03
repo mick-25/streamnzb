@@ -283,7 +283,7 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string) 
 				if nzbID != "" {
 					err := s.availClient.ReportAvailability(nzbID, bestResult.Host, true)
 					if err != nil {
-						logger.Error("Failed to report availability to AvailNZB", "nzb_id", nzbID, "err", err)
+						// logger.Error("Failed to report availability to AvailNZB", "nzb_id", nzbID, "err", err)
 					} else {
 						logger.Debug("Reported availability to AvailNZB", "nzb_id", nzbID, "provider", bestResult.Provider)
 					}
@@ -309,7 +309,7 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string) 
 				// Try to inspect RAR
 				_, err := unpack.InspectRAR(sess.Files)
 				logger.Debug("Inspected archive", "files", len(sess.Files), "err", err)
-				if strings.Contains(err.Error(), "nested archive detected") {
+				if err != nil && strings.Contains(err.Error(), "nested archive detected") {
 					// True error (nested archive, no video in valid RAR, etc.)
 					logger.Debug("RAR inspection failed", "title", item.Title, "err", err)
 					s.sessionManager.DeleteSession(sessionID)

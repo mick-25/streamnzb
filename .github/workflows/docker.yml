@@ -66,6 +66,7 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
+            AVAILNZB_URL=${{ secrets.AVAILNZB_URL }}
             AVAILNZB_API_KEY=${{ secrets.AVAILNZB_API_KEY }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -79,7 +80,7 @@ jobs:
           # Check if /dist exists in the final image (it doesn't, it was in builder)
           # BETTER: Build the builder stage separately or use the 'target' to build just the artifacts
           # For simplicity here, we'll build a small temporary image that just has the dist files.
-          docker build --target builder -t streamnzb-builder --build-arg AVAILNZB_API_KEY=${{ secrets.AVAILNZB_API_KEY }} .
+          docker build --target builder -t streamnzb-builder --build-arg AVAILNZB_URL=${{ secrets.AVAILNZB_URL }} --build-arg AVAILNZB_API_KEY=${{ secrets.AVAILNZB_API_KEY }} .
           docker create --name extract-container streamnzb-builder
           docker cp extract-container:/dist/. ./dist/
           docker rm extract-container

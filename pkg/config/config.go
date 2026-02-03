@@ -34,10 +34,6 @@ type Config struct {
 	
 	// Security
 	SecurityToken string
-
-	// AvailNZB
-	AvailNZBURL    string
-	AvailNZBAPIKey string
 }
 
 // Provider represents a Usenet provider configuration
@@ -62,8 +58,6 @@ func Load() (*Config, error) {
 		ValidationSampleSize:     getEnvInt("VALIDATION_SAMPLE_SIZE", 5),
 		MaxConcurrentValidations: getEnvInt("MAX_CONCURRENT_VALIDATIONS", 20),
 		SecurityToken:            os.Getenv("SECURITY_TOKEN"),
-		AvailNZBURL:             getEnv("AVAILNZB_URL", "http://localhost:8080"),
-		AvailNZBAPIKey:          os.Getenv("AVAILNZB_API_KEY"),
 	}
 	
 	// Load providers

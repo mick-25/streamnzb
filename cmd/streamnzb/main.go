@@ -23,7 +23,7 @@ import (
 
 var (
 	// AvailNZB configuration set at build time via -ldflags
-	AvailNZBURL    = "http://79.72.19.191"
+	AvailNZBURL    = ""
 	AvailNZBAPIKey = ""
 )
 
@@ -114,13 +114,7 @@ func main() {
 
 	// Initialize AvailNZB client
 	finalAvailURL := AvailNZBURL
-	if finalAvailURL == "" {
-		finalAvailURL = cfg.AvailNZBURL
-	}
 	finalAvailKey := AvailNZBAPIKey
-	if finalAvailKey == "" {
-		finalAvailKey = cfg.AvailNZBAPIKey
-	}
 	availClient := availnzb.NewClient(finalAvailURL, finalAvailKey)
 
 	// Initialize Stremio addon server

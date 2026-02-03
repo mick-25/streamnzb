@@ -18,19 +18,20 @@ COPY . .
 # Build args set by buildx or manual build
 ARG TARGETOS
 ARG TARGETARCH
+ARG AVAILNZB_URL
 ARG AVAILNZB_API_KEY
 
 # Build the application
 # We build for the current target platform by default
 # But we also build other platforms for release extraction
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
-    go build -ldflags="-s -w -X main.AvailNZBAPIKey=${AVAILNZB_API_KEY}" -o streamnzb ./cmd/streamnzb
+    go build -ldflags="-s -w -X main.AvailNZBURL=${AVAILNZB_URL} -X main.AvailNZBAPIKey=${AVAILNZB_API_KEY}" -o streamnzb ./cmd/streamnzb
 
 # Release stage: Build all binaries for extraction
 RUN mkdir -p /dist && \
-    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w -X main.AvailNZBAPIKey=${AVAILNZB_API_KEY}" -o /dist/streamnzb-linux-amd64 ./cmd/streamnzb && \
-    CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w -X main.AvailNZBAPIKey=${AVAILNZB_API_KEY}" -o /dist/streamnzb-linux-arm64 ./cmd/streamnzb && \
-    CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="-s -w -X main.AvailNZBAPIKey=${AVAILNZB_API_KEY}" -o /dist/streamnzb-windows-amd64.exe ./cmd/streamnzb
+    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w -X main.AvailNZBURL=${AVAILNZB_URL} -X main.AvailNZBAPIKey=${AVAILNZB_API_KEY}" -o /dist/streamnzb-linux-amd64 ./cmd/streamnzb && \
+    CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w -X main.AvailNZBURL=${AVAILNZB_URL} -X main.AvailNZBAPIKey=${AVAILNZB_API_KEY}" -o /dist/streamnzb-linux-arm64 ./cmd/streamnzb && \
+    CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="-s -w -X main.AvailNZBURL=${AVAILNZB_URL} -X main.AvailNZBAPIKey=${AVAILNZB_API_KEY}" -o /dist/streamnzb-windows-amd64.exe ./cmd/streamnzb
 
 # Final stage
 FROM alpine:latest
