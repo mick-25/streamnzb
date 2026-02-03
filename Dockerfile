@@ -12,16 +12,25 @@ COPY go.mod go.sum ./
 COPY pkg/external/sevenzip/ ./pkg/external/sevenzip/
 RUN go mod download
 
-# Copy source code (including submodules if present on host)
+# Copy source code
 COPY . .
 
-# Build args set by buildx
+# Build args set by buildx or manual build
 ARG TARGETOS
 ARG TARGETARCH
+ARG AVAILNZB_API_KEY
 
 # Build the application
-# Use TARGETOS and TARGETARCH to cross-compile for the target platform
-RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -ldflags="-s -w" -o streamnzb ./cmd/streamnzb
+# We build for the current target platform by default
+# But we also build other platforms for release extraction
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+    go build -ldflags="-s -w -X main.AvailNZBAPIKey=${AVAILNZB_API_KEY}" -o streamnzb ./cmd/streamnzb
+
+# Release stage: Build all binaries for extraction
+RUN mkdir -p /dist && \
+    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w -X main.AvailNZBAPIKey=${AVAILNZB_API_KEY}" -o /dist/streamnzb-linux-amd64 ./cmd/streamnzb && \
+    CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w -X main.AvailNZBAPIKey=${AVAILNZB_API_KEY}" -o /dist/streamnzb-linux-arm64 ./cmd/streamnzb && \
+    CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="-s -w -X main.AvailNZBAPIKey=${AVAILNZB_API_KEY}" -o /dist/streamnzb-windows-amd64.exe ./cmd/streamnzb
 
 # Final stage
 FROM alpine:latest
@@ -31,13 +40,11 @@ RUN apk add --no-cache ca-certificates tzdata
 
 WORKDIR /app
 
-# Copy binary from builder
+# Copy the native binary for the container
 COPY --from=builder /app/streamnzb .
 
 # Expose ports
-# Addon port
 EXPOSE 7000
-# NNTP Proxy port (if enabled)
 EXPOSE 1119
 
 # Run the application

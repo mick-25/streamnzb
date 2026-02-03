@@ -21,6 +21,12 @@ import (
 	"github.com/joho/godotenv"
 )
 
+var (
+	// AvailNZB configuration set at build time via -ldflags
+	AvailNZBURL    = "http://79.72.19.191"
+	AvailNZBAPIKey = ""
+)
+
 func main() {
 	// Load environment variables
 	if err := godotenv.Load(); err != nil {
@@ -107,7 +113,15 @@ func main() {
 	triageService := triage.NewService(5)
 
 	// Initialize AvailNZB client
-	availClient := availnzb.NewClient(cfg.AvailNZBURL, cfg.AvailNZBAPIKey)
+	finalAvailURL := AvailNZBURL
+	if finalAvailURL == "" {
+		finalAvailURL = cfg.AvailNZBURL
+	}
+	finalAvailKey := AvailNZBAPIKey
+	if finalAvailKey == "" {
+		finalAvailKey = cfg.AvailNZBAPIKey
+	}
+	availClient := availnzb.NewClient(finalAvailURL, finalAvailKey)
 
 	// Initialize Stremio addon server
 	stremioServer := stremio.NewServer(cfg.AddonBaseURL, hydraClient, validator, sessionManager, triageService, availClient, cfg.SecurityToken)

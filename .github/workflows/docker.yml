@@ -40,7 +40,6 @@ jobs:
         with:
           driver: docker-container
 
-
       - name: Log in to the Container registry
         uses: docker/login-action@v3
         with:
@@ -58,6 +57,7 @@ jobs:
             type=raw,value=latest
 
       - name: Build and push Docker image
+        id: build
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -65,5 +65,27 @@ jobs:
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            AVAILNZB_API_KEY=${{ secrets.AVAILNZB_API_KEY }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Extract binaries from Docker
+        run: |
+          mkdir -p dist
+          # We use a temporary container to extract the /dist folder from the builder stage
+          # Since we pushed multi-arch, we pick one (amd64) to extract from
+          docker create --name extract-container ghcr.io/${{ github.repository }}:${{ needs.release-please.outputs.tag_name }}
+          # Check if /dist exists in the final image (it doesn't, it was in builder)
+          # BETTER: Build the builder stage separately or use the 'target' to build just the artifacts
+          # For simplicity here, we'll build a small temporary image that just has the dist files.
+          docker build --target builder -t streamnzb-builder --build-arg AVAILNZB_API_KEY=${{ secrets.AVAILNZB_API_KEY }} .
+          docker create --name extract-container streamnzb-builder
+          docker cp extract-container:/dist/. ./dist/
+          docker rm extract-container
+
+      - name: Upload Release Assets
+        env:
+          GH_TOKEN: ${{ secrets.MY_RELEASE_PLEASE_TOKEN }}
+        run: |
+          gh release upload ${{ needs.release-please.outputs.tag_name }} dist/*
