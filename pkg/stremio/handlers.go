@@ -301,7 +301,7 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string) 
 			}
 			
 			// Deep Inspection
-			var displayTitle string
+			var displayTitle string = item.Title
 			// Format size
 			sizeGB := float64(nzbParsed.TotalSize()) / (1024 * 1024 * 1024)
 			
@@ -316,8 +316,6 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string) 
 					resultChan <- nzbResult{err: fmt.Errorf("deep inspection failed: %w", err)}
 					return
 				}
-			} else {
-				displayTitle = item.Title
 			}
 
 			// Create stream URL
