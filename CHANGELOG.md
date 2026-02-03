@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.0.4](https://github.com/Gaisberg/streamnzb/compare/streamnzb-v0.0.3...streamnzb-v0.0.4) (2026-02-03)
+
+
+### Bug Fixes
+
+* Go 1.25-alpine ([96a977b](https://github.com/Gaisberg/streamnzb/commit/96a977be4efb6583c18fccf99f1966169c8fb8f1))
+
 ## [0.0.3](https://github.com/Gaisberg/streamnzb/compare/streamnzb-v0.0.2...streamnzb-v0.0.3) (2026-02-03)
 
 
