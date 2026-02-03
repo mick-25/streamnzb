@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.2](https://github.com/Gaisberg/streamnzb/compare/streamnzb-v1.0.1...streamnzb-v1.0.2) (2026-02-03)
+
+
+### Bug Fixes
+
+* Binary extraction and docker tagging ([1a925cb](https://github.com/Gaisberg/streamnzb/commit/1a925cb0227f699895b6b9f80a21d20b98cca3eb))
+
 ## [1.0.1](https://github.com/Gaisberg/streamnzb/compare/streamnzb-v1.0.0...streamnzb-v1.0.1) (2026-02-03)
 
 
