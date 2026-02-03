@@ -2,7 +2,7 @@
   "packages": {
     ".": {
       "release-type": "go",
-      "package-name": "availablenzb",
+      "package-name": "streamnzb",
       "changelog-path": "CHANGELOG.md"
     }
   },
