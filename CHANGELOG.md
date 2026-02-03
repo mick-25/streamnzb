@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.0.2](https://github.com/Gaisberg/streamnzb/compare/streamnzb-v0.0.1...streamnzb-v0.0.2) (2026-02-03)
+
+
+### Bug Fixes
+
+* Include submodule in checkout step ([7a67aaa](https://github.com/Gaisberg/streamnzb/commit/7a67aaabe3ea8d19aba57846713b1baef5cc1aa5))
+
 ## [0.0.1](https://github.com/Gaisberg/streamnzb/compare/streamnzb-v0.0.1...streamnzb-v0.0.1) (2026-02-03)
 
 
