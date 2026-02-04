@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"sort"
 	"strings"
@@ -35,7 +36,7 @@ type Server struct {
 }
 
 // NewServer creates a new Stremio addon server
-func NewServer(baseURL string, hydraClient *nzbhydra.Client, validator *validation.Checker, sessionMgr *session.Manager, triageService *triage.Service, availClient *availnzb.Client, securityToken string) *Server {
+func NewServer(baseURL string, port int, hydraClient *nzbhydra.Client, validator *validation.Checker, sessionMgr *session.Manager, triageService *triage.Service, availClient *availnzb.Client, securityToken string) (*Server, error) {
 	actualBaseURL := baseURL
 	if securityToken != "" {
 		if !strings.HasSuffix(actualBaseURL, "/") {
@@ -44,7 +45,7 @@ func NewServer(baseURL string, hydraClient *nzbhydra.Client, validator *validati
 		actualBaseURL += securityToken
 	}
 
-	return &Server{
+	s := &Server{
 		manifest:       NewManifest(),
 		baseURL:        actualBaseURL,
 		hydraClient:    hydraClient,
@@ -54,6 +55,23 @@ func NewServer(baseURL string, hydraClient *nzbhydra.Client, validator *validati
 		availClient:    availClient,
 		securityToken:  securityToken,
 	}
+
+	if err := s.CheckPort(port); err != nil {
+		return nil, err
+	}
+
+	return s, nil
+}
+
+// CheckPort verifies if the specified port is available for the addon
+func (s *Server) CheckPort(port int) error {
+	address := fmt.Sprintf(":%d", port)
+	ln, err := net.Listen("tcp", address)
+	if err != nil {
+		return fmt.Errorf("addon port %d is already in use", port)
+	}
+	ln.Close()
+	return nil
 }
 
 // SetupRoutes configures HTTP routes for the addon

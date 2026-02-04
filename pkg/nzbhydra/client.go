@@ -18,8 +18,22 @@ type Client struct {
 	client  *http.Client
 }
 
-// NewClient creates a new NZBHydra2 client
-func NewClient(baseURL, apiKey string) *Client {
+// Ping checks if the NZBHydra2 server is reachable
+func (c *Client) Ping() error {
+	resp, err := c.client.Get(c.baseURL)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode >= 500 {
+		return fmt.Errorf("NZBHydra2 returned error status: %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// NewClient creates a new NZBHydra2 client and verifies connectivity
+func NewClient(baseURL, apiKey string) (*Client, error) {
 	// Create HTTP client with TLS skip verify for self-signed certs
 	transport := &http.Transport{
 		TLSClientConfig: &tls.Config{
@@ -31,7 +45,7 @@ func NewClient(baseURL, apiKey string) *Client {
 		IdleConnTimeout:     90 * time.Second,
 	}
 	
-	return &Client{
+	c := &Client{
 		baseURL: baseURL,
 		apiKey:  apiKey,
 		client: &http.Client{
@@ -39,6 +53,12 @@ func NewClient(baseURL, apiKey string) *Client {
 			Transport: transport,
 		},
 	}
+
+	if err := c.Ping(); err != nil {
+		return nil, err
+	}
+
+	return c, nil
 }
 
 // SearchRequest represents a search query

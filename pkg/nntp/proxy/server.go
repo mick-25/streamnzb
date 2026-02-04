@@ -25,8 +25,8 @@ type Server struct {
 }
 
 // NewServer creates a new NNTP proxy server
-func NewServer(host string, port int, pools []*nntp.ClientPool, authUser, authPass string) *Server {
-	return &Server{
+func NewServer(host string, port int, pools []*nntp.ClientPool, authUser, authPass string) (*Server, error) {
+	s := &Server{
 		host:     host,
 		port:     port,
 		pools:    pools,
@@ -34,6 +34,24 @@ func NewServer(host string, port int, pools []*nntp.ClientPool, authUser, authPa
 		authPass: authPass,
 		sessions: make(map[string]*Session),
 	}
+
+	if err := s.Validate(); err != nil {
+		return nil, err
+	}
+
+	return s, nil
+}
+
+// Validate checks if the proxy server can be started (port free, security checks)
+func (s *Server) Validate() error {
+	addr := fmt.Sprintf("%s:%d", s.host, s.port)
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("NNTP proxy port %d is already in use", s.port)
+	}
+	ln.Close()
+
+	return nil
 }
 
 // Start starts the NNTP proxy server

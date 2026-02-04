@@ -131,3 +131,7 @@ Configuration is handled via environment variables or the `.env` file. See `.env
 If you find this project useful and want to support its development, you can buy me a coffee:
 
 [**Buy Me A Coffee**](https://buymeacoffee.com/gaisberg)
+
+### 📜 Credits
+
+This project incorporates logic and packages for archive decoding (RAR and 7z) from the [altmount](https://github.com/javi11/altmount) project by [javi11](https://github.com/javi11). Special thanks for the robust implementation of on-the-fly Usenet archive extraction.
