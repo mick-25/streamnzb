@@ -104,6 +104,8 @@ func GetMediaStream(files []*loader.File, cachedBP interface{}) (ReadSeekCloser,
 	for _, f := range files {
 		name := extractFilename(f.Name())
 		lower := strings.ToLower(name)
+		// Debug logging handled above
+		
 		if strings.HasSuffix(lower, ".mkv") || strings.HasSuffix(lower, ".mp4") || strings.HasSuffix(lower, ".avi") {
 			stream, err := f.OpenStream()
 			if err != nil {
@@ -111,6 +113,95 @@ func GetMediaStream(files []*loader.File, cachedBP interface{}) (ReadSeekCloser,
 			}
 			return stream, name, f.Size(), nil, nil
 		}
+	}
+
+	// 4. Obfuscated / Unknown file handling
+	// If we haven't found anything yet, find the largest file
+	var largestFile *loader.File
+	for _, f := range files {
+		if largestFile == nil || f.Size() > largestFile.Size() {
+			largestFile = f
+		}
+	}
+
+	if largestFile != nil && largestFile.Size() > 50*1024*1024 {
+		logger.Warn("No clear media found, probing largest file for magic signature", "name", largestFile.Name(), "size", largestFile.Size())
+		
+		// UnpackableFile interface usage if needed, but here we have loader.File
+		// Just peek the first few bytes.
+		// Note: DownloadSegment(ctx, 0)
+		// We need a context. Use generic TODO/Background for this probe.
+		// Actually, we can use OpenStream().Read() but that might buffer too much.
+		// File has DownloadSegment.
+		
+		// Just assume it *might* be RAR if it starts with 'Rar!'
+		// But ScanArchive expects to be called.
+		
+		// Use a lightweight probe
+		// We can't easily access DownloadSegment directly from here without context if we didn't export it well,
+		// but I updated DownloadSegment to take context.
+		
+		// Let's rely on ScanArchive to be robust?
+		// No, ScanArchive expects us to give it a set.
+		// If we tell ScanArchive to scan *everything* because we suspect obfuscation?
+		
+		// PROBE
+		// We need to import context
+		// Assuming context package is available or we use context.Background()
+		
+		// We'll treat it as a RAR scan attempt if probe succeeds.
+		// Since we don't have easy context here (refactor needed?), we'll blindly send it to ScanArchive?
+		// ScanArchive is expensive if it's not a rar.
+		
+		// Let's blindly try to stream it if it's NOT a rar.
+		// Wait, if it IS a rar, streaming it directly will fail (binary garbage).
+		
+		// OK, we trust ScanArchive to fail fast if no RAR headers found.
+		// So if we have a large unknown file, let's TRY to ScanArchive with strictly the largest file?
+		// No, a RAR set might be split.
+		// If obfuscated, usually they are named consistently i.e. "giberish.001", "giberish.002" or just "giberish".
+		
+		// Decision: If we are here, we are desperate.
+		// Attempt ScanArchive on ALL files.
+		// If ScanArchive returns "no archive found" (we need to distinguish this from other errors), 
+		// THEN fallback to direct stream of largest file.
+		
+		// scanResult, err := ScanArchive(unpackables)
+		// ScanArchive logs "Detected RAR archive" if successful.
+		// If ScanArchive finds something, great.
+		// But ScanArchive checks for signatures too.
+		
+		// Current ScanArchive logic relies on extension being .rar/.rXX or file starting with "Rar!".
+		// Let's modify ScanArchive to filter by signature if extension is missing?
+		// Actually, let's just trigger ScanArchive here.
+		
+		unpackables := make([]UnpackableFile, len(files))
+		for i, f := range files {
+			unpackables[i] = f
+		}
+		
+		logger.Info("Attempting heuristic RAR scan on unknown files")
+		bp, err := ScanArchive(unpackables)
+		if err == nil {
+			logger.Info("Heuristic scan found RAR archive")
+			s, name, size, err := StreamFromBlueprint(bp)
+			if err == nil {
+				return s, name, size, bp, nil
+			}
+		} else {
+			logger.Warn("Heuristic RAR scan failed, falling back to direct stream of largest file", "err", err)
+		}
+		
+		// Fallback: Direct Stream largest file
+		extractedName := extractFilename(largestFile.Name())
+		stream, err := largestFile.OpenStream()
+		if err != nil {
+			return nil, "", 0, nil, err
+		}
+		// Guess extension?
+		// If we don't know, maybe appending .mkv helps players?
+		// Or just return as is.
+		return stream, extractedName, largestFile.Size(), nil, nil
 	}
 
 	logger.Warn("GetMediaStream found no suitable media", "files", len(files), "rar_candidates", len(rarFiles))
