@@ -6,6 +6,7 @@ StreamNZB is a unified **Stremio Addon** and **Usenet Proxy** that pools multipl
 
 ### ✨ Features
 *   **Stremio Integration**: Stream content directly from Usenet with availability caching.
+*   **Multiple Indexers**: Supports **NZBHydra2** and **Prowlarr** with parallel search aggregation.
 *   **Smart Pooling**: Aggregates connections from multiple Usenet providers.
 *   **Availability Checking**: Verifies article existence before attempting playback.
 *   **NNTP Proxy**: Exposes a standard NNTP server (default port 119) for use with SABnzbd or NZBGet.
@@ -23,7 +24,9 @@ graph TD
         Proxy["StreamNZB Proxy"]
     end
     
-    Addon -->|Search| Hydra["NZBHydra2 / Indexer"]
+    Addon -->|Search| Aggregator["Indexer Aggregator"]
+    Aggregator --> Hydra["NZBHydra2"]
+    Aggregator --> Prowlarr["Prowlarr"]
     Addon -->|Download| Provider1["Usenet Provider 1"]
     Addon -->|Download| Provider2["Usenet Provider 2"]
     Proxy -->|Download| Provider1
@@ -33,7 +36,7 @@ graph TD
 ### ✅ Prerequisites
 Before running StreamNZB, ensure you have:
 1.  **Usenet Provider(s)**: At least one active subscription (e.g., Newshosting, Eweka).
-2.  **Indexer / Aggregator**: **NZBHydra2 is required** with your indexers configured.
+2.  **Indexer Manager**: **NZBHydra2** OR **Prowlarr** (or both!) with your indexers configured.
 3.  **Stremio** (Optional): Required if you want to use the streaming capabilities. You can use StreamNZB solely as an NNTP proxy without Stremio.
 
 ### 🚀 Running the Application
@@ -55,7 +58,9 @@ services:
       - "7000:7000"
     environment:
       - NZBHYDRA2_URL=http://nzbhydra2:5076
-      - NZBHYDRA2_API_KEY=your_api_key_here
+      - NZBHYDRA2_API_KEY=your_hydra_key
+      - PROWLARR_URL=http://prowlarr:9696
+      - PROWLARR_API_KEY=your_prowlarr_key
       - ADDON_PORT=7000
       - ADDON_BASE_URL=http://localhost:7000
       - PROVIDER_1_NAME=Provider1
@@ -105,7 +110,8 @@ docker run -d \
 Configuration is handled via environment variables or the `.env` file. See `.env.example` for all available options.
 
 **Key Settings:**
-- `NZBHYDRA2_*`: Connection to your indexer (Hydra2 recommended).
+- `NZBHYDRA2_*`: Connection to NZBHydra2 (optional if using Prowlarr).
+- `PROWLARR_*`: Connection to Prowlarr (optional if using Hydra).
 - `PROVIDER_*`: Your Usenet provider details. You can add multiple providers by incrementing the number (PROVIDER_1, PROVIDER_2, etc).
 - `ADDON_BASE_URL`: The public URL where Stremio can reach this service.
 - `SECURITY_TOKEN`: Optional but recommended. Adds a path prefix to your addon URL to prevent unauthorized access.

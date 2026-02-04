@@ -1,4 +1,4 @@
-package nzbhydra
+package prowlarr
 
 import (
 	"crypto/tls"
@@ -12,28 +12,23 @@ import (
 	"time"
 )
 
-// Client represents an NZBHydra2 API client
+// Client represents a Prowlarr Newznab API client
 type Client struct {
 	baseURL string
 	apiKey  string
+	name    string
 	client  *http.Client
 }
 
-// Ping checks if the NZBHydra2 server is reachable
-func (c *Client) Ping() error {
-	resp, err := c.client.Get(c.baseURL)
-	if err != nil {
-		return err
+// Name returns the name of this indexer
+func (c *Client) Name() string {
+	if c.name != "" {
+		return c.name
 	}
-	defer resp.Body.Close()
-	
-	if resp.StatusCode >= 500 {
-		return fmt.Errorf("NZBHydra2 returned error status: %d", resp.StatusCode)
-	}
-	return nil
+	return "Prowlarr"
 }
 
-// NewClient creates a new NZBHydra2 client and verifies connectivity
+// NewClient creates a new Prowlarr client and verifies connectivity
 func NewClient(baseURL, apiKey string) (*Client, error) {
 	// Create HTTP client with TLS skip verify for self-signed certs
 	transport := &http.Transport{
@@ -41,7 +36,7 @@ func NewClient(baseURL, apiKey string) (*Client, error) {
 			InsecureSkipVerify: true,
 		},
 		MaxIdleConns:        100,
-		MaxIdleConnsPerHost: 100, // Allow high parallelism for NZB downloads
+		MaxIdleConnsPerHost: 100,
 		MaxConnsPerHost:     100,
 		IdleConnTimeout:     90 * time.Second,
 	}
@@ -62,12 +57,24 @@ func NewClient(baseURL, apiKey string) (*Client, error) {
 	return c, nil
 }
 
-// Name returns the name of this indexer
-func (c *Client) Name() string {
-	return "NZBHydra2"
+// Ping checks if the Prowlarr server is reachable
+func (c *Client) Ping() error {
+	// Prowlarr health check endpoint or just root
+	// We'll check the Newznab API capability endpoint
+	apiURL := fmt.Sprintf("%s/api?t=caps&apikey=%s", c.baseURL, c.apiKey)
+	resp, err := c.client.Get(apiURL)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("Prowlarr returned error status: %d", resp.StatusCode)
+	}
+	return nil
 }
 
-// Search queries NZBHydra2 for content
+// Search queries Prowlarr for content
 func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, error) {
 	// Build Newznab API URL
 	params := url.Values{}
@@ -75,9 +82,6 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 	params.Set("o", "xml")
 	
 	// Use appropriate search type based on category
-	// 2000 = Movies -> use t=movie
-	// 5000 = TV -> use t=tvsearch
-	// Default = generic search
 	if req.Cat == "2000" {
 		params.Set("t", "movie")
 	} else if req.Cat == "5000" {
@@ -90,7 +94,6 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 		params.Set("q", req.Query)
 	}
 	if req.IMDbID != "" {
-		// Newznab API expects IMDb ID without 'tt' prefix
 		imdbID := strings.TrimPrefix(req.IMDbID, "tt")
 		params.Set("imdbid", imdbID)
 	}
@@ -103,10 +106,9 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 	if req.Limit > 0 {
 		params.Set("limit", fmt.Sprintf("%d", req.Limit))
 	} else {
-		params.Set("limit", "10") // Default limit
+		params.Set("limit", "10")
 	}
 	
-	// Add season/episode for TV searches
 	if req.Season != "" {
 		params.Set("season", req.Season)
 	}
@@ -117,22 +119,31 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 	apiURL := fmt.Sprintf("%s/api?%s", c.baseURL, params.Encode())
 	
 	// Debug: Log the actual API URL being called
-	fmt.Printf("NZBHydra2 API URL: %s\n", apiURL)
+	fmt.Printf("Prowlarr API URL: %s\n", apiURL)
 	
 	resp, err := c.client.Get(apiURL)
 	if err != nil {
-		return nil, fmt.Errorf("failed to query NZBHydra2: %w", err)
+		return nil, fmt.Errorf("failed to query Prowlarr: %w", err)
 	}
 	defer resp.Body.Close()
 	
+	// Read body first to debug
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read Prowlarr response body: %w", err)
+	}
+	
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("NZBHydra2 returned status %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("Prowlarr returned status %d: %s", resp.StatusCode, string(bodyBytes))
+	}
+
+	if len(bodyBytes) == 0 {
+		return nil, fmt.Errorf("Prowlarr returned empty body")
 	}
 	
 	var result indexer.SearchResponse
-	if err := xml.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("failed to parse NZBHydra2 response: %w", err)
+	if err := xml.Unmarshal(bodyBytes, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse Prowlarr response: %w", err)
 	}
 	
 	return &result, nil

@@ -13,10 +13,10 @@ import (
 	"time"
 
 	"streamnzb/pkg/availnzb"
+	"streamnzb/pkg/indexer"
 	"streamnzb/pkg/loader"
 	"streamnzb/pkg/logger"
 	"streamnzb/pkg/nzb"
-	"streamnzb/pkg/nzbhydra"
 	"streamnzb/pkg/session"
 	"streamnzb/pkg/triage"
 	"streamnzb/pkg/unpack"
@@ -27,7 +27,7 @@ import (
 type Server struct {
 	manifest       *Manifest
 	baseURL        string
-	hydraClient    *nzbhydra.Client
+	indexer        indexer.Indexer
 	validator      *validation.Checker
 	sessionManager *session.Manager
 	triageService  *triage.Service
@@ -36,7 +36,7 @@ type Server struct {
 }
 
 // NewServer creates a new Stremio addon server
-func NewServer(baseURL string, port int, hydraClient *nzbhydra.Client, validator *validation.Checker, sessionMgr *session.Manager, triageService *triage.Service, availClient *availnzb.Client, securityToken string) (*Server, error) {
+func NewServer(baseURL string, port int, indexer indexer.Indexer, validator *validation.Checker, sessionMgr *session.Manager, triageService *triage.Service, availClient *availnzb.Client, securityToken string) (*Server, error) {
 	actualBaseURL := baseURL
 	if securityToken != "" {
 		if !strings.HasSuffix(actualBaseURL, "/") {
@@ -48,7 +48,7 @@ func NewServer(baseURL string, port int, hydraClient *nzbhydra.Client, validator
 	s := &Server{
 		manifest:       NewManifest(),
 		baseURL:        actualBaseURL,
-		hydraClient:    hydraClient,
+		indexer:        indexer,
 		validator:      validator,
 		sessionManager: sessionMgr,
 		triageService:  triageService,
@@ -179,7 +179,7 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 // searchAndValidate searches NZBHydra2 and validates article availability
 func (s *Server) searchAndValidate(ctx context.Context, contentType, id string) ([]Stream, error) {
 	// Determine search parameters based on ID type
-	req := nzbhydra.SearchRequest{
+	req := indexer.SearchRequest{
 		Limit: 1000,
 	}
 	
@@ -210,12 +210,12 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string) 
 	}
 	
 	// Debug: Log search parameters
-	logger.Debug("NZBHydra2 search", "imdb", req.IMDbID, "cat", req.Cat, "season", req.Season, "ep", req.Episode)
+	logger.Debug("Indexer search", "imdb", req.IMDbID, "cat", req.Cat, "season", req.Season, "ep", req.Episode)
 	
-	// Search NZBHydra2
-	searchResp, err := s.hydraClient.Search(req)
+	// Search Indexer
+	searchResp, err := s.indexer.Search(req)
 	if err != nil {
-		return nil, fmt.Errorf("NZBHydra2 search failed: %w", err)
+		return nil, fmt.Errorf("indexer search failed: %w", err)
 	}
 	
 	logger.Info("Found NZB results", "count", len(searchResp.Channel.Items))
@@ -265,7 +265,7 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string) 
 			item := cand.Result
 			
 			// Download NZB
-			nzbData, err := s.hydraClient.DownloadNZB(item.Link)
+			nzbData, err := s.indexer.DownloadNZB(item.Link)
 			if err != nil {
 				logger.Error("Failed to download NZB", "title", item.Title, "err", err)
 				resultChan <- nzbResult{err: err}

@@ -13,6 +13,10 @@ type Config struct {
 	NZBHydra2URL    string
 	NZBHydra2APIKey string
 	
+	// Prowlarr settings
+	ProwlarrURL    string
+	ProwlarrAPIKey string
+	
 	// Addon settings
 	AddonPort    int
 	AddonBaseURL string
@@ -52,6 +56,8 @@ func Load() (*Config, error) {
 	cfg := &Config{
 		NZBHydra2URL:             getEnv("NZBHYDRA2_URL", "http://localhost:5076"),
 		NZBHydra2APIKey:          getEnv("NZBHYDRA2_API_KEY", ""),
+		ProwlarrURL:              getEnv("PROWLARR_URL", ""),
+		ProwlarrAPIKey:           getEnv("PROWLARR_API_KEY", ""),
 		AddonPort:                getEnvInt("ADDON_PORT", 7000),
 		AddonBaseURL:             getEnv("ADDON_BASE_URL", "http://localhost:7000"),
 		CacheTTLSeconds:          getEnvInt("CACHE_TTL_SECONDS", 3600),
@@ -71,8 +77,8 @@ func Load() (*Config, error) {
 	cfg.ProxyAuthPass = getEnv("NNTP_PROXY_AUTH_PASS", "")
 	
 	// Validate required fields
-	if cfg.NZBHydra2APIKey == "" {
-		return nil, fmt.Errorf("NZBHYDRA2_API_KEY is required")
+	if cfg.NZBHydra2APIKey == "" && cfg.ProwlarrAPIKey == "" {
+		return nil, fmt.Errorf("at least one indexer API key (NZBHYDRA2_API_KEY or PROWLARR_API_KEY) is required")
 	}
 	
 	if len(cfg.Providers) == 0 {

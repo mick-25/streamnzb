@@ -4,17 +4,19 @@ import (
 	"fmt"
 	"os"
 	"streamnzb/pkg/config"
+	"streamnzb/pkg/indexer"
 	"streamnzb/pkg/logger"
 	"streamnzb/pkg/nntp"
 	"streamnzb/pkg/nntp/proxy"
 	"streamnzb/pkg/nzbhydra"
+	"streamnzb/pkg/prowlarr"
 	"streamnzb/pkg/stremio"
 )
 
 // InitializedComponents holds all the components initialized during bootstrap
 type InitializedComponents struct {
 	Config         *config.Config
-	HydraClient    *nzbhydra.Client
+	Indexer        indexer.Indexer
 	ProviderPools  map[string]*nntp.ClientPool
 	StreamingPools []*nntp.ClientPool
 }
@@ -36,11 +38,40 @@ func Bootstrap() (*InitializedComponents, error) {
 		return nil, fmt.Errorf("configuration error: %w", err)
 	}
 
-	// 2. Initialize NZBHydra2 client
-	hydraClient, err := nzbhydra.NewClient(cfg.NZBHydra2URL, cfg.NZBHydra2APIKey)
-	if err != nil {
-		return nil, fmt.Errorf("NZBHydra2 init failed: %w", err)
+	// 2. Initialize Indexers
+	var indexers []indexer.Indexer
+
+	// Initialize NZBHydra2
+	if cfg.NZBHydra2APIKey != "" {
+		hydraClient, err := nzbhydra.NewClient(cfg.NZBHydra2URL, cfg.NZBHydra2APIKey)
+		if err != nil {
+			logger.Error("Failed to initialize NZBHydra2", "err", err)
+		} else {
+			indexers = append(indexers, hydraClient)
+			logger.Info("Initialized NZBHydra2 client", "url", cfg.NZBHydra2URL)
+		}
 	}
+
+	// Initialize Prowlarr
+	if cfg.ProwlarrAPIKey != "" {
+		discovered, err := prowlarr.GetConfiguredIndexers(cfg.ProwlarrURL, cfg.ProwlarrAPIKey)
+		if err != nil {
+			logger.Error("Failed to initialize Prowlarr", "err", err)
+		} else {
+			if len(discovered) > 0 {
+				indexers = append(indexers, discovered...)
+				logger.Info("Initialized Prowlarr indexers", "count", len(discovered))
+			} else {
+				logger.Warn("Connected to Prowlarr but found no active Usenet indexers")
+			}
+		}
+	}
+
+	if len(indexers) == 0 {
+		return nil, fmt.Errorf("no indexers configured/initialized")
+	}
+
+	aggregator := indexer.NewAggregator(indexers...)
 
 	// 3. Initialize NNTP provider pools
 	providerPools := make(map[string]*nntp.ClientPool)
@@ -76,7 +107,7 @@ func Bootstrap() (*InitializedComponents, error) {
 	// Stremio Server validation
 	// Note: We create a temporary server instance just to check the port during bootstrap
 	// The real server instance is created in main.go with full dependencies
-	_, err = stremio.NewServer(cfg.AddonBaseURL, cfg.AddonPort, hydraClient, nil, nil, nil, nil, cfg.SecurityToken)
+	_, err = stremio.NewServer(cfg.AddonBaseURL, cfg.AddonPort, aggregator, nil, nil, nil, nil, cfg.SecurityToken)
 	if err != nil {
 		return nil, fmt.Errorf("stremio server init check failed: %w", err)
 	}
@@ -96,7 +127,7 @@ func Bootstrap() (*InitializedComponents, error) {
 
 	return &InitializedComponents{
 		Config:         cfg,
-		HydraClient:    hydraClient,
+		Indexer:        aggregator,
 		ProviderPools:  providerPools,
 		StreamingPools: streamingPools,
 	}, nil

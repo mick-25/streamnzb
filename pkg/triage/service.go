@@ -4,13 +4,13 @@ import (
 	"sort"
 	"strings"
 
-	"streamnzb/pkg/nzbhydra"
+	"streamnzb/pkg/indexer"
 	"streamnzb/pkg/parser"
 )
 
 // Candidate represents a filtered search result suitable for deep inspection
 type Candidate struct {
-	Result     nzbhydra.Item
+	Result     indexer.Item
 	Metadata   *parser.ParsedRelease
 	Group      string // 4K, 1080p, 720p, SD
 	Score      int
@@ -29,7 +29,7 @@ func NewService(maxPerGroup int) *Service {
 }
 
 // Filter processes search results and returns the best candidates
-func (s *Service) Filter(results []nzbhydra.Item) []Candidate {
+func (s *Service) Filter(results []indexer.Item) []Candidate {
 	// Group items
 	groups := make(map[string][]Candidate)
 	
@@ -98,7 +98,7 @@ func determineGroup(p *parser.ParsedRelease) string {
 	return "sd"
 }
 
-func calculateScore(res nzbhydra.Item, p *parser.ParsedRelease) int {
+func calculateScore(res indexer.Item, p *parser.ParsedRelease) int {
 	score := 0
 	
 	// Prefer larger files (within reason) - weak signal but useful
