@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.0](https://github.com/Gaisberg/streamnzb/compare/v0.0.2...v0.1.0) (2026-02-04)
+
+
+### Features
+
+* bootstrapper for startup initialization, give javi11 some recognition in readme ([2cb5cdc](https://github.com/Gaisberg/streamnzb/commit/2cb5cdcd8ea896281f14df0b9f86f08eddaf48e4))
+
 ## 0.0.2 (2026-02-04)
 
 
