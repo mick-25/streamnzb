@@ -30,7 +30,12 @@ func GetMediaStream(files []*loader.File, cachedBP interface{}) (ReadSeekCloser,
 	for _, f := range files {
 		name := extractFilename(f.Name())
 		lower := strings.ToLower(name)
-		if strings.HasSuffix(lower, ".rar") || isRarPart(lower) {
+		
+		if strings.HasSuffix(lower, ".par2") {
+			continue
+		}
+		
+		if strings.HasSuffix(lower, ".rar") || strings.Contains(lower, ".part") || isRarPart(lower) {
 			rarFiles = append(rarFiles, f)
 		}
 	}
@@ -46,13 +51,25 @@ func GetMediaStream(files []*loader.File, cachedBP interface{}) (ReadSeekCloser,
 		}
 		
 		logger.Info("Detected RAR archive", "volumes", len(rarFiles))
+		
+		// Convert to UnpackableFile interface
+		unpackables := make([]UnpackableFile, len(files))
+		for i, f := range files {
+			unpackables[i] = f
+		}
+
 		// Scan and return new blueprint
-		bp, err := ScanArchive(files)
+		bp, err := ScanArchive(unpackables)
 		if err != nil {
+			logger.Error("ScanArchive failed", "err", err)
 			return nil, "", 0, nil, err
 		}
 		
 		s, name, size, err := StreamFromBlueprint(bp)
+		if err != nil {
+			logger.Error("StreamFromBlueprint failed", "err", err)
+			return nil, "", 0, nil, err
+		}
 		return s, name, size, bp, err
 	}
 
@@ -88,10 +105,15 @@ func GetMediaStream(files []*loader.File, cachedBP interface{}) (ReadSeekCloser,
 		name := extractFilename(f.Name())
 		lower := strings.ToLower(name)
 		if strings.HasSuffix(lower, ".mkv") || strings.HasSuffix(lower, ".mp4") || strings.HasSuffix(lower, ".avi") {
-			return f.OpenStream(), name, f.Size(), nil, nil
+			stream, err := f.OpenStream()
+			if err != nil {
+				return nil, "", 0, nil, err
+			}
+			return stream, name, f.Size(), nil, nil
 		}
 	}
 
+	logger.Warn("GetMediaStream found no suitable media", "files", len(files), "rar_candidates", len(rarFiles))
 	return nil, "", 0, nil, io.EOF
 }
 
@@ -109,30 +131,29 @@ type ArchiveBlueprint struct {
 type VirtualPartDef struct {
 	VirtualStart int64
 	VirtualEnd   int64
-	VolFile      *loader.File
+	VolFile      UnpackableFile
 	VolOffset    int64 
 }
 
 // OpenRarStream implements the NZBDav strategy... (Legacy wrapper)
-func OpenRarStream(files []*loader.File, _ string) (ReadSeekCloser, string, int64, error) {
-	bp, err := ScanArchive(files)
+func OpenRarStream(files []*loader.File, _ string) (io.ReadSeekCloser, string, int64, error) {
+	// Convert to UnpackableFile interface
+	unpackables := make([]UnpackableFile, len(files))
+	for i, f := range files {
+		unpackables[i] = f
+	}
+
+	bp, err := ScanArchive(unpackables)
 	if err != nil {
 		return nil, "", 0, err
 	}
 	return StreamFromBlueprint(bp)
 }
 
-func StreamFromBlueprint(bp *ArchiveBlueprint) (ReadSeekCloser, string, int64, error) {
-	vs := &VirtualStream{
-		totalSize: bp.TotalSize,
-		dataChan:  make(chan []byte, 50),
-		errChan:   make(chan error, 1),
-		closeChan: make(chan struct{}),
-		seekChan:  make(chan int64),
-	}
-	
+func StreamFromBlueprint(bp *ArchiveBlueprint) (io.ReadSeekCloser, string, int64, error) {
+	var parts []virtualPart
 	for _, p := range bp.Parts {
-		vs.parts = append(vs.parts, virtualPart{
+		parts = append(parts, virtualPart{
 			VirtualStart: p.VirtualStart,
 			VirtualEnd:   p.VirtualEnd,
 			VolFile:      p.VolFile,
@@ -140,15 +161,13 @@ func StreamFromBlueprint(bp *ArchiveBlueprint) (ReadSeekCloser, string, int64, e
 		})
 	}
 	
-	vs.currentPartIdx = -1
-	go vs.worker()
-	
+	vs := NewVirtualStream(parts, bp.TotalSize, 0)
 	return vs, bp.MainFileName, bp.TotalSize, nil
 }
 
-func ScanArchive(files []*loader.File) (*ArchiveBlueprint, error) {
+func ScanArchive(files []UnpackableFile) (*ArchiveBlueprint, error) {
 	// 1. Gather RAR files
-	var rarFiles []*loader.File
+	var rarFiles []UnpackableFile
 	for _, f := range files {
 		name := extractFilename(f.Name())
 		lower := strings.ToLower(name)
@@ -168,7 +187,7 @@ func ScanArchive(files []*loader.File) (*ArchiveBlueprint, error) {
 		UnpackedSize int64
 		DataOffset   int64
 		PackedSize   int64
-		VolFile      *loader.File
+		VolFile      UnpackableFile
 		VolName      string
 	}
 	
@@ -182,7 +201,7 @@ func ScanArchive(files []*loader.File) (*ArchiveBlueprint, error) {
 	
 	// Filter: Only scan first volumes to avoid "bad volume number" errors
 	// But keep standalone .rar files and .r00 files
-	var rarFilesToScan []*loader.File
+	var rarFilesToScan []UnpackableFile
 	for _, f := range rarFiles {
 		name := strings.ToLower(extractFilename(f.Name()))
 		
@@ -205,12 +224,12 @@ func ScanArchive(files []*loader.File) (*ArchiveBlueprint, error) {
 	for _, f := range rarFilesToScan {
 		wg.Add(1)
 		sem <- struct{}{}
-		go func(f *loader.File) {
+		go func(f UnpackableFile) {
 			defer wg.Done()
 			defer func() { <-sem }()
 			
 			cleanName := extractFilename(f.Name())
-			singleMap := map[string]*loader.File{
+			singleMap := map[string]UnpackableFile{
 				cleanName: f,
 			}
 			fsys := NewNZBFSFromMap(singleMap)
@@ -273,18 +292,114 @@ func ScanArchive(files []*loader.File) (*ArchiveBlueprint, error) {
 	
 	if bestName == "" {
 		if len(parts) > 0 {
-			var foundArchives bool
+			// No direct media found, check for nested archives
+			var nestedArchives []string
 			for _, p := range parts {
 				lower := strings.ToLower(p.Name)
-				if strings.HasSuffix(lower, ".rar") || strings.HasSuffix(lower, ".r00") || strings.HasSuffix(lower, ".zip") || isRarPart(lower) {
-					foundArchives = true
-					break
+				if strings.HasSuffix(lower, ".rar") || strings.HasSuffix(lower, ".r00") || strings.HasSuffix(lower, ".zip") || strings.HasSuffix(lower, ".iso") || isRarPart(lower) {
+					nestedArchives = append(nestedArchives, p.Name)
 				}
 			}
-			if foundArchives {
-				return nil, fmt.Errorf("nested archive detected (recursive extraction not supported)")
+			
+			if len(nestedArchives) > 0 {
+				logger.Info("No video found, checking for nested archives", "candidates", len(nestedArchives))
+				
+				// Identify archive sets
+				// Map: CleanName -> TotalSize
+				archiveSets := make(map[string]int64)
+				// Map: CleanName -> []FilePartInfo
+				archivePartsMap := make(map[string][]FilePartInfo)
+				
+				for _, p := range parts {
+					lower := strings.ToLower(p.Name)
+					if strings.HasSuffix(lower, ".rar") || strings.HasSuffix(lower, ".r00") || strings.HasSuffix(lower, ".zip") || strings.HasSuffix(lower, ".iso") || isRarPart(lower) {
+						// Normalize name to identify the set
+						// remove trailing .rar, .rXX, .partXX.rar
+						cleanSet := p.Name
+						if idx := strings.LastIndex(lower, ".part"); idx != -1 {
+							cleanSet = p.Name[:idx] // "movie.part01.rar" -> "movie"
+						} else if idx := strings.LastIndex(lower, ".r"); idx != -1 && idx > len(lower)-5 {
+							cleanSet = p.Name[:idx] // "movie.r04" -> "movie"
+						} else if strings.HasSuffix(lower, ".rar") {
+							cleanSet = strings.TrimSuffix(p.Name, ".rar")
+							cleanSet = strings.TrimSuffix(cleanSet, ".RAR")
+						}
+						
+						archiveSets[cleanSet] += p.PackedSize
+						archivePartsMap[cleanSet] = append(archivePartsMap[cleanSet], p)
+					}
+				}
+				
+				var bestSet string
+				var maxSetBytes int64
+				for set, b := range archiveSets {
+					if b > maxSetBytes {
+						maxSetBytes = b
+						bestSet = set
+					}
+				}
+				
+				if bestSet != "" {
+					logger.Info("Detected nested archive set", "set", bestSet, "size", maxSetBytes, "volumes", len(archivePartsMap[bestSet]))
+					
+					// Get all parts for this set
+					nestedParts := archivePartsMap[bestSet]
+					
+					// Group by individual volume file (VirtualFile needs 1:1 map to inner files)
+					// We need to create ONE VirtualFile per Volume in the nested set.
+					// e.g. nested.rar -> VirtualFile(nested.rar)
+					//      nested.r00 -> VirtualFile(nested.r00)
+					
+					// Wait, p.Name is the name INSIDE the parent archive.
+					// If parent has "nested.rar", "nested.r00" inside it.
+					// `parts` contains these as distinct entries.
+					// We need to construct a []UnpackableFile where each entry corresponds to one of these inner files.
+					
+					var nestedFiles []UnpackableFile
+					
+					// Aggregate parts by *Name* (distinct volume files)
+					// (A single inner RAR file might be split across multiple parent RAR volumes? 
+					//  Yes, but Reader provides it as one stream if we model it right.
+					//  Wait, `info.Name` derived parts: "nested.rar" might be split.
+					//  We need to re-assemble each inner file as a VirtualFile.)
+					
+					// Group parts by Name (exact filename)
+					innerFileParts := make(map[string][]FilePartInfo)
+					for _, p := range nestedParts {
+						innerFileParts[p.Name] = append(innerFileParts[p.Name], p)
+					}
+					
+					for name, fileParts := range innerFileParts {
+						sort.Slice(fileParts, func(i, j int) bool {
+							return compareVolumeNames(fileParts[i].VolName, fileParts[j].VolName)
+						})
+						
+						var vfParts []virtualPart
+						var vOffset int64 = 0
+						for _, p := range fileParts {
+							vfParts = append(vfParts, virtualPart{
+								VirtualStart: vOffset,
+								VirtualEnd:   vOffset + p.PackedSize,
+								VolFile:      p.VolFile,
+								VolOffset:    p.DataOffset,
+							})
+							vOffset += p.PackedSize
+						}
+						
+						// Size: Use UnpackedSize from first part if available
+						totalSize := fileParts[0].UnpackedSize
+						if totalSize == 0 { totalSize = vOffset } // Fallback
+						
+						vf := NewVirtualFile(name, totalSize, vfParts)
+						nestedFiles = append(nestedFiles, vf)
+					}
+					
+					// Recurse with ALL volumes!
+					logger.Info("Recursively scanning nested archive set", "set", bestSet, "volumes", len(nestedFiles))
+					return ScanArchive(nestedFiles)
+				}
 			}
-			return nil, fmt.Errorf("no video file found in archive")
+			return nil, fmt.Errorf("no video or nested archive found")
 		}
 		return nil, errors.New("timeout waiting for workers or empty archive")
 	}
@@ -392,218 +507,7 @@ func isMainMedia(info rardecode.ArchiveFileInfo) bool {
 	return isVideo || (isLarge && !isArchive)
 }
 
-// virtualPart maps a range of the virtual file to a physical location
-type virtualPart struct {
-	VirtualStart int64
-	VirtualEnd   int64
-	
-	VolFile      *loader.File
-	VolOffset    int64 
-}
 
-type VirtualStream struct {
-	parts       []virtualPart
-	totalSize   int64
-	
-	currentOffset int64
-	
-	dataChan   chan []byte
-	errChan    chan error
-	closeChan  chan struct{}
-	seekChan   chan int64
-	
-	currentBuf []byte
-	bufOffset  int
-	
-	currentReader io.ReadCloser
-	currentPartIdx int
-	
-	workerOnce sync.Once
-}
-
-func (s *VirtualStream) worker() {
-	var currentOffset int64 = 0
-	const chunkSize = 1024 * 1024 // 1MB chunks instead of 256KB
-	
-	select {
-	case off := <-s.seekChan:
-		currentOffset = off
-	default:
-	}
-	
-	for {
-		if currentOffset >= s.totalSize {
-			select {
-			case s.errChan <- io.EOF:
-				select {
-				case <-s.closeChan: return
-				case off := <-s.seekChan: currentOffset = off
-				}
-			case <-s.closeChan: return
-			case off := <-s.seekChan: currentOffset = off
-			}
-			continue
-		}
-		
-		var activePart *virtualPart
-		var partIdx int
-		for i := range s.parts {
-			if currentOffset >= s.parts[i].VirtualStart && currentOffset < s.parts[i].VirtualEnd {
-				activePart = &s.parts[i]
-				partIdx = i
-				break
-			}
-		}
-		
-		if activePart == nil {
-			select {
-			case s.errChan <- fmt.Errorf("offset %d not mapped", currentOffset):
-				return
-			case <-s.closeChan: return
-			}
-		}
-		
-		remaining := activePart.VirtualEnd - currentOffset
-		
-		// Optimize: Use cached reader if possible
-		if s.currentReader == nil || s.currentPartIdx != partIdx {
-			// Close old reader
-			if s.currentReader != nil {
-				s.currentReader.Close()
-				s.currentReader = nil
-			}
-			
-			// Open new SmartStream
-			// Calculate offset within the volume file
-			// currentOffset is absolute in VirtualStream
-			// We need local offset in the volume file
-			
-			localOff := currentOffset - activePart.VirtualStart
-			volOff := activePart.VolOffset + localOff
-			
-			s.currentReader = activePart.VolFile.OpenSmartStream(volOff)
-			s.currentPartIdx = partIdx
-		}
-		
-		// Read from stream
-		readSize := int64(chunkSize)
-		if readSize > remaining {
-			readSize = remaining
-		}
-		
-		buf := make([]byte, readSize)
-		n, err := s.currentReader.Read(buf)
-		
-		if n > 0 {
-			// Send data
-			select {
-			case s.dataChan <- buf[:n]:
-			case <-s.closeChan: 
-				s.currentReader.Close()
-				return
-			case off := <-s.seekChan:
-				currentOffset = off
-				s.currentReader.Close()
-				s.currentReader = nil
-				continue
-			}
-			currentOffset += int64(n)
-		}
-		
-		if err != nil {
-			if err == io.EOF {
-				s.currentReader.Close()
-				s.currentReader = nil
-			} else {
-				select {
-				case s.errChan <- err:
-				case <-s.closeChan: 
-					s.currentReader.Close()
-					return
-				case off := <-s.seekChan: 
-					currentOffset = off
-					s.currentReader.Close()
-					s.currentReader = nil
-				}
-			}
-		}
-	}
-}
-
-func (s *VirtualStream) Read(p []byte) (n int, err error) {
-	if len(s.currentBuf) == 0 {
-		select {
-		case buf := <-s.dataChan:
-			s.currentBuf = buf
-			s.bufOffset = 0
-		case err := <-s.errChan:
-			return 0, err
-		case <-s.closeChan:
-			return 0, io.ErrClosedPipe
-		}
-	}
-	
-	available := len(s.currentBuf) - s.bufOffset
-	toCopy := len(p)
-	if available < toCopy {
-		toCopy = available
-	}
-	
-	copy(p, s.currentBuf[s.bufOffset:s.bufOffset+toCopy])
-	s.bufOffset += toCopy
-	s.currentOffset += int64(toCopy)
-	
-	if s.bufOffset >= len(s.currentBuf) {
-		s.currentBuf = nil
-	}
-	
-	return toCopy, nil
-}
-
-func (s *VirtualStream) Seek(offset int64, whence int) (int64, error) {
-	var target int64
-	switch whence {
-	case io.SeekStart:
-		target = offset
-	case io.SeekCurrent:
-		target = s.currentOffset + offset
-	case io.SeekEnd:
-		target = s.totalSize + offset
-	}
-	
-	if target < 0 || target > s.totalSize {
-		return 0, errors.New("seek out of bounds")
-	}
-	
-	s.currentBuf = nil
-	s.bufOffset = 0
-	
-	select {
-	case s.seekChan <- target:
-	case <-s.closeChan:
-		return 0, io.ErrClosedPipe
-	}
-	
-	Loop:
-	for {
-		select {
-		case <-s.dataChan:
-		case <-s.errChan:
-		default:
-			break Loop
-		}
-	}
-	
-	s.currentOffset = target
-	return target, nil
-}
-
-func (s *VirtualStream) Close() error {
-	s.workerOnce.Do(func() {
-		close(s.closeChan)
-	})
-	return nil
-}
 
 // InspectRAR checks a RAR archive for video content or nested archives without full scanning.
 // It finds the first volume among the provided files and reads its header.
@@ -614,21 +518,48 @@ func InspectRAR(files []*loader.File) (string, error) {
 
 	// Find the first RAR volume
 	var firstVol *loader.File
+	
+	// First pass: Look for definite first volumes
 	for _, f := range files {
 		nameLower := strings.ToLower(f.Name())
+		// Explicitly skip PAR2 and other non-archive files
+		if strings.HasSuffix(nameLower, ".par2") || strings.HasSuffix(nameLower, ".nzb") || strings.HasSuffix(nameLower, ".nfo") {
+			continue
+		}
+
 		// Look for .rar or .part01.rar or .part1.rar
-		if strings.HasSuffix(nameLower, ".rar") || strings.Contains(nameLower, ".part01.") || strings.Contains(nameLower, ".part1.") {
+		if (strings.HasSuffix(nameLower, ".rar") && !strings.Contains(nameLower, ".part")) ||
+		   strings.Contains(nameLower, ".part01.") || 
+		   strings.Contains(nameLower, ".part1.") ||
+		   strings.HasSuffix(nameLower, ".r00") ||
+		   strings.HasSuffix(nameLower, ".001") {
 			firstVol = f
 			break
 		}
 	}
 
-	// Fallback to first file if no obvious RAR found, but might be .r00 etc.
+	// Second pass: Just look for any .rar if first pass failed
 	if firstVol == nil {
-		firstVol = files[0]
+		for _, f := range files {
+			nameLower := strings.ToLower(f.Name())
+			if strings.HasSuffix(nameLower, ".par2") || strings.HasSuffix(nameLower, ".nzb") || strings.HasSuffix(nameLower, ".nfo") {
+				continue
+			}
+			if strings.HasSuffix(nameLower, ".rar") {
+				firstVol = f
+				break
+			}
+		}
 	}
 
-	stream := firstVol.OpenStream()
+	if firstVol == nil {
+		return "", fmt.Errorf("no valid RAR volume found for inspection")
+	}
+
+	stream, err := firstVol.OpenStream()
+	if err != nil {
+		return "", fmt.Errorf("failed to open stream for inspection: %w", err)
+	}
 	defer stream.Close()
 
 	// rardecode.NewReader works for streaming (single volume or start of split)
@@ -657,19 +588,20 @@ func InspectRAR(files []*loader.File) (string, error) {
 				return header.Name, nil
 			}
 			
-			// Check for nested archives (explicit failure)
-			if strings.HasSuffix(name, ".rar") || 
-			   strings.HasSuffix(name, ".zip") || 
-			   strings.HasSuffix(name, ".7z") ||
-			   IsRarPart(name) {
-				return "", fmt.Errorf("nested archive detected")
-			}
+			// Nested archives are now supported, so we don't return an error here.
+			// If we don't find a video, ScanArchive will pick up the nested archive later.
 		}
 
 		if err == io.EOF {
 			break
 		}
 		if err != nil {
+			// If we hit "multi-volume archive continues in next file", it just means 
+			// we reached the end of the first volume headers.
+			if strings.Contains(err.Error(), "multi-volume archive") {
+				break
+			}
+			
 			// If we hit an error (e.g. need next volume), but haven't found video yet,
 			// check if the error is just "need volume".
 			return "", err

@@ -1,6 +1,7 @@
 package loader
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -93,7 +94,7 @@ func (f *File) detectSegmentSize() error {
 	}
 
 	// Download first segment (force download, bypass simple cache)
-	data, err := f.DownloadSegment(0)
+	data, err := f.DownloadSegment(context.Background(), 0)
 	if err != nil {
 		return err
 	}
@@ -212,7 +213,8 @@ func (f *File) getSegmentData(index int) ([]byte, error) {
 	// Not in cache, fetch it
 	// We release lock during network IO to allow concurrency on other methods
 	
-	data, err := f.DownloadSegment(index)
+	// TODO: Propagate context from ReadAt if available? Default to Background for now.
+	data, err := f.DownloadSegment(context.Background(), index)
 	if err != nil {
 		return nil, err
 	}
@@ -226,8 +228,17 @@ func (f *File) getSegmentData(index int) ([]byte, error) {
 	return data, nil
 }
 
+// TotalConnections returns the sum of all provider connection limits
+func (f *File) TotalConnections() int {
+	total := 0
+	for _, p := range f.pools {
+		total += p.MaxConn()
+	}
+	return total
+}
+
 // DownloadSegment performs the actual NNTP download (Exported for SmartStream)
-func (f *File) DownloadSegment(index int) ([]byte, error) {
+func (f *File) DownloadSegment(ctx context.Context, index int) ([]byte, error) {
 	// Optimization: Check single-segment cache first
 	f.mu.Lock()
 	if f.lastSegIndex == index && f.lastSegData != nil {
@@ -241,12 +252,15 @@ func (f *File) DownloadSegment(index int) ([]byte, error) {
 	tried := make([]bool, len(f.pools))
 	var lastErr error
 
-	// Retry loop: Try up to 3 times per provider? Or just once per provider?
-	// Once per provider is usually enough for "Article not found".
-	// For network timeouts, retrying the same provider might help, but let's stick to failover for now.
-	
-	// Max attempts = number of pools
+	// Retry loop
 	for attempt := 0; attempt < len(f.pools); attempt++ {
+		// Check context before doing work
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+
 		var client *nntp.Client
 		var pool *nntp.ClientPool
 		var poolIdx int = -1
@@ -331,13 +345,14 @@ func (f *File) Name() string {
 }
 
 // OpenStream creates a new BufferedStream starting at offset 0 (or Seek later).
-func (f *File) OpenStream() *BufferedStream {
+func (f *File) OpenStream() (io.ReadSeekCloser, error) {
 	// Ensure we have correct size map
 	if err := f.ensureSegmentMap(); err != nil {
 		logger.Error("Error ensuring segment detection", "err", err)
 		// Proceed anyway? BufferedStream might fail.
+		return nil, err
 	}
-	return NewBufferedStream(f)
+	return NewBufferedStream(f), nil
 }
 
 // OpenSmartStream creates a high-performance linear reader
@@ -346,6 +361,16 @@ func (f *File) OpenSmartStream(offset int64) io.ReadCloser {
 		logger.Error("Error ensuring segment detection", "err", err)
 	}
 	return NewSmartStream(f, offset)
+}
+
+// OpenReaderAt implements UnpackableFile.OpenReaderAt
+func (f *File) OpenReaderAt(offset int64) (io.ReadCloser, error) {
+	// Wrapper typically returns errors, but OpenSmartStream handles it internally/async.
+	// We check detection first.
+	if err := f.ensureSegmentMap(); err != nil {
+		return nil, err
+	}
+	return NewSmartStream(f, offset), nil
 }
 
 // FindSegmentIndex logic exposed for BufferedStream

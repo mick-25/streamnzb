@@ -193,7 +193,7 @@ func (s *BufferedStream) Seek(offset int64, whence int) (int64, error) {
 		return 0, errors.New("invalid whence")
 	}
 
-	if newOffset < 0 || newOffset > s.file.totalSize {
+	if newOffset < 0 {
 		return 0, errors.New("seek out of bounds")
 	}
 

@@ -45,9 +45,15 @@ func NewSmartStream(f *File, startOffset int64) *SmartStream {
 		segmentCache:    make(map[int][]byte),
 		downloadingSegs: make(map[int]bool),
 		maxBufferBytes:  64 * 1024 * 1024, // 64MB buffer
-		maxWorkers:      15,               // 15 concurrent downloads
+		maxWorkers:      15,               // Default cap
 		ctx:             ctx,
 		cancel:          cancel,
+	}
+	
+	// Adjust maxWorkers to not exceed available connections
+	totalConns := f.TotalConnections()
+	if totalConns > 0 && totalConns < s.maxWorkers {
+		s.maxWorkers = totalConns
 	}
 	s.downloadCond = sync.NewCond(&s.mu)
 
@@ -210,7 +216,7 @@ func (s *SmartStream) downloadManager() {
 			case sem <- struct{}{}:
 				go func(idx int) {
 					defer func() { <-sem }()
-					data, err := s.file.DownloadSegment(idx)
+					data, err := s.file.DownloadSegment(s.ctx, idx)
 					s.mu.Lock()
 					delete(s.downloadingSegs, idx)
 					if err == nil {
@@ -276,7 +282,7 @@ func (s *SmartStream) downloadManager() {
 				go func(idx int) {
 					defer func() { <-sem }()
 					
-					data, err := s.file.DownloadSegment(idx) // reusing method from File
+					data, err := s.file.DownloadSegment(s.ctx, idx) // reusing method from File
 					
 					s.mu.Lock()
 					delete(s.downloadingSegs, idx)

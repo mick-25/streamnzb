@@ -197,3 +197,7 @@ func (p *ClientPool) Validate() error {
 func (p *ClientPool) Host() string {
 	return p.host
 }
+
+func (p *ClientPool) MaxConn() int {
+	return p.maxConn
+}
