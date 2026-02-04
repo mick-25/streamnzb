@@ -61,16 +61,19 @@ func GetMediaStream(files []*loader.File, cachedBP interface{}) (ReadSeekCloser,
 		// Scan and return new blueprint
 		bp, err := ScanArchive(unpackables)
 		if err != nil {
-			logger.Error("ScanArchive failed", "err", err)
-			return nil, "", 0, nil, err
+			logger.Warn("ScanArchive failed, falling back to other methods", "err", err)
+			// Don't return error, fallthrough to check for other files (mkv, 7z)
+		} else {
+			// Success
+			s, name, size, err := StreamFromBlueprint(bp)
+			if err != nil {
+				logger.Error("StreamFromBlueprint failed", "err", err)
+				return nil, "", 0, nil, err
+			}
+			return s, name, size, bp, err
 		}
 		
-		s, name, size, err := StreamFromBlueprint(bp)
-		if err != nil {
-			logger.Error("StreamFromBlueprint failed", "err", err)
-			return nil, "", 0, nil, err
-		}
-		return s, name, size, bp, err
+
 	}
 
 	// 2. Identify if 7z
@@ -117,8 +120,17 @@ func GetMediaStream(files []*loader.File, cachedBP interface{}) (ReadSeekCloser,
 
 	// 4. Obfuscated / Unknown file handling
 	// If we haven't found anything yet, find the largest file
+	// BUT, if it's a RAR file (which implies ScanArchive failed earlier), don't treat it as a video.
 	var largestFile *loader.File
 	for _, f := range files {
+		name := strings.ToLower(extractFilename(f.Name()))
+		if strings.HasSuffix(name, ".rar") || strings.Contains(name, ".part") || isRarPart(name) {
+			continue
+		}
+		if strings.HasSuffix(name, ".par2") || strings.HasSuffix(name, ".nzb") || strings.HasSuffix(name, ".nfo") {
+			continue
+		}
+		
 		if largestFile == nil || f.Size() > largestFile.Size() {
 			largestFile = f
 		}
@@ -318,6 +330,11 @@ func ScanArchive(files []UnpackableFile) (*ArchiveBlueprint, error) {
 		go func(f UnpackableFile) {
 			defer wg.Done()
 			defer func() { <-sem }()
+			defer func() {
+				if r := recover(); r != nil {
+					logger.Error("Panic in ScanArchive worker", "file", f.Name(), "recover", r)
+				}
+			}()
 			
 			cleanName := extractFilename(f.Name())
 			singleMap := map[string]UnpackableFile{
@@ -602,10 +619,17 @@ func isMainMedia(info rardecode.ArchiveFileInfo) bool {
 
 // InspectRAR checks a RAR archive for video content or nested archives without full scanning.
 // It finds the first volume among the provided files and reads its header.
-func InspectRAR(files []*loader.File) (string, error) {
+func InspectRAR(files []*loader.File) (filename string, err error) {
 	if len(files) == 0 {
 		return "", fmt.Errorf("no files provided for inspection")
 	}
+
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Error("Panic in InspectRAR", "recover", r)
+			err = fmt.Errorf("panic in InspectRAR: %v", r)
+		}
+	}()
 
 	// Find the first RAR volume
 	var firstVol *loader.File

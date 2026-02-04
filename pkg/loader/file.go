@@ -3,7 +3,6 @@ package loader
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"sync"
 
@@ -331,7 +330,16 @@ func (f *File) DownloadSegment(ctx context.Context, index int) ([]byte, error) {
 		return frame.Data, nil
 	}
 
-	return nil, fmt.Errorf("segment %d failed on all %d providers. Last error: %v", index, len(f.pools), lastErr)
+
+	
+	// Error handling: If all providers fail, ZERO-FILL to keep stream alive
+	logger.Warn("Segment failed on all providers, zero-filling", "index", index, "err", lastErr)
+	
+	// Maintain stream alignment by returning exactly what matches the current offsets
+	size := int(seg.EndOffset - seg.StartOffset)
+	if size < 0 { size = 0 } // Safety check
+	
+	return make([]byte, size), nil
 }
 
 func (f *File) Name() string {

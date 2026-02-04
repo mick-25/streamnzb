@@ -140,15 +140,38 @@ func (c *Checker) getSampleArticles(nzbData *nzb.NZB) []string {
 	}
 
 	articles := make([]string, 0, sampleSize)
-	step := len(segments) / sampleSize
-
-	for i := 0; i < sampleSize; i++ {
-		idx := i * step
-		if idx < len(segments) {
-			articles = append(articles, segments[idx].ID)
+	
+	// Prioritize Critical Segments (Start & End)
+	// Usually headers are at start, and important footers/recovery at end.
+	
+	// 1. Always check First Segment
+	articles = append(articles, segments[0].ID)
+	
+	// 2. Always check Last Segment (if distinct)
+	if len(segments) > 1 {
+		articles = append(articles, segments[len(segments)-1].ID)
+	}
+	
+	// 3. Fill the rest with distributed samples
+	remainingSlots := sampleSize - len(articles)
+	if remainingSlots > 0 {
+		// Calculate internal range to sample from (exclude first and last if needed)
+		startIdx := 1
+		endIdx := len(segments) - 1
+		if startIdx < endIdx {
+			totalSpan := endIdx - startIdx
+			step := float64(totalSpan) / float64(remainingSlots)
+			
+			for i := 0; i < remainingSlots; i++ {
+				// Round to nearest integer index
+				idx := startIdx + int(float64(i)*step)
+				if idx < endIdx {
+					articles = append(articles, segments[idx].ID)
+				}
+			}
 		}
 	}
-
+	
 	return articles
 }
 

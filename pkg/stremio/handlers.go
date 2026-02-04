@@ -183,22 +183,33 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string) 
 		Limit: 1000,
 	}
 	
-	// For series, extract IMDb ID and season/episode from "tt12345678:1:1" format
+	// For series, extract IMDb/TMDB ID and season/episode
 	searchID := id
 	if contentType == "series" && strings.Contains(id, ":") {
 		parts := strings.Split(id, ":")
-		if len(parts) >= 3 {
-			searchID = parts[0]           // Extract "tt12345678"
-			req.Season = parts[1]         // Season number
-			req.Episode = parts[2]        // Episode number
+		// Handle "tmdb:12345:1:1" format
+		if parts[0] == "tmdb" && len(parts) >= 4 {
+			searchID = parts[1]
+			req.Season = parts[2]
+			req.Episode = parts[3]
+		} else if len(parts) >= 3 {
+			// Standard "tt12345678:1:1" format
+			searchID = parts[0]
+			req.Season = parts[1]
+			req.Episode = parts[2]
 		} else if len(parts) > 0 {
 			searchID = parts[0]
 		}
+	} else if strings.HasPrefix(id, "tmdb:") {
+		// Handle movie "tmdb:12345"
+		searchID = strings.TrimPrefix(id, "tmdb:")
 	}
 	
 	if strings.HasPrefix(searchID, "tt") {
 		req.IMDbID = searchID
 	} else {
+		// Verify searchID is not obviously invalid (like "kitsu")
+		// For now, treat everything else as potential TMDB ID or raw text query
 		req.TMDBID = searchID
 	}
 	
@@ -461,7 +472,7 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request) {
 	sess, err := s.sessionManager.GetSession(sessionID)
 	if err != nil {
 		logger.Error("Session not found", "err", err)
-		http.Error(w, "Session not found", http.StatusNotFound)
+		forceDisconnect(w)
 		return
 	}
 	
@@ -473,7 +484,7 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request) {
 			files = []*loader.File{sess.File}
 		} else {
 			logger.Error("No files in session", "id", sessionID)
-			http.Error(w, "No files available", http.StatusInternalServerError)
+			forceDisconnect(w)
 			return
 		}
 	}
@@ -483,7 +494,7 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request) {
 	stream, name, size, bp, err := unpack.GetMediaStream(files, sess.Blueprint)
 	if err != nil {
 		logger.Error("Failed to open media stream", "id", sessionID, "err", err)
-		http.Error(w, fmt.Sprintf("Error: %v", err), http.StatusInternalServerError)
+		forceDisconnect(w)
 		return
 	}
 	
@@ -591,3 +602,18 @@ func getQualityScore(name string) int {
 	
 	return score
 }
+
+// forceDisconnect redirects to a verified valid public video file.
+// If Stremio plays this video, it finishes naturally and closes the player.
+// We use Big Buck Bunny (10s) because it is a proven reliable URL that Stremio accepts.
+// TODO: Replace with a smaller, hosted "Stream Unavailable" video if possible.
+var errorVideoURL = "https://test-videos.co.uk/vids/bigbuckbunny/mp4/h264/360/Big_Buck_Bunny_360_10s_1MB.mp4"
+
+func forceDisconnect(w http.ResponseWriter) {
+	logger.Info("Redirecting to error video", "url", errorVideoURL)
+
+	w.Header().Set("Connection", "close")
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+	http.Redirect(w, &http.Request{Method: "GET"}, errorVideoURL, http.StatusTemporaryRedirect)
+}
+

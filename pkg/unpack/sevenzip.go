@@ -136,8 +136,11 @@ func CreateSevenZipBlueprint(files []*loader.File, firstVolName string) (*SevenZ
 		return nil, err
 	}
 
-	// Find video file
-	for _, fi := range fileInfos {
+	// Find best video file
+	bestIdx := -1
+	var bestSize int64
+
+	for i, fi := range fileInfos {
 		name := fi.Name
 		lower := strings.ToLower(name)
 		if strings.HasSuffix(lower, ".mkv") || strings.HasSuffix(lower, ".mp4") || strings.HasSuffix(lower, ".avi") {
@@ -145,16 +148,47 @@ func CreateSevenZipBlueprint(files []*loader.File, firstVolName string) (*SevenZ
 				continue // Skip compressed files
 			}
 
-			bp := &SevenZipBlueprint{
-				MainFileName: filepath.Base(name),
-				TotalSize:    int64(fi.Size),
-				FileOffset:   fi.Offset,
-				Files:        archiveFiles,
+			// Scoring logic:
+			// 1. Prefer non-sample files
+			// 2. Prefer larger files
+
+			if bestIdx == -1 {
+				bestIdx = i
+				bestSize = int64(fi.Size)
+				continue
 			}
 
-			logger.Debug("Created 7z blueprint", "name", bp.MainFileName, "offset", bp.FileOffset, "size", bp.TotalSize)
-			return bp, nil
+			isSample := strings.Contains(lower, "sample")
+			bestIsSample := strings.Contains(strings.ToLower(fileInfos[bestIdx].Name), "sample")
+
+			if !isSample && bestIsSample {
+				// Found a real file, replace sample
+				bestIdx = i
+				bestSize = int64(fi.Size)
+			} else if isSample && !bestIsSample {
+				// Found sample but we have a real file, ignore sample
+				continue
+			} else {
+				// Both are samples or both are real files, pick largest
+				if int64(fi.Size) > bestSize {
+					bestIdx = i
+					bestSize = int64(fi.Size)
+				}
+			}
 		}
+	}
+
+	if bestIdx != -1 {
+		fi := fileInfos[bestIdx]
+		bp := &SevenZipBlueprint{
+			MainFileName: filepath.Base(fi.Name),
+			TotalSize:    int64(fi.Size),
+			FileOffset:   fi.Offset,
+			Files:        archiveFiles,
+		}
+
+		logger.Debug("Created 7z blueprint", "name", bp.MainFileName, "offset", bp.FileOffset, "size", bp.TotalSize)
+		return bp, nil
 	}
 
 	return nil, errors.New("no uncompressed media found in 7z")
