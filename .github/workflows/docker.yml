@@ -36,6 +36,11 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
@@ -76,17 +81,15 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Extract binaries from Docker
+      - name: Build binaries
         run: |
           mkdir -p dist
-          # We build the builder stage locally and extract the /dist folder
-          # This is faster than pulling from GHCR and more reliable
-          docker build --target builder -t streamnzb-builder \
-            --build-arg AVAILNZB_URL=${{ secrets.AVAILNZB_URL }} \
-            --build-arg AVAILNZB_API_KEY=${{ secrets.AVAILNZB_API_KEY }} .
-          docker create --name extract-container streamnzb-builder
-          docker cp extract-container:/dist/. ./dist/
-          docker rm extract-container
+          # Build for Linux AMD64
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w -X main.AvailNZBURL=${{ secrets.AVAILNZB_URL }} -X main.AvailNZBAPIKey=${{ secrets.AVAILNZB_API_KEY }}" -o dist/streamnzb-linux-amd64 ./cmd/streamnzb
+          # Build for Linux ARM64
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w -X main.AvailNZBURL=${{ secrets.AVAILNZB_URL }} -X main.AvailNZBAPIKey=${{ secrets.AVAILNZB_API_KEY }}" -o dist/streamnzb-linux-arm64 ./cmd/streamnzb
+          # Build for Windows AMD64
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="-s -w -X main.AvailNZBURL=${{ secrets.AVAILNZB_URL }} -X main.AvailNZBAPIKey=${{ secrets.AVAILNZB_API_KEY }}" -o dist/streamnzb-windows-amd64.exe ./cmd/streamnzb
 
       - name: Upload Release Assets
         env:
