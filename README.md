@@ -54,23 +54,14 @@ services:
     image: ghcr.io/gaisberg/streamnzb:latest
     container_name: streamnzb
     restart: unless-stopped
+    env_file:
+      - .env
     ports:
       - "7000:7000"
-    environment:
-      - NZBHYDRA2_URL=http://nzbhydra2:5076
-      - NZBHYDRA2_API_KEY=your_hydra_key
-      - PROWLARR_URL=http://prowlarr:9696
-      - PROWLARR_API_KEY=your_prowlarr_key
-      - ADDON_PORT=7000
-      - ADDON_BASE_URL=http://localhost:7000
-      - PROVIDER_1_NAME=Provider1
-      - PROVIDER_1_HOST=news.provider1.com
-      - PROVIDER_1_PORT=563
-      - PROVIDER_1_USERNAME=user
-      - PROVIDER_1_PASSWORD=password
-      - PROVIDER_1_CONNECTIONS=10
-      - PROVIDER_1_SSL=true
-      - SECURITY_TOKEN=your_secure_token
+    # Alternatively, you can define environment variables directly here
+    # environment:
+    #   - NZBHYDRA2_URL=http://nzbhydra2:5076
+    #   ...
 ```
 
 **Using Docker Run:**
@@ -78,9 +69,7 @@ services:
 docker run -d \
   --name streamnzb \
   -p 7000:7000 \
-  -e NZBHYDRA2_URL=http://your-hydra-url:5076 \
-  -e NZBHYDRA2_API_KEY=your_api_key \
-  -e ADDON_BASE_URL=http://your-server-ip:7000 \
+  --env-file .env \
   ghcr.io/gaisberg/streamnzb:latest
 ```
 
