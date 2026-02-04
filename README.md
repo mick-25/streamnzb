@@ -1,15 +1,47 @@
 # StreamNZB
 
-StreamNZB is a stremio addon + usenet proxy to pool all your providers into one place. 
+StreamNZB is a unified **Stremio Addon** and **Usenet Proxy** that pools multiple providers into a single, high-availability endpoint.
 
-Add into stremio with ADDON_BASE_URL/SECURITY_TOKEN/manifest.json. e.g. https://streamnzb.domain.com/IAMSECURE/manifest.json 
-By default StreamNZB will try providing 2 of each resolution (4k, 1080p, 720p, sd) to stremio and they should all be available on your configured usenet provider. Availability is reported to a community endpoint so we can see which articles are available on which providers. (If you want to opt out you can build the binary yourself)
+### ✨ Features
+*   **Stremio Integration**: Stream content directly from Usenet with availability caching.
+*   **Smart Pooling**: Aggregates connections from multiple Usenet providers.
+*   **Availability Checking**: Verifies article existence before attempting playback.
+*   **NNTP Proxy**: Exposes a standard NNTP server (default port 119) for use with SABnzbd or NZBGet.
+*   **Cross-Platform**: Runs on Docker, Windows, Linux, and macOS.
 
-You can add StreamNZB to sabnzbd so your manual downloading will pool together with stremio streams. This is configured with the NNTP_PROXY_* variables.
+### 🏗️ Architecture
 
-### Running the Application
-
+```mermaid
+graph TD
+    User["User / Stremio"] -->|HTTP| Addon
+    Downloader["SABnzbd / NZBGet"] -->|NNTP| Proxy
+    
+    subgraph "StreamNZB Core"
+        Addon["StreamNZB Addon"]
+        Proxy["StreamNZB Proxy"]
+    end
+    
+    Addon -->|Search| Hydra["NZBHydra2 / Indexer"]
+    Addon -->|Download| Provider1["Usenet Provider 1"]
+    Addon -->|Download| Provider2["Usenet Provider 2"]
+    Proxy -->|Download| Provider1
+    Proxy -->|Download| Provider2
 ```
+
+### ✅ Prerequisites
+Before running StreamNZB, ensure you have:
+1.  **Usenet Provider(s)**: At least one active subscription (e.g., Newshosting, Eweka).
+2.  **Indexer / Aggregator**: **NZBHydra2 is required** with your indexers configured.
+3.  **Stremio** (Optional): Required if you want to use the streaming capabilities. You can use StreamNZB solely as an NNTP proxy without Stremio.
+
+### 🚀 Running the Application
+
+You can run StreamNZB using Docker or directly as a binary on your system.
+
+#### 1. Docker (Recommended)
+
+**Using Docker Compose:**
+```yaml
 version: '3.8'
 
 services:
@@ -24,9 +56,6 @@ services:
       - NZBHYDRA2_API_KEY=your_api_key_here
       - ADDON_PORT=7000
       - ADDON_BASE_URL=http://localhost:7000
-      - CACHE_TTL_SECONDS=3600
-      - VALIDATION_SAMPLE_SIZE=5
-      - MAX_CONCURRENT_VALIDATIONS=20
       - PROVIDER_1_NAME=Provider1
       - PROVIDER_1_HOST=news.provider1.com
       - PROVIDER_1_PORT=563
@@ -35,21 +64,62 @@ services:
       - PROVIDER_1_CONNECTIONS=10
       - PROVIDER_1_SSL=true
       - SECURITY_TOKEN=your_secure_token
-      - NNTP_PROXY_ENABLED=true
-      - NNTP_PROXY_PORT=119
-      - NNTP_PROXY_HOST=0.0.0.0
-      - NNTP_PROXY_AUTH_USER=usenet
-      - NNTP_PROXY_AUTH_PASS=usenet
 ```
 
-### Adding Providers
+**Using Docker Run:**
+```bash
+docker run -d \
+  --name streamnzb \
+  -p 7000:7000 \
+  -e NZBHYDRA2_URL=http://your-hydra-url:5076 \
+  -e NZBHYDRA2_API_KEY=your_api_key \
+  -e ADDON_BASE_URL=http://your-server-ip:7000 \
+  ghcr.io/gaisberg/streamnzb:latest
+```
 
-```
-PROVIDER_2_NAME=Provider2
-PROVIDER_2_HOST=news.provider2.com
-PROVIDER_2_PORT=563
-PROVIDER_2_USERNAME=user2
-PROVIDER_2_PASSWORD=password2
-PROVIDER_2_CONNECTIONS=5
-PROVIDER_2_SSL=true
-```
+#### 2. Windows / Linux / macOS (Binary)
+
+1. **Download**: Get the latest release for your platform from the [Releases Page](https://github.com/Gaisberg/streamnzb/releases).
+   - Windows: `streamnzb-windows-amd64.exe`
+   - Linux: `streamnzb-linux-amd64` (or `arm64`)
+   
+2. **Configure**: 
+   - Download the `.env.example` file and save it as `.env` in the same directory as the binary.
+   - Open `.env` with a text editor and fill in your details (Provider settings, API keys, etc).
+
+3. **Run**:
+   - **Windows**: Double-click `streamnzb.exe` or run in PowerShell:
+     ```powershell
+     .\streamnzb-windows-amd64.exe
+     ```
+   - **Linux/macOS**:
+     ```bash
+     chmod +x streamnzb-linux-amd64
+     ./streamnzb-linux-amd64
+     ```
+
+### Configuration
+
+Configuration is handled via environment variables or the `.env` file. See `.env.example` for all available options.
+
+**Key Settings:**
+- `NZBHYDRA2_*`: Connection to your indexer (Hydra2 recommended).
+- `PROVIDER_*`: Your Usenet provider details. You can add multiple providers by incrementing the number (PROVIDER_1, PROVIDER_2, etc).
+- `ADDON_BASE_URL`: The public URL where Stremio can reach this service.
+- `SECURITY_TOKEN`: Optional but recommended. Adds a path prefix to your addon URL to prevent unauthorized access.
+
+### ❓ Troubleshooting
+
+**"No streams were found" in Stremio**
+- Ensure `NZBHYDRA2_URL` and API Key are correct.
+- Check if your Usenet providers are active.
+- Verify that `VALIDATION_SAMPLE_SIZE` is not too high (checking too many articles can timeout).
+
+**Connection Refused on Port 119**
+- Linux often requires `sudo` to bind to port 119.
+- Change `NNTP_PROXY_PORT` to `1119` or similar if running without root.
+
+**Slow Downloads / Buffering**
+- Increase `MAX_CONCURRENT_VALIDATIONS`.
+- Ensure your server has sufficient bandwidth.
+- Check `CACHE_TTL_SECONDS` to reduce repeated availability checks.
