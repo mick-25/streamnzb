@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"sort"
@@ -545,15 +546,6 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request) {
 		sess.SetBlueprint(bp)
 	}
 	
-	defer stream.Close()
-
-	logger.Info("Serving media", "name", name, "size", size, "session", sessionID)
-	
-	// Set headers
-	w.Header().Set("Content-Type", "video/mp4") // Stremio often prefers this or generic buffer
-	w.Header().Set("Accept-Ranges", "bytes")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	
 	// Track active playback
 	clientIP, _, _ := net.SplitHostPort(r.RemoteAddr)
 	if clientIP == "" {
@@ -562,9 +554,26 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request) {
 	s.sessionManager.StartPlayback(sessionID, clientIP)
 	defer s.sessionManager.EndPlayback(sessionID, clientIP)
 
+	// Wrap stream with monitor to keep session alive during playback
+	monitoredStream := &StreamMonitor{
+		ReadSeekCloser: stream,
+		sessionID:      sessionID,
+		clientIP:       clientIP,
+		manager:        s.sessionManager,
+		lastUpdate:     time.Now(),
+	}
+	defer monitoredStream.Close()
+
+	logger.Info("Serving media", "name", name, "size", size, "session", sessionID)
+	
+	// Set headers
+	w.Header().Set("Content-Type", "video/mp4") // Stremio often prefers this or generic buffer
+	w.Header().Set("Accept-Ranges", "bytes")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	
 	// Handle streaming using standard library ServeContent
 	// This automatically handles Range requests, HEAD requests, and efficient copying.
-	http.ServeContent(w, r, name, time.Time{}, stream)
+	http.ServeContent(w, r, name, time.Time{}, monitoredStream)
 	
 	// Log completion (ServeContent blocks until done)
 	logger.Debug("Finished serving media", "session", sessionID)
@@ -687,5 +696,32 @@ func (s *Server) Reload(baseURL string, indexer indexer.Indexer, validator *vali
 	s.availClient = avail
 	s.securityToken = securityToken
 	// Note: sessionManager pools are updated separately via sessionManager.UpdatePools
+}
+
+// StreamMonitor wraps an io.ReadSeekCloser to provide keep-alive updates
+type StreamMonitor struct {
+	io.ReadSeekCloser
+	sessionID  string
+	clientIP   string
+	manager    *session.Manager
+	lastUpdate time.Time
+	mu         sync.Mutex // Protect lastUpdate to be safe, though Read is usually serial
+}
+
+func (s *StreamMonitor) Read(p []byte) (n int, err error) {
+	n, err = s.ReadSeekCloser.Read(p)
+	
+	// Non-blocking update check
+	// We don't want to lock on every read, so just check time occasionally
+	if time.Since(s.lastUpdate) > 10*time.Second {
+		s.mu.Lock()
+		if time.Since(s.lastUpdate) > 10*time.Second {
+			s.manager.KeepAlive(s.sessionID, s.clientIP)
+			s.lastUpdate = time.Now()
+		}
+		s.mu.Unlock()
+	}
+	
+	return n, err
 }
 

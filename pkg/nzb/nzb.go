@@ -216,7 +216,7 @@ func (n *NZB) GetMainVideoFile() *FileInfo {
 func analyzeFile(file *File) *FileInfo {
 	// Extract filename from subject
 	// Subject format is usually: "filename" yEnc (1/50) or similar
-	filename := extractFilename(file.Subject)
+	filename := ExtractFilename(file.Subject)
 	
 	// Calculate total size
 	var size int64
@@ -246,8 +246,8 @@ func analyzeFile(file *File) *FileInfo {
 	return info
 }
 
-// extractFilename extracts the filename from an NZB subject line
-func extractFilename(subject string) string {
+// ExtractFilename extracts the filename from an NZB subject line
+func ExtractFilename(subject string) string {
 	// Common patterns:
 	// "filename.mkv" yEnc (1/50)
 	// filename.mkv (1/50)

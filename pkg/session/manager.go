@@ -2,6 +2,7 @@ package session
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -212,6 +213,17 @@ func (m *Manager) EndPlayback(id, ip string) {
 	}
 }
 
+// KeepAlive updates the last access time for a session and client
+func (m *Manager) KeepAlive(id, ip string) {
+	s, err := m.GetSession(id)
+	if err == nil {
+		s.mu.Lock()
+		s.LastAccess = time.Now()
+		s.Clients[ip] = time.Now()
+		s.mu.Unlock()
+	}
+}
+
 // ActiveSessionInfo provides details about a currently playing session
 type ActiveSessionInfo struct {
 	ID        string   `json:"id"`
@@ -249,7 +261,12 @@ func (m *Manager) GetActiveSessions() []ActiveSessionInfo {
 			
 			title := "Unknown"
 			if s.NZB != nil && len(s.NZB.Files) > 0 {
-				title = s.NZB.Files[0].Subject
+				parts := strings.Split(nzb.ExtractFilename(s.NZB.Files[0].Subject), ".")
+				if len(parts) > 1 {
+					title = strings.Join(parts[:len(parts)-1], ".")
+				} else {
+					title = parts[0]
+				}
 			}
 
 			result = append(result, ActiveSessionInfo{
