@@ -54,6 +54,9 @@ type Config struct {
 	// AvailNZB (Internal/Community)
 	AvailNZBURL    string `json:"availnzb_url"`
 	AvailNZBAPIKey string `json:"availnzb_api_key"`
+	
+	// Internal - where was this config loaded from?
+	LoadedPath string `json:"-"`
 }
 
 // Load loads configuration from environment variables AND config.json if present
@@ -83,8 +86,20 @@ func Load() (*Config, error) {
 	cfg.ProxyAuthPass = getEnv("NNTP_PROXY_AUTH_PASS", "")
 
     // 2. Override with config.json if it exists
-    if err := cfg.LoadFile("config.json"); err != nil && !os.IsNotExist(err) {
-        fmt.Printf("Warning: Failed to load config.json: %v\n", err)
+    // Priority: /app/data/config.json (Docker volume) > ./config.json (Local)
+    configPath := "config.json"
+    if _, err := os.Stat("/app/data/config.json"); err == nil {
+        configPath = "/app/data/config.json"
+        fmt.Println("Loading configuration from /app/data/config.json")
+    } else if _, err := os.Stat("config.json"); err == nil {
+        fmt.Println("Loading configuration from ./config.json")
+    }
+
+    // Set the loaded path so we know where to save back to
+    cfg.LoadedPath = configPath
+
+    if err := cfg.LoadFile(configPath); err != nil && !os.IsNotExist(err) {
+        fmt.Printf("Warning: Failed to load %s: %v\n", configPath, err)
     }
 	
 	// Note: We no longer enforce at least one provider during Load to allow
@@ -118,6 +133,15 @@ func (c *Config) LoadFile(path string) error {
         return err
     }
     return nil
+}
+
+// Save saves the current configuration to the file it was loaded from
+func (c *Config) Save() error {
+    path := c.LoadedPath
+    if path == "" {
+        path = "config.json"
+    }
+    return c.SaveFile(path)
 }
 
 // SaveFile saves the current configuration to a JSON file

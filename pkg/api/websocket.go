@@ -127,8 +127,12 @@ func (s *Server) handleSaveConfigWS(conn *websocket.Conn, payload json.RawMessag
 		return
 	}
 
+	// Preserve the LoadedPath from the existing config
+	loadedPath := s.config.LoadedPath
 	*s.config = newCfg
-	if err := s.config.SaveFile("config.json"); err != nil {
+	s.config.LoadedPath = loadedPath
+
+	if err := s.config.Save(); err != nil {
 		responses <- WSMessage{Type: "save_status", Payload: json.RawMessage([]byte(fmt.Sprintf(`{"status":"error","message":"%s"}`, err.Error())))}
 		return
 	}

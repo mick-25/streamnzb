@@ -56,7 +56,7 @@ services:
       - "7000:7000"
       - "1119:1119"
     volumes:
-      - ./config.json:/app/config.json
+      - /path/to/config:/app/data
 ```
 
 Alternatively you can set environment variables to configure the application on first startup, check .env.example for available variables.
