@@ -25,6 +25,7 @@ import (
 
 // Server represents the Stremio addon HTTP server
 type Server struct {
+	mu             sync.RWMutex
 	manifest       *Manifest
 	baseURL        string
 	indexer        indexer.Indexer
@@ -33,6 +34,8 @@ type Server struct {
 	triageService  *triage.Service
 	availClient    *availnzb.Client
 	securityToken  string
+	webHandler     http.Handler
+	apiHandler     http.Handler
 }
 
 // NewServer creates a new Stremio addon server
@@ -74,21 +77,43 @@ func (s *Server) CheckPort(port int) error {
 	return nil
 }
 
+// SetWebHandler sets the handler for static web content (fallback)
+func (s *Server) SetWebHandler(h http.Handler) {
+	s.webHandler = h
+}
+
+// SetAPIHandler sets the handler for API requests
+func (s *Server) SetAPIHandler(h http.Handler) {
+	s.apiHandler = h
+}
+
 // SetupRoutes configures HTTP routes for the addon
 func (s *Server) SetupRoutes(mux *http.ServeMux) {
 	// Root handler for manifest and other routes
 	// We use a custom handler to handle the optional token prefix
 	finalHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		s.mu.RLock()
+		securityToken := s.securityToken
+		webHandler := s.webHandler
+		apiHandler := s.apiHandler
+		s.mu.RUnlock()
+
 		path := r.URL.Path
 		
-		if s.securityToken != "" {
+		if securityToken != "" {
 			// Path format: /{token}/manifest.json or /{token}/stream/...
 			trimmedPath := strings.TrimPrefix(path, "/")
 			parts := strings.SplitN(trimmedPath, "/", 2)
 			
-			if len(parts) < 1 || parts[0] != s.securityToken {
+			if len(parts) < 1 || parts[0] != securityToken {
 				logger.Error("Unauthorized request", "path", path, "remote", r.RemoteAddr)
 				http.Error(w, "Unauthorized", http.StatusUnauthorized)
+				return
+			}
+			
+			// Ensure trailing slash for root token path to support relative assets
+			if len(parts) == 1 && !strings.HasSuffix(path, "/") {
+				http.Redirect(w, r, path+"/", http.StatusTemporaryRedirect)
 				return
 			}
 			
@@ -111,8 +136,21 @@ func (s *Server) SetupRoutes(mux *http.ServeMux) {
 			s.handlePlay(w, r)
 		} else if path == "/health" {
 			s.handleHealth(w, r)
+		} else if strings.HasPrefix(path, "/api/") {
+			if apiHandler != nil {
+				// API Handler expects /api/...
+				// Current path is /api/... (token stripped)
+				// Need to preserve the path for the API mux
+				apiHandler.ServeHTTP(w, r)
+			} else {
+				http.NotFound(w, r)
+			}
 		} else {
-			http.NotFound(w, r)
+			if webHandler != nil {
+				webHandler.ServeHTTP(w, r)
+			} else {
+				http.NotFound(w, r)
+			}
 		}
 	})
 
@@ -126,7 +164,11 @@ func (s *Server) handleManifest(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	
-	data, err := s.manifest.ToJSON()
+	s.mu.RLock()
+	manifest := s.manifest
+	s.mu.RUnlock()
+
+	data, err := manifest.ToJSON()
 	if err != nil {
 		http.Error(w, "Failed to generate manifest", http.StatusInternalServerError)
 		return
@@ -351,7 +393,7 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string) 
 			streamURL := fmt.Sprintf("%s/play/%s", s.baseURL, sessionID)
 
 			// Build rich stream metadata from PTT
-			stream := buildStreamMetadata(streamURL, displayTitle, cand, sizeGB, nzbParsed.TotalSize(), bestResult.Provider)
+			stream := buildStreamMetadata(streamURL, displayTitle, cand, sizeGB, nzbParsed.TotalSize())
 
 			logger.Info("Created stream", "name", stream.Name, "url", stream.URL)
 			resultChan <- nzbResult{stream: stream, group: cand.Group}
@@ -512,6 +554,14 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Accept-Ranges", "bytes")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	
+	// Track active playback
+	clientIP, _, _ := net.SplitHostPort(r.RemoteAddr)
+	if clientIP == "" {
+		clientIP = r.RemoteAddr
+	}
+	s.sessionManager.StartPlayback(sessionID, clientIP)
+	defer s.sessionManager.EndPlayback(sessionID, clientIP)
+
 	// Handle streaming using standard library ServeContent
 	// This automatically handles Range requests, HEAD requests, and efficient copying.
 	http.ServeContent(w, r, name, time.Time{}, stream)
@@ -615,5 +665,27 @@ func forceDisconnect(w http.ResponseWriter) {
 	w.Header().Set("Connection", "close")
 	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 	http.Redirect(w, &http.Request{Method: "GET"}, errorVideoURL, http.StatusTemporaryRedirect)
+}
+
+// Reload updates the server components at runtime
+func (s *Server) Reload(baseURL string, indexer indexer.Indexer, validator *validation.Checker, triage *triage.Service, avail *availnzb.Client, securityToken string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	actualBaseURL := baseURL
+	if securityToken != "" {
+		if !strings.HasSuffix(actualBaseURL, "/") {
+			actualBaseURL += "/"
+		}
+		actualBaseURL += securityToken
+	}
+
+	s.baseURL = actualBaseURL
+	s.indexer = indexer
+	s.validator = validator
+	s.triageService = triage
+	s.availClient = avail
+	s.securityToken = securityToken
+	// Note: sessionManager pools are updated separately via sessionManager.UpdatePools
 }
 

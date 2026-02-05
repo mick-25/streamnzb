@@ -3,3 +3,5 @@ streamnzb.exe~
 .env
 .git
 dist/
+config.json
+pkg/web/static/assets

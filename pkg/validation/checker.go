@@ -13,9 +13,10 @@ import (
 
 // Checker validates article availability across providers
 type Checker struct {
-	providers map[string]*nntp.ClientPool
-	cache     *Cache
-	sampleSize int
+	mu            sync.RWMutex
+	providers     map[string]*nntp.ClientPool
+	cache         *Cache
+	sampleSize    int
 	maxConcurrent int
 }
 
@@ -54,7 +55,11 @@ func (c *Checker) ValidateNZB(ctx context.Context, nzbData *nzb.NZB) map[string]
 	}
 
 	// Validate across all providers in parallel
-	for providerName, pool := range c.providers {
+	c.mu.RLock()
+	providers := c.providers
+	c.mu.RUnlock()
+
+	for providerName, pool := range providers {
 		wg.Add(1)
 		go func(name string, p *nntp.ClientPool) {
 			defer wg.Done()
@@ -194,4 +199,10 @@ func GetBestProvider(results map[string]*ValidationResult) *ValidationResult {
 	}
 
 	return bestResult
+}
+// UpdatePools swaps the provider pools at runtime
+func (c *Checker) UpdatePools(providers map[string]*nntp.ClientPool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.providers = providers
 }

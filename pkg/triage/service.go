@@ -123,11 +123,6 @@ func calculateScore(res indexer.Item, p *parser.ParsedRelease) int {
 		score += 20
 	}
 	
-	// HDR boost
-	if len(p.HDR) > 0 {
-		score += 30
-	}
-	
 	// Penalize CAM/TS
 	if strings.Contains(strings.ToLower(p.Quality), "cam") || 
 	   strings.Contains(strings.ToLower(p.Quality), "telesync") || 

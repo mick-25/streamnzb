@@ -47,63 +47,35 @@ You can run StreamNZB using Docker or directly as a binary on your system.
 
 **Using Docker Compose:**
 ```yaml
-version: '3.8'
-
 services:
   streamnzb:
     image: ghcr.io/gaisberg/streamnzb:latest
     container_name: streamnzb
     restart: unless-stopped
-    env_file:
-      - .env
     ports:
       - "7000:7000"
-    # Alternatively, you can define environment variables directly here
-    # environment:
-    #   - NZBHYDRA2_URL=http://nzbhydra2:5076
-    #   ...
+      - "1119:1119"
+    volumes:
+      - ./config.json:/app/config.json
 ```
 
-**Using Docker Run:**
-```bash
-docker run -d \
-  --name streamnzb \
-  -p 7000:7000 \
-  --env-file .env \
-  ghcr.io/gaisberg/streamnzb:latest
-```
+Alternatively you can set environment variables to configure the application on first startup, check .env.example for available variables.
 
 #### 2. Windows / Linux / macOS (Binary)
 
 1. **Download**: Get the latest release for your platform from the [Releases Page](https://github.com/Gaisberg/streamnzb/releases).
-   - Windows: `streamnzb-windows-amd64.exe`
-   - Linux: `streamnzb-linux-amd64` (or `arm64`)
-   
-2. **Configure**: 
-   - Download the `.env.example` file and save it as `.env` in the same directory as the binary.
-   - Open `.env` with a text editor and fill in your details (Provider settings, API keys, etc).
+2. **Run**: Start the binary.
 
-3. **Run**:
-   - **Windows**: Double-click `streamnzb.exe` or run in PowerShell:
-     ```powershell
-     .\streamnzb-windows-amd64.exe
-     ```
-   - **Linux/macOS**:
-     ```bash
-     chmod +x streamnzb-linux-amd64
-     ./streamnzb-linux-amd64
-     ```
+### ⚙️ Getting started
 
-### Configuration
+1. Once you've got StreamNZB running, you can access the web UI at `http://localhost:7000` or `http://localhost:7000/mysecret/` if you've set a security token.
 
-Configuration is handled via environment variables or the `.env` file. See `.env.example` for all available options.
+> [!TIP]
+> Use the **Security Token** to secure your instance when exposing it to the internet.
 
-**Key Settings:**
-- `NZBHYDRA2_*`: Connection to NZBHydra2 (optional if using Prowlarr).
-- `PROWLARR_*`: Connection to Prowlarr (optional if using Hydra).
-- `PROVIDER_*`: Your Usenet provider details. You can add multiple providers by incrementing the number (PROVIDER_1, PROVIDER_2, etc).
-- `ADDON_BASE_URL`: The public URL where Stremio can reach this service.
-- `SECURITY_TOKEN`: Optional but recommended. Adds a path prefix to your addon URL to prevent unauthorized access.
+2. Click the **Settings** icon in the dashboard to configure everything visually.
+
+3. You need at least one **Usenet Provider** and one **Indexer** to get started.
 
 ### ❓ Troubleshooting
 
@@ -116,10 +88,12 @@ Configuration is handled via environment variables or the `.env` file. See `.env
 - Linux often requires `sudo` to bind to port 119.
 - Change `NNTP_PROXY_PORT` to `1119` or similar if running without root.
 
-**Slow Downloads / Buffering**
+**Slow Downloads**
 - Increase `MAX_CONCURRENT_VALIDATIONS`.
-- Ensure your server has sufficient bandwidth.
-- Check `CACHE_TTL_SECONDS` to reduce repeated availability checks.
+- Ensure your system has sufficient bandwidth.
+
+**Why am I seeing Big Buck Bunny instead of my movie?**
+- If you're seeing Big Buck Bunny, it means streamNZB was unable to play movie from Usenet and you should try another one.
 
 ### ☕ Support
 

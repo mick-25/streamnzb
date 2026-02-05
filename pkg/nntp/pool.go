@@ -15,7 +15,13 @@ type ClientPool struct {
 
 	idleClients chan *Client
 	slots       chan struct{} // Semaphore tokens for creating new connections
-	mu          sync.Mutex
+	// Metrics
+	bytesRead int64
+	lastSpeed float64 // Mbps
+	lastCheck time.Time
+	
+	mu sync.Mutex
+	closed bool
 }
 
 func NewClientPool(host string, port int, ssl bool, user, pass string, maxConn int) *ClientPool {
@@ -28,6 +34,7 @@ func NewClientPool(host string, port int, ssl bool, user, pass string, maxConn i
 		maxConn: maxConn,
 		idleClients: make(chan *Client, maxConn),
 		slots:       make(chan struct{}, maxConn),
+		lastCheck:   time.Now(),
 	}
 	
 	// Fill slots with permits
@@ -39,6 +46,35 @@ func NewClientPool(host string, port int, ssl bool, user, pass string, maxConn i
 	go p.reaperLoop()
 	
 	return p
+}
+
+// TrackRead updates the total bytes read
+func (p *ClientPool) TrackRead(n int) {
+	p.mu.Lock()
+	p.bytesRead += int64(n)
+	p.mu.Unlock()
+}
+
+// GetSpeed returns the current speed in Mbps and resets the counter
+// This should be called periodically (e.g. by the stats collector)
+func (p *ClientPool) GetSpeed() float64 {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	
+	now := time.Now()
+	duration := now.Sub(p.lastCheck).Seconds()
+	
+	if duration >= 1.0 {
+		// Calculate Mbps: (bytes * 8) / (1024*1024) / seconds
+		mbps := (float64(p.bytesRead) * 8) / (1024 * 1024) / duration
+		p.lastSpeed = mbps
+		
+		// Reset
+		p.bytesRead = 0
+		p.lastCheck = now
+	}
+	
+	return p.lastSpeed
 }
 
 func (p *ClientPool) Get() (*Client, error) {
@@ -58,6 +94,7 @@ func (p *ClientPool) Get() (*Client, error) {
 			p.slots <- struct{}{} // Return permit on failure
 			return nil, err
 		}
+        c.SetPool(p)
 		if err := c.Authenticate(p.user, p.pass); err != nil {
 			c.Quit()
 			p.slots <- struct{}{}
@@ -159,6 +196,12 @@ func (p *ClientPool) reaperLoop() {
 	timeout := 30 * time.Second                // Close connections idle >30s
 	
 	for range ticker.C {
+		p.mu.Lock()
+		if p.closed {
+			p.mu.Unlock()
+			return
+		}
+		p.mu.Unlock()
 		// Scan idle clients
 		// We want to check ALL currently idle clients.
 		// However, channel is FIFO/random.
@@ -200,4 +243,36 @@ func (p *ClientPool) Host() string {
 
 func (p *ClientPool) MaxConn() int {
 	return p.maxConn
+}
+
+// TotalConnections returns the number of open connections (active + idle)
+func (p *ClientPool) TotalConnections() int {
+	return p.maxConn - len(p.slots)
+}
+
+// IdleConnections returns the number of idle connections ready for reuse
+func (p *ClientPool) IdleConnections() int {
+	return len(p.idleClients)
+}
+
+// ActiveConnections returns the number of connections continuously using bandwidth
+func (p *ClientPool) ActiveConnections() int {
+	return p.TotalConnections() - p.IdleConnections()
+}
+
+// Shutdown closes all connections in the pool
+func (p *ClientPool) Shutdown() {
+	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		return
+	}
+	p.closed = true
+	p.mu.Unlock()
+
+	// Drain idle clients
+	close(p.idleClients)
+	for c := range p.idleClients {
+		c.Quit()
+	}
 }

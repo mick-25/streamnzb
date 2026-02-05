@@ -5,7 +5,6 @@ import (
 	"io"
 	"io/fs"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"streamnzb/pkg/logger"
@@ -19,7 +18,7 @@ func NewNZBFS(files []UnpackableFile) *NZBFS {
 	m := make(map[string]UnpackableFile)
 	for _, f := range files {
 		// Clean the name to match request
-		name := extractFilename(f.Name())
+		name := ExtractFilename(f.Name())
 		m[name] = f
 	}
 	return &NZBFS{files: m}
@@ -29,53 +28,17 @@ func NewNZBFSFromMap(files map[string]UnpackableFile) *NZBFS {
 	return &NZBFS{files: files}
 }
 
-// extractFilename attempts to find a filename in the subject string.
-// Very basic implementation.
-func extractFilename(subject string) string {
-	// 1. Try to extract from quotes first "filename.ext"
-	if start := strings.Index(subject, "\""); start != -1 {
-		if end := strings.Index(subject[start+1:], "\""); end != -1 {
-			return subject[start+1 : start+1+end]
-		}
-	}
-
-	// 2. Clean common NZB suffixes if no quotes found or fallthrough
-	// Remove (1/23) or [1/23] patterns at end
-	// Simple approach: Split by common separators and look for extension?
-	// Or just trim specific patterns.
-	
-	clean := strings.TrimSpace(subject)
-	
-	// Remove trailing (x/y) or [x/y]
-	// iterate backwards?
-	// Regex is expensive but safest here.
-	// But let's try manual trimming to avoid importing regexp if not needed
-	// Actually we need regexp for robustness.
-	// But let's look for " (" and trim if it ends with ")"
-	if idx := strings.LastIndex(clean, " ("); idx != -1 {
-		// Verify it looks like (1/2)
-		suffix := clean[idx:]
-		if strings.Contains(suffix, "/") && strings.HasSuffix(suffix, ")") {
-			clean = strings.TrimSpace(clean[:idx])
-		}
-	}
-	
-	// Remove trailing " yEnc"
-	if strings.HasSuffix(clean, " yEnc") {
-		clean = strings.TrimSuffix(clean, " yEnc")
-		clean = strings.TrimSpace(clean)
-	}
-
-	return clean
-}
-
 func (n *NZBFS) Open(name string) (fs.File, error) {
-	// rardecode might request "./movie.part02.rar"
-	base := filepath.Base(name)
-	
-	f, ok := n.files[base]
+	// Try exact match first (supports full paths)
+	f, ok := n.files[name]
 	if !ok {
-		logger.Debug("NZBFS: File not found", "name", base)
+		// Fallback: try basename (handles ./file.rar or path mismatch)
+		base := filepath.Base(name)
+		f, ok = n.files[base]
+	}
+
+	if !ok {
+		logger.Debug("NZBFS: File not found", "name", name)
 		return nil, fs.ErrNotExist
 	}
 	// NZBFS: Opening
@@ -88,7 +51,7 @@ func (n *NZBFS) Open(name string) (fs.File, error) {
 	return &FileWrapper{
 		Stream: stream,
 		File:   f,
-		Name:   extractFilename(f.Name()),
+		Name:   ExtractFilename(f.Name()),
 		Size:   f.Size(),
 	}, nil
 }

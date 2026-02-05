@@ -20,6 +20,8 @@ type Session struct {
 	Blueprint interface{} // type *unpack.ArchiveBlueprint (interface to avoid strict cycle, though safe)
 	CreatedAt   time.Time
 	LastAccess  time.Time
+	ActivePlays int32
+	Clients     map[string]time.Time // IP -> Connected time
 	mu          sync.Mutex
 }
 
@@ -90,6 +92,7 @@ func (m *Manager) CreateSession(sessionID string, nzbData *nzb.NZB) (*Session, e
 		File:       firstFile, // Keep for backward compat within session pkg
 		CreatedAt:  time.Now(),
 		LastAccess: time.Now(),
+		Clients:    make(map[string]time.Time),
 	}
 	
 	m.sessions[sessionID] = session
@@ -156,4 +159,113 @@ func (m *Manager) Stats() map[string]interface{} {
 		"active_sessions": len(m.sessions),
 		"ttl_minutes":     m.ttl.Minutes(),
 	}
+}
+
+// Count returns the number of sessions
+func (m *Manager) Count() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return len(m.sessions)
+}
+
+// CountActive returns the number of sessions currently being played
+func (m *Manager) CountActive() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	
+	count := 0
+	for _, s := range m.sessions {
+		// We can read ActivePlays without session lock if we accept slight race, 
+		// but better to allow atomic access or just lock.
+		// Since we use atomic for updates (or lock), let's just lock for correctness.
+		s.mu.Lock()
+		if s.ActivePlays > 0 {
+			count++
+		}
+		s.mu.Unlock()
+	}
+	return count
+}
+
+// StartPlayback increments the active play count for a session and tracks IP
+func (m *Manager) StartPlayback(id, ip string) {
+	s, err := m.GetSession(id)
+	if err == nil {
+		s.mu.Lock()
+		s.ActivePlays++
+		s.Clients[ip] = time.Now()
+		s.mu.Unlock()
+	}
+}
+
+// EndPlayback decrements the active play count for a session and removes IP
+func (m *Manager) EndPlayback(id, ip string) {
+	s, err := m.GetSession(id)
+	if err == nil {
+		s.mu.Lock()
+		if s.ActivePlays > 0 {
+			s.ActivePlays--
+		}
+		// Update last seen for the IP to ensure it stays for grace period
+		s.Clients[ip] = time.Now()
+		s.mu.Unlock()
+	}
+}
+
+// ActiveSessionInfo provides details about a currently playing session
+type ActiveSessionInfo struct {
+	ID        string   `json:"id"`
+	Title     string   `json:"title"`
+	Clients   []string `json:"clients"`
+	StartTime string   `json:"start_time"`
+}
+
+// GetActiveSessions returns a list of sessions that are currently playing
+func (m *Manager) GetActiveSessions() []ActiveSessionInfo {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var result []ActiveSessionInfo
+	for _, s := range m.sessions {
+		s.mu.Lock()
+		
+		// 1. Purge IPs that haven't been seen for 60 seconds
+		for ip, lastSeen := range s.Clients {
+			if time.Since(lastSeen) > 60*time.Second {
+				delete(s.Clients, ip)
+			}
+		}
+
+		// 2. A session is active if it has clients.
+		// Search availability checks create sessions but don't register clients, 
+		// so they won't appear as active streams.
+		isActive := len(s.Clients) > 0
+
+		if isActive {
+			clients := make([]string, 0, len(s.Clients))
+			for ip := range s.Clients {
+				clients = append(clients, ip)
+			}
+			
+			title := "Unknown"
+			if s.NZB != nil && len(s.NZB.Files) > 0 {
+				title = s.NZB.Files[0].Subject
+			}
+
+			result = append(result, ActiveSessionInfo{
+				ID:        s.ID,
+				Title:     title,
+				Clients:   clients,
+				StartTime: s.CreatedAt.Format(time.Kitchen),
+			})
+		}
+		s.mu.Unlock()
+	}
+	return result
+}
+// UpdatePools swaps the provider pools at runtime
+func (m *Manager) UpdatePools(pools []*nntp.ClientPool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.pools = pools
 }

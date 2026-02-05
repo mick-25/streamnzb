@@ -6,6 +6,7 @@ import (
 	"os"
 	"time"
 
+	"streamnzb/pkg/api"
 	"streamnzb/pkg/availnzb"
 	"streamnzb/pkg/initialization"
 	"streamnzb/pkg/logger"
@@ -14,6 +15,7 @@ import (
 	"streamnzb/pkg/stremio"
 	"streamnzb/pkg/triage"
 	"streamnzb/pkg/validation"
+	"streamnzb/pkg/web"
 
 	"github.com/joho/godotenv"
 )
@@ -72,11 +74,24 @@ func main() {
 	if err != nil {
 		initialization.WaitForInputAndExit(fmt.Errorf("Failed to initialize Stremio server: %v", err))
 	}
+	
+	// Initialize API Server
+	apiServer := api.NewServer(cfg, comp.ProviderPools, sessionManager, stremioServer)
+	
+	// Set embedded web handler
+	stremioServer.SetWebHandler(web.Handler())
+	stremioServer.SetAPIHandler(apiServer.Handler())
 
 	// Setup HTTP routes
 	mux := http.NewServeMux()
 	stremioServer.SetupRoutes(mux)
-
+	
+	// Mount API routes (apiServer.Handler returns a mux with /api/...)
+	// Since both are muxes, we need to merge or mount carefully.
+	// StremioServer mounts "/" at the end.
+	// We should mount /api/ before /.
+	mux.Handle("/api/", apiServer.Handler())
+	
 	// Start NNTP proxy if enabled
 	if cfg.ProxyEnabled {
 		proxyServer, err := proxy.NewServer(cfg.ProxyHost, cfg.ProxyPort, comp.StreamingPools, cfg.ProxyAuthUser, cfg.ProxyAuthPass)
@@ -94,8 +109,9 @@ func main() {
 
 	// Start Stremio server
 	addr := fmt.Sprintf(":%d", cfg.AddonPort)
-	logger.Info("Stremio addon listening", "addr", addr)
-	logger.Info("Install addon", "url", fmt.Sprintf("%s/%s/manifest.json", cfg.AddonBaseURL, cfg.SecurityToken))
+
+	logger.Info("Stremio manifest URL", "url", fmt.Sprintf("%s/%s/manifest.json", cfg.AddonBaseURL, cfg.SecurityToken))
+	logger.Info("Frontend url", "url", fmt.Sprintf("%s/%s/", cfg.AddonBaseURL, cfg.SecurityToken))
 
 	if err := http.ListenAndServe(addr, mux); err != nil {
 		initialization.WaitForInputAndExit(fmt.Errorf("Server failed: %v", err))

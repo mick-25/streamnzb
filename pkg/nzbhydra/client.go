@@ -19,15 +19,35 @@ type Client struct {
 	client  *http.Client
 }
 
-// Ping checks if the NZBHydra2 server is reachable
+// APIError represents a Newznab API error
+type APIError struct {
+	XMLName     xml.Name `xml:"error"`
+	Code        string   `xml:"code,attr"`
+	Description string   `xml:"description,attr"`
+}
+
+// Ping checks if the NZBHydra2 server is reachable and the API key is valid
 func (c *Client) Ping() error {
-	resp, err := c.client.Get(c.baseURL)
+	apiURL := fmt.Sprintf("%s/api?t=caps&apikey=%s", c.baseURL, c.apiKey)
+	resp, err := c.client.Get(apiURL)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
 	
-	if resp.StatusCode >= 500 {
+	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnauthorized {
+		return fmt.Errorf("NZBHydra2 error: invalid API key")
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	
+	// Check if the response is an XML error
+	var apiErr APIError
+	if err := xml.Unmarshal(body, &apiErr); err == nil && apiErr.Description != "" {
+		return fmt.Errorf("NZBHydra2 error: %s", apiErr.Description)
+	}
+
+	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("NZBHydra2 returned error status: %d", resp.StatusCode)
 	}
 	return nil

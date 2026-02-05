@@ -7,10 +7,8 @@ import (
 	"streamnzb/pkg/indexer"
 	"streamnzb/pkg/logger"
 	"streamnzb/pkg/nntp"
-	"streamnzb/pkg/nntp/proxy"
 	"streamnzb/pkg/nzbhydra"
 	"streamnzb/pkg/prowlarr"
-	"streamnzb/pkg/stremio"
 )
 
 // InitializedComponents holds all the components initialized during bootstrap
@@ -38,6 +36,11 @@ func Bootstrap() (*InitializedComponents, error) {
 		return nil, fmt.Errorf("configuration error: %w", err)
 	}
 
+	return BuildComponents(cfg)
+}
+
+// BuildComponents builds all system modules from the provided configuration
+func BuildComponents(cfg *config.Config) (*InitializedComponents, error) {
 	// 2. Initialize Indexers
 	var indexers []indexer.Indexer
 
@@ -68,7 +71,7 @@ func Bootstrap() (*InitializedComponents, error) {
 	}
 
 	if len(indexers) == 0 {
-		return nil, fmt.Errorf("no indexers configured/initialized")
+		logger.Warn("!! No indexers (Hydra/Prowlarr) configured. Add some via the web UI !!")
 	}
 
 	aggregator := indexer.NewAggregator(indexers...)
@@ -95,34 +98,18 @@ func Bootstrap() (*InitializedComponents, error) {
 			continue
 		}
 
-		providerPools[provider.Name] = pool
+		// Use Host as fallback if Name is empty (common for UI-added providers)
+		poolName := provider.Name
+		if poolName == "" {
+			poolName = provider.Host
+		}
+
+		providerPools[poolName] = pool
 		streamingPools = append(streamingPools, pool)
 	}
 
 	if len(providerPools) == 0 {
-		return nil, fmt.Errorf("all %d configured providers failed to initialize. Check your credentials and connectivity", len(cfg.Providers))
-	}
-
-	// 4. Validate Server Ports
-	// Stremio Server validation
-	// Note: We create a temporary server instance just to check the port during bootstrap
-	// The real server instance is created in main.go with full dependencies
-	_, err = stremio.NewServer(cfg.AddonBaseURL, cfg.AddonPort, aggregator, nil, nil, nil, nil, cfg.SecurityToken)
-	if err != nil {
-		return nil, fmt.Errorf("stremio server init check failed: %w", err)
-	}
-
-	// Proxy Server validation
-	if cfg.ProxyEnabled {
-		_, err := proxy.NewServer(cfg.ProxyHost, cfg.ProxyPort, streamingPools, cfg.ProxyAuthUser, cfg.ProxyAuthPass)
-		if err != nil {
-			return nil, fmt.Errorf("proxy server init failed: %w", err)
-		}
-	}
-
-	// Security token warning
-	if cfg.SecurityToken == "" {
-		logger.Warn("!! SECURITY WARNING: SECURITY_TOKEN is not set. Your addon is accessible without authentication !!")
+		logger.Warn("!! No valid NNTP providers initialized. Check your credentials in the web UI !!")
 	}
 
 	return &InitializedComponents{

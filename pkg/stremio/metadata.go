@@ -9,11 +9,11 @@ import (
 )
 
 // buildStreamMetadata creates a rich Stream object with PTT metadata
-func buildStreamMetadata(url, filename string, cand triage.Candidate, sizeGB float64, totalBytes int64, provider string) Stream {
+func buildStreamMetadata(url, filename string, cand triage.Candidate, sizeGB float64, totalBytes int64) Stream {
 	meta := cand.Metadata
 	
 	// Build stream name (left side - provider/quality badge)
-	name := buildStreamName(meta, cand.Group, provider)
+	name := buildStreamName(meta, cand.Group)
 	
 	// Build detailed description (right side - technical details)
 	description := buildDetailedDescription(meta, sizeGB, filename)
@@ -21,7 +21,7 @@ func buildStreamMetadata(url, filename string, cand triage.Candidate, sizeGB flo
 	// Create behavior hints
 	hints := &BehaviorHints{
 		NotWebReady: false,
-		BingeGroup:  fmt.Sprintf("streamnzb-%s-%s", provider, cand.Group),
+		BingeGroup:  fmt.Sprintf("streamnzb|%s", cand.Group),
 		VideoSize:   totalBytes,
 		Filename:    filename,
 	}
@@ -35,7 +35,7 @@ func buildStreamMetadata(url, filename string, cand triage.Candidate, sizeGB flo
 }
 
 // buildStreamName creates the left-side name (provider badge + quality)
-func buildStreamName(meta *parser.ParsedRelease, group, provider string) string {
+func buildStreamName(meta *parser.ParsedRelease, group string) string {
 	parts := []string{}
 	
 	// Resolution

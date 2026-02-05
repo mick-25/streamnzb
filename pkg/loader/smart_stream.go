@@ -2,8 +2,10 @@ package loader
 
 import (
 	"context"
+	"errors"
 	"io"
 	"streamnzb/pkg/logger"
+	"strings"
 	"sync"
 	"time"
 )
@@ -290,9 +292,16 @@ func (s *SmartStream) downloadManager() {
 						s.segmentCache[idx] = data
 						s.downloadCond.Broadcast() // Wake up reader
 					} else {
-						// Retry? 
-						// For now, simple logging, maybe retry logic later
-						logger.Error("SmartStream download fail", "seg", idx, "err", err)
+						// Suppress cancellation errors (happens on seek/close)
+						// Check both wrapped error and string message for robustness
+						isCanceled := errors.Is(err, context.Canceled) || 
+						              err == context.Canceled || 
+						              strings.Contains(err.Error(), "canceled") || 
+						              strings.Contains(err.Error(), "cancelled")
+
+						if !isCanceled {
+							logger.Error("SmartStream download fail", "seg", idx, "err", err)
+						}
 						// Remove from downloading, will be retried next loop
 					}
 					s.mu.Unlock()

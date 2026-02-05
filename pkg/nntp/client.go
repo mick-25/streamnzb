@@ -21,6 +21,7 @@ type Client struct {
 	pass    string
 	
 	LastUsed time.Time
+	pool    *ClientPool // Reference to parent pool for metrics
 }
 
 func NewClient(address string, port int, ssl bool) (*Client, error) {
@@ -58,6 +59,11 @@ func NewClient(address string, port int, ssl bool) (*Client, error) {
 		port:    port,
 		ssl:     ssl,
 	}, nil
+}
+
+// SetPool assigns the parent pool for metric tracking
+func (c *Client) SetPool(p *ClientPool) {
+	c.pool = p
 }
 
 func (c *Client) Authenticate(user, pass string) error {
@@ -149,13 +155,14 @@ func (c *Client) Body(messageID string) (io.Reader, error) {
 			return nil, err
 		}
 
-		// 2. Read Response
+	// 2. Read Response
 		c.conn.StartResponse(id)
 		code, _, err := c.conn.ReadCodeLine(222)
 		c.conn.EndResponse(id)
 
 		if err == nil {
-			return c.conn.DotReader(), nil
+			// Wrap reader to track metrics
+			return &metricReader{r: c.conn.DotReader(), client: c}, nil
 		}
 		
 		lastErr = err
@@ -176,6 +183,20 @@ func (c *Client) Body(messageID string) (io.Reader, error) {
 	}
 
 	return nil, lastErr
+}
+
+// metricReader wraps io.Reader to track bytes read
+type metricReader struct {
+	r      io.Reader
+	client *Client
+}
+
+func (m *metricReader) Read(p []byte) (n int, err error) {
+	n, err = m.r.Read(p)
+	if n > 0 && m.client.pool != nil {
+		m.client.pool.TrackRead(n)
+	}
+	return n, err
 }
 
 func (c *Client) shouldRetry(code int, err error) bool {

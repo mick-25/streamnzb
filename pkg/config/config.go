@@ -1,58 +1,64 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"strconv"
 	"strings"
 )
 
+// Provider represents a Usenet provider configuration
+type Provider struct {
+	Name        string `json:"name"`
+	Host        string `json:"host"`
+	Port        int    `json:"port"`
+	Username    string `json:"username"`
+	Password    string `json:"password"`
+	Connections int    `json:"connections"`
+	UseSSL      bool   `json:"use_ssl"`
+}
+
 // Config holds application configuration
 type Config struct {
 	// NZBHydra2 settings
-	NZBHydra2URL    string
-	NZBHydra2APIKey string
+	NZBHydra2URL    string `json:"nzbhydra_url"`
+	NZBHydra2APIKey string `json:"nzbhydra_api_key"`
 	
 	// Prowlarr settings
-	ProwlarrURL    string
-	ProwlarrAPIKey string
+	ProwlarrURL    string `json:"prowlarr_url"`
+	ProwlarrAPIKey string `json:"prowlarr_api_key"`
 	
 	// Addon settings
-	AddonPort    int
-	AddonBaseURL string
+	AddonPort    int    `json:"addon_port"`
+	AddonBaseURL string `json:"addon_base_url"`
 	
 	// Validation settings
-	CacheTTLSeconds          int
-	ValidationSampleSize     int
-	MaxConcurrentValidations int
+	CacheTTLSeconds          int `json:"cache_ttl_seconds"`
+	ValidationSampleSize     int `json:"validation_sample_size"`
+	MaxConcurrentValidations int `json:"max_concurrent_validations"`
 	
 	// NNTP Providers
-	Providers []Provider
+	Providers []Provider `json:"providers"`
 	
 	// NNTP Proxy
-	ProxyEnabled  bool
-	ProxyPort     int
-	ProxyHost     string
-	ProxyAuthUser string
-	ProxyAuthPass string
+	ProxyEnabled  bool   `json:"proxy_enabled"`
+	ProxyPort     int    `json:"proxy_port"`
+	ProxyHost     string `json:"proxy_host"`
+	ProxyAuthUser string `json:"proxy_auth_user"`
+	ProxyAuthPass string `json:"proxy_auth_pass"`
 	
 	// Security
-	SecurityToken string
+	SecurityToken string `json:"security_token"`
+
+	// AvailNZB (Internal/Community)
+	AvailNZBURL    string `json:"availnzb_url"`
+	AvailNZBAPIKey string `json:"availnzb_api_key"`
 }
 
-// Provider represents a Usenet provider configuration
-type Provider struct {
-	Name        string
-	Host        string
-	Port        int
-	Username    string
-	Password    string
-	Connections int
-	UseSSL      bool
-}
-
-// Load loads configuration from environment variables
+// Load loads configuration from environment variables AND config.json if present
 func Load() (*Config, error) {
+    // 1. Initialize with Env Vars (Defaults)
 	cfg := &Config{
 		NZBHydra2URL:             getEnv("NZBHYDRA2_URL", "http://localhost:5076"),
 		NZBHydra2APIKey:          getEnv("NZBHYDRA2_API_KEY", ""),
@@ -64,43 +70,85 @@ func Load() (*Config, error) {
 		ValidationSampleSize:     getEnvInt("VALIDATION_SAMPLE_SIZE", 5),
 		MaxConcurrentValidations: getEnvInt("MAX_CONCURRENT_VALIDATIONS", 20),
 		SecurityToken:            os.Getenv("SECURITY_TOKEN"),
+		AvailNZBURL:              getEnv("AVAILNZB_URL", "https://avail.streamnzb.com"),
+		AvailNZBAPIKey:           os.Getenv("AVAILNZB_API_KEY"),
 	}
 	
-	// Load providers
 	cfg.Providers = loadProviders()
 	
-	// Load proxy settings
 	cfg.ProxyEnabled = getEnvBool("NNTP_PROXY_ENABLED", false)
 	cfg.ProxyPort = getEnvInt("NNTP_PROXY_PORT", 1119)
 	cfg.ProxyHost = getEnv("NNTP_PROXY_HOST", "0.0.0.0")
 	cfg.ProxyAuthUser = getEnv("NNTP_PROXY_AUTH_USER", "")
 	cfg.ProxyAuthPass = getEnv("NNTP_PROXY_AUTH_PASS", "")
+
+    // 2. Override with config.json if it exists
+    if err := cfg.LoadFile("config.json"); err != nil && !os.IsNotExist(err) {
+        fmt.Printf("Warning: Failed to load config.json: %v\n", err)
+    }
 	
-	// Validate required fields
-	if cfg.NZBHydra2APIKey == "" && cfg.ProwlarrAPIKey == "" {
-		return nil, fmt.Errorf("at least one indexer API key (NZBHYDRA2_API_KEY or PROWLARR_API_KEY) is required")
-	}
-	
+	// Note: We no longer enforce at least one provider during Load to allow
+	// the application to start "empty" and be configured via the web UI.
 	if len(cfg.Providers) == 0 {
-		return nil, fmt.Errorf("at least one NNTP provider must be configured")
+		fmt.Println("Warning: No NNTP providers configured. Add some via the web UI.")
 	}
 	
 	return cfg, nil
 }
 
+// LoadFile overrides config with values from a JSON file
+func (c *Config) LoadFile(path string) error {
+    file, err := os.Open(path)
+    if err != nil {
+        return err
+    }
+    defer file.Close()
+    
+    // Decode into a temporary struct or directly into Config? 
+    // If we decode directly, missing fields in JSON might NOT zero out existing fields if we reused the struct,
+    // but json.Decoder normally zeros or overrides.
+    // To implement "merge", we have to be careful.
+    // For simplicity, let's assume config.json is the source of truth if it exists,
+    // but since we already loaded ENV, we want JSON to win.
+    
+    // We'll decode into the existing struct 'c'. JSON fields present will overwrite. 
+    // This effectively merges ENV defaults with JSON overrides.
+    decoder := json.NewDecoder(file)
+    if err := decoder.Decode(c); err != nil {
+        return err
+    }
+    return nil
+}
+
+// SaveFile saves the current configuration to a JSON file
+func (c *Config) SaveFile(path string) error {
+    file, err := os.Create(path)
+    if err != nil {
+        return err
+    }
+    defer file.Close()
+    
+    encoder := json.NewEncoder(file)
+    encoder.SetIndent("", "  ")
+    return encoder.Encode(c)
+}
+
 // loadProviders loads provider configurations from environment
 func loadProviders() []Provider {
 	var providers []Provider
-	
+	// ... (Existing implementation, skipped for brevity, relies on ENV)
+    // Keep existing loop logic here if not replaced
+    // Since we are replacing the whole file, I need to keep the helper logic or just rely on the fact 
+    // that if I don't touch this part of the replace, it might be lost. 
+    // Wait, I AM replacing the whole file content in the tool call if I selected a range.
+    // The instructions say "Add JSON tags and Load/Save file logic."
+    // I should provide the Full content for simplicity because I need to change struct tags too.
+    
 	// Support up to 10 providers
 	for i := 1; i <= 10; i++ {
 		prefix := fmt.Sprintf("PROVIDER_%d_", i)
-		
 		host := os.Getenv(prefix + "HOST")
-		if host == "" {
-			continue // Provider not configured
-		}
-		
+		if host == "" { continue }
 		provider := Provider{
 			Name:        getEnv(prefix+"NAME", fmt.Sprintf("Provider %d", i)),
 			Host:        host,
@@ -110,14 +158,12 @@ func loadProviders() []Provider {
 			Connections: getEnvInt(prefix+"CONNECTIONS", 10),
 			UseSSL:      getEnvBool(prefix+"SSL", true),
 		}
-		
 		providers = append(providers, provider)
 	}
-	
 	return providers
 }
 
-// Helper functions
+// Helper functions (Unchanged)
 func getEnv(key, defaultValue string) string {
 	if value := os.Getenv(key); value != "" {
 		return value

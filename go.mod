@@ -23,4 +23,6 @@ require golang.org/x/net v0.49.0
 
 require github.com/javi11/sevenzip v0.0.0
 
+require github.com/gorilla/websocket v1.5.3
+
 replace github.com/javi11/sevenzip => ./pkg/external/sevenzip
