@@ -93,6 +93,13 @@ func Load() (*Config, error) {
         fmt.Println("Loading configuration from /app/data/config.json")
     } else if _, err := os.Stat("config.json"); err == nil {
         fmt.Println("Loading configuration from ./config.json")
+    } else {
+        // No config file found.
+        // If /app/data directory exists (Docker volume), default to saving there.
+        if info, err := os.Stat("/app/data"); err == nil && info.IsDir() {
+            configPath = "/app/data/config.json"
+            fmt.Println("No config found. Will save new configuration to /app/data/config.json")
+        }
     }
 
     // Set the loaded path so we know where to save back to
