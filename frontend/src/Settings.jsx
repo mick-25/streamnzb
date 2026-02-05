@@ -62,11 +62,6 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, onClose })
     sendCommand('save_config', data)
   }
 
-  const restartApp = async () => {
-    if (!confirm('Are you sure you want to restart StreamNZB?')) return
-    sendCommand('restart')
-  }
-
   if (loading) return null
   
   return (
@@ -303,7 +298,6 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, onClose })
               {saveStatus.msg}
            </div>
            <div className="flex gap-2">
-              <Button type="button" variant="destructive" onClick={restartApp} disabled={isSaving || (saveStatus.errors && Object.keys(saveStatus.errors).length > 0) || Object.keys(formState.errors).length > 0}>Restart App</Button>
               <Button type="button" onClick={handleSubmit(onSubmit)} disabled={isSaving || formState.isSubmitting}>
                  {(isSaving || formState.isSubmitting) && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                  Save Changes
