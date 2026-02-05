@@ -11,8 +11,15 @@ import {
 import { Area, AreaChart, ResponsiveContainer, XAxis, YAxis } from "recharts"
 import { 
   Activity, Server, Zap, Globe, Settings as SettingsIcon, AlertCircle, 
-  Sun, Moon, Monitor, X, Loader2 
+  Sun, Moon, Monitor, X, Loader2, Tv, Clipboard, Check, ChevronDown, MonitorPlay
 } from "lucide-react"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+
 
 const chartConfig = {
   speed: {
@@ -136,6 +143,34 @@ function App() {
       }
   };
 
+ const getHTTPSLink = () => {
+      if (!config) return '#';
+      let baseUrl = config.addon_base_url || window.location.origin;
+      // Ensure protocol is https if it's not present (though origin usually has it)
+      // Actually we just want the full manifest URL in HTTP(S) format
+      let url = baseUrl.replace(/\/$/, '');
+      const token = config.security_token ? `/${config.security_token}` : '';
+      return `${url}${token}/manifest.json`;
+  }
+
+  const handleInstallClick = (type) => {
+      const httpsLink = getHTTPSLink();
+
+      if (type === 'web') {
+          // Encode the HTTPS manifest URL
+          const encodedManifest = encodeURIComponent(httpsLink);
+          window.open(`https://web.stremio.com/#/addons?addon=${encodedManifest}`, '_blank');
+      } else if (type === 'copy') {
+          navigator.clipboard.writeText(httpsLink).then(() => {
+              setCopied(true);
+              setTimeout(() => setCopied(false), 2000);
+          });
+      }
+  };
+
+  const [copied, setCopied] = useState(false);
+
+
   if (error && wsStatus === 'disconnected') {
       return (
         <div className="flex flex-col h-screen items-center justify-center gap-4">
@@ -169,6 +204,8 @@ function App() {
             </div>
         </div>
         <div className="flex items-center gap-2">
+          
+
           <div className="flex items-center bg-secondary rounded-lg p-1 mr-2">
             <Button 
                 variant={theme === 'light' ? 'default' : 'ghost'} 
@@ -195,6 +232,37 @@ function App() {
                 <Monitor className="h-4 w-4" />
             </Button>
           </div>
+          
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+                <Button 
+                    variant="outline" 
+                    size="sm" 
+                    className="gap-2" 
+                    disabled={!config}
+                    title="Install options"
+                >
+                    <Tv className="h-4 w-4" />
+                    <span className="hidden sm:inline">Install</span>
+                    <ChevronDown className="h-4 w-4 opacity-50" />
+                </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+                {/* <DropdownMenuItem onClick={() => handleInstallClick('client')}>
+                    <MonitorPlay className="mr-2 h-4 w-4" />
+                    <span>Stremio Client</span>
+                </DropdownMenuItem> */}
+                <DropdownMenuItem onClick={() => handleInstallClick('web')}>
+                    <Globe className="mr-2 h-4 w-4" />
+                    <span>Stremio Web</span>
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => handleInstallClick('copy')}>
+                    {copied ? <Check className="mr-2 h-4 w-4" /> : <Clipboard className="mr-2 h-4 w-4" />}
+                    <span>{copied ? 'Copied!' : 'Copy Link'}</span>
+                </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+
           <Button variant="outline" size="sm" onClick={() => setShowSettings(true)} className="gap-2">
             <SettingsIcon className="h-4 w-4" />
             Settings
