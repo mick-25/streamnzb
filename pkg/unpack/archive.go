@@ -28,6 +28,11 @@ func GetMediaStream(files []*loader.File, cachedBP interface{}) (ReadSeekCloser,
 			continue
 		}
 		
+		// Skip 7z split archives (.7z.001, .7z.002, etc.) - they'll be handled by 7z detection
+		if strings.Contains(lower, ".7z.") {
+			continue
+		}
+		
 		if strings.HasSuffix(lower, ExtRar) || strings.Contains(lower, ".part") || IsRarPart(lower) || IsSplitArchivePart(lower) {
 			rarFiles = append(rarFiles, f)
 		}

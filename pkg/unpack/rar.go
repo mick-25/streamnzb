@@ -161,11 +161,12 @@ func ScanArchive(files []UnpackableFile) (*ArchiveBlueprint, error) {
 					if info.Name == "" { continue } 
 					logger.Debug("Found file in archive", "clean_name", cleanName, "name", info.Name, "unpacked_size", info.TotalUnpackedSize)
 
+					var isCompressed bool
 					for _, p := range info.Parts {
-						// Detect compression: if packed size is significantly smaller than unpacked, it's compressed
-						// Allow small overhead for RAR headers (5% tolerance)
-						isCompressed := p.PackedSize < (info.TotalUnpackedSize * 95 / 100)
-						
+						isCompressed = p.CompressionMethod != "stored"
+					}
+					
+					for _, p := range info.Parts {
 						mu.Lock()
 						parts = append(parts, FilePartInfo{
 							Name:       info.Name,
