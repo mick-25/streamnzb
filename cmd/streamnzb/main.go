@@ -39,7 +39,7 @@ func main() {
 	}
 	logger.Init(logLevel)
 
-	logger.Info("Starting StreamNZB", "version", "v0.1.0")
+	logger.Info("Starting StreamNZB")
 
 	// Bootstrap application
 	comp, err := initialization.Bootstrap()
