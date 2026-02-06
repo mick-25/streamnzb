@@ -15,6 +15,7 @@ type SearchRequest struct {
 	Query   string // Search query
 	IMDbID  string // IMDb ID (tt1234567)
 	TMDBID  string // TMDB ID
+	TVDBID  string // TVDB ID (New)
 	Cat     string // Category (movies, tv, etc)
 	Limit   int    // Max results
 	Season  string // Season number for TV searches

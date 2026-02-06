@@ -13,6 +13,7 @@ import (
 	"streamnzb/pkg/nntp/proxy"
 	"streamnzb/pkg/session"
 	"streamnzb/pkg/stremio"
+	"streamnzb/pkg/tmdb"
 	"streamnzb/pkg/triage"
 	"streamnzb/pkg/validation"
 	"streamnzb/pkg/web"
@@ -24,6 +25,9 @@ var (
 	// AvailNZB configuration set at build time via -ldflags
 	AvailNZBURL    = ""
 	AvailNZBAPIKey = ""
+
+	// TMDB Key via ldflags
+	TMDBKey = ""
 )
 
 func main() {
@@ -70,8 +74,17 @@ func main() {
 	// Initialize AvailNZB client
 	availClient := availnzb.NewClient(AvailNZBURL, AvailNZBAPIKey)
 
+	// Initialize TMDB client
+	// Prefer Env Var, fallback to ldflag
+	tmdbKey := cfg.TMDBAPIKey
+	if tmdbKey == "" {
+		tmdbKey = TMDBKey
+	}
+	tmdbClient := tmdb.NewClient(tmdbKey)
+
 	// Initialize Stremio addon server
-	stremioServer, err := stremio.NewServer(cfg.AddonBaseURL, cfg.AddonPort, comp.Indexer, validator, sessionManager, triageService, availClient, cfg.SecurityToken)
+	stremioServer, err := stremio.NewServer(cfg.AddonBaseURL, cfg.AddonPort, comp.Indexer, validator, 
+		sessionManager, triageService, availClient, tmdbClient, cfg.SecurityToken)
 	if err != nil {
 		initialization.WaitForInputAndExit(fmt.Errorf("Failed to initialize Stremio server: %v", err))
 	}

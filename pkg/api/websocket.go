@@ -16,6 +16,7 @@ import (
 	"streamnzb/pkg/nntp"
 	"streamnzb/pkg/nzbhydra"
 	"streamnzb/pkg/prowlarr"
+	"streamnzb/pkg/tmdb"
 	"streamnzb/pkg/triage"
 	"streamnzb/pkg/validation"
 	"strings"
@@ -211,8 +212,9 @@ func (s *Server) handleSaveConfigWS(conn *websocket.Conn, client *Client, payloa
 		validator := validation.NewChecker(comp.ProviderPools, 24*time.Hour, 10, 5)
 		triageService := triage.NewService(5)
 		availClient := availnzb.NewClient(comp.Config.AvailNZBURL, comp.Config.AvailNZBAPIKey)
+		tmdbClient := tmdb.NewClient(comp.Config.TMDBAPIKey)
 
-		s.Reload(comp.Config, comp.ProviderPools, comp.Indexer, validator, triageService, availClient)
+		s.Reload(comp.Config, comp.ProviderPools, comp.Indexer, validator, triageService, availClient, tmdbClient)
 		log.Printf("[Reload] Configuration reloaded successfully")
 	}()
 

@@ -56,6 +56,9 @@ type Config struct {
 	// AvailNZB (Internal/Community)
 	AvailNZBURL    string `json:"availnzb_url"`
 	AvailNZBAPIKey string `json:"availnzb_api_key"`
+
+	// TMDB Settings
+	TMDBAPIKey string `json:"tmdb_api_key"`
 	
 	// Internal - where was this config loaded from?
 	LoadedPath string `json:"-"`
@@ -78,6 +81,7 @@ func Load() (*Config, error) {
 		SecurityToken:            os.Getenv("SECURITY_TOKEN"),
 		AvailNZBURL:              getEnv("AVAILNZB_URL", "https://avail.streamnzb.com"),
 		AvailNZBAPIKey:           os.Getenv("AVAILNZB_API_KEY"),
+		TMDBAPIKey:               os.Getenv("TMDB_API_KEY"),
 	}
 	
 	cfg.Providers = loadProviders()

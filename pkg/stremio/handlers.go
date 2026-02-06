@@ -19,6 +19,7 @@ import (
 	"streamnzb/pkg/logger"
 	"streamnzb/pkg/nzb"
 	"streamnzb/pkg/session"
+	"streamnzb/pkg/tmdb"
 	"streamnzb/pkg/triage"
 	"streamnzb/pkg/unpack"
 	"streamnzb/pkg/validation"
@@ -34,13 +35,17 @@ type Server struct {
 	sessionManager *session.Manager
 	triageService  *triage.Service
 	availClient    *availnzb.Client
+	tmdbClient     *tmdb.Client
 	securityToken  string
 	webHandler     http.Handler
 	apiHandler     http.Handler
 }
 
 // NewServer creates a new Stremio addon server
-func NewServer(baseURL string, port int, indexer indexer.Indexer, validator *validation.Checker, sessionMgr *session.Manager, triageService *triage.Service, availClient *availnzb.Client, securityToken string) (*Server, error) {
+func NewServer(baseURL string, port int, indexer indexer.Indexer, validator *validation.Checker, 
+	sessionMgr *session.Manager, triageService *triage.Service, availClient *availnzb.Client, 
+	tmdbClient *tmdb.Client, securityToken string) (*Server, error) {
+	
 	actualBaseURL := baseURL
 	if securityToken != "" {
 		if !strings.HasSuffix(actualBaseURL, "/") {
@@ -57,6 +62,7 @@ func NewServer(baseURL string, port int, indexer indexer.Indexer, validator *val
 		sessionManager: sessionMgr,
 		triageService:  triageService,
 		availClient:    availClient,
+		tmdbClient:     tmdbClient,
 		securityToken:  securityToken,
 	}
 
@@ -219,7 +225,6 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(response)
 }
 
-// searchAndValidate searches NZBHydra2 and validates article availability
 func (s *Server) searchAndValidate(ctx context.Context, contentType, id string) ([]Stream, error) {
 	// Determine search parameters based on ID type
 	req := indexer.SearchRequest{
@@ -251,8 +256,6 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string) 
 	if strings.HasPrefix(searchID, "tt") {
 		req.IMDbID = searchID
 	} else {
-		// Verify searchID is not obviously invalid (like "kitsu")
-		// For now, treat everything else as potential TMDB ID or raw text query
 		req.TMDBID = searchID
 	}
 	
@@ -261,10 +264,23 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string) 
 		req.Cat = "2000" // Movies category
 	} else {
 		req.Cat = "5000" // TV category
+		
+		// Attempt to resolve TVDB ID using TMDB (if available) for better indexer results
+		// Only relevant if we have an IMDb ID and no specific TVDB ID yet
+		if req.IMDbID != "" && req.TVDBID == "" && s.tmdbClient != nil {
+			tvdbID, err := s.tmdbClient.ResolveTVDBID(req.IMDbID)
+			if err == nil && tvdbID != "" {
+				req.TVDBID = tvdbID
+				req.IMDbID = ""
+				logger.Debug("Enriched search with TVDB ID", "imdb", req.IMDbID, "tvdb", tvdbID)
+			} else if err != nil {
+				logger.Debug("Failed to resolve TVDB ID", "err", err)
+			}
+		}
 	}
 	
 	// Debug: Log search parameters
-	logger.Debug("Indexer search", "imdb", req.IMDbID, "cat", req.Cat, "season", req.Season, "ep", req.Episode)
+	logger.Debug("Indexer search", "imdb", req.IMDbID, "tvdb", req.TVDBID, "cat", req.Cat, "season", req.Season, "ep", req.Episode)
 	
 	// Search Indexer
 	searchResp, err := s.indexer.Search(req)
@@ -295,15 +311,32 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string) 
 
 	// Quota Tracker (Thread-Safe)
 	// Allows workers to skip candidates if we already have enough for that group
+	// Quota Tracker (Thread-Safe)
 	var quotaMu sync.Mutex
-	quotaCounts := make(map[string]int)
+	quotaCounts := make(map[string]int)      // Successful validations
+	processingCounts := make(map[string]int) // Currently in-progress validations
 	const quotaPerGroup = 2
 	
 	// Helper to check if we still need more of this group
+	// Returns true if (success + processing) < quota
 	needsMore := func(group string) bool {
 		quotaMu.Lock()
 		defer quotaMu.Unlock()
-		return quotaCounts[group] < quotaPerGroup
+		return (quotaCounts[group] + processingCounts[group]) < quotaPerGroup
+	}
+
+	// Helper to mark start of processing
+	startProcessing := func(group string) {
+		quotaMu.Lock()
+		defer quotaMu.Unlock()
+		processingCounts[group]++
+	}
+
+	// Helper to mark end of processing (always called)
+	endProcessing := func(group string) {
+		quotaMu.Lock()
+		defer quotaMu.Unlock()
+		processingCounts[group]--
 	}
 
 	// Helper to record success
@@ -341,6 +374,10 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string) 
 			if !needsMore(cand.Group) {
 				return
 			}
+			
+			// Mark as processing to block other workers from picking up this group unnecessarily
+			startProcessing(cand.Group)
+			defer endProcessing(cand.Group) // Ensure we decrement even on panic/return
 			
 			// Use candidate's result item
 			item := cand.Result
@@ -686,7 +723,8 @@ func forceDisconnect(w http.ResponseWriter) {
 }
 
 // Reload updates the server components at runtime
-func (s *Server) Reload(baseURL string, indexer indexer.Indexer, validator *validation.Checker, triage *triage.Service, avail *availnzb.Client, securityToken string) {
+func (s *Server) Reload(baseURL string, indexer indexer.Indexer, validator *validation.Checker, 
+	triage *triage.Service, avail *availnzb.Client, tmdbClient *tmdb.Client, securityToken string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -703,6 +741,7 @@ func (s *Server) Reload(baseURL string, indexer indexer.Indexer, validator *vali
 	s.validator = validator
 	s.triageService = triage
 	s.availClient = avail
+	s.tmdbClient = tmdbClient
 	s.securityToken = securityToken
 	// Note: sessionManager pools are updated separately via sessionManager.UpdatePools
 }

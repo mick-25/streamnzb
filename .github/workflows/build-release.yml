@@ -69,11 +69,11 @@ jobs:
         run: |
           mkdir -p dist/linux_amd64 dist/linux_arm64 dist/windows_amd64
           # Build for Linux AMD64 (for Docker and Release)
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w -X main.AvailNZBURL=${{ secrets.AVAILNZB_URL }} -X main.AvailNZBAPIKey=${{ secrets.AVAILNZB_API_KEY }}" -o dist/linux_amd64/streamnzb ./cmd/streamnzb
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w -X main.AvailNZBURL=${{ secrets.AVAILNZB_URL }} -X main.AvailNZBAPIKey=${{ secrets.AVAILNZB_API_KEY }} -X main.TMDBKey=${{ secrets.TMDB_API_KEY }}" -o dist/linux_amd64/streamnzb ./cmd/streamnzb
           # Build for Linux ARM64 (for Docker and Release)
-          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w -X main.AvailNZBURL=${{ secrets.AVAILNZB_URL }} -X main.AvailNZBAPIKey=${{ secrets.AVAILNZB_API_KEY }}" -o dist/linux_arm64/streamnzb ./cmd/streamnzb
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w -X main.AvailNZBURL=${{ secrets.AVAILNZB_URL }} -X main.AvailNZBAPIKey=${{ secrets.AVAILNZB_API_KEY }} -X main.TMDBKey=${{ secrets.TMDB_API_KEY }}" -o dist/linux_arm64/streamnzb ./cmd/streamnzb
           # Build for Windows AMD64 (Release only)
-          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="-s -w -X main.AvailNZBURL=${{ secrets.AVAILNZB_URL }} -X main.AvailNZBAPIKey=${{ secrets.AVAILNZB_API_KEY }}" -o dist/windows_amd64/streamnzb.exe ./cmd/streamnzb
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="-s -w -X main.AvailNZBURL=${{ secrets.AVAILNZB_URL }} -X main.AvailNZBAPIKey=${{ secrets.AVAILNZB_API_KEY }} -X main.TMDBKey=${{ secrets.TMDB_API_KEY }}" -o dist/windows_amd64/streamnzb.exe ./cmd/streamnzb
 
       - name: Extract metadata (tags, labels) for Docker
         id: meta

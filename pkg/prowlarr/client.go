@@ -101,6 +101,9 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 	if req.TMDBID != "" {
 		params.Set("tmdbid", req.TMDBID)
 	}
+	if req.TVDBID != "" {
+		params.Set("tvdbid", req.TVDBID)
+	}
 	if req.Cat != "" {
 		params.Set("cat", req.Cat)
 	}
