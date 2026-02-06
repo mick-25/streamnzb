@@ -48,6 +48,7 @@ func main() {
 	}
 
 	cfg := comp.Config
+	logger.SetLevel(cfg.LogLevel)
 
 	// Initialize article validator
 	cacheTTL := time.Duration(cfg.CacheTTLSeconds) * time.Second
