@@ -80,15 +80,16 @@ func Open7zStream(files []*loader.File, firstVolName string) (ReadSeekCloser, st
 
 			logger.Debug("Found uncompressed video file in 7z", "name", filepath.Base(name), "offset", fi.Offset, "size", fi.Size)
 
-			// Create a reader that maps the file's position to segments
-			stream := &Offset7zStream{
-				parts:      parts,
-				fileOffset: int64(fi.Offset),
-				fileSize:   int64(fi.Size),
-				currentPos: 0,
+			// Map the logical file range to physical volume parts
+			streamParts, err := mapOffsetToParts(parts, int64(fi.Offset), int64(fi.Size))
+			if err != nil {
+				return nil, "", 0, err
 			}
 
-			return stream, filepath.Base(name), int64(fi.Size), nil
+			// Create VirtualStream (uses SmartStream internally)
+			vs := NewVirtualStream(streamParts, int64(fi.Size), 0)
+
+			return vs, filepath.Base(name), int64(fi.Size), nil
 		}
 	}
 
@@ -210,93 +211,67 @@ func Open7zStreamFromBlueprint(bp *SevenZipBlueprint) (ReadSeekCloser, string, i
 		})
 	}
 
-	stream := &Offset7zStream{
-		parts:      parts,
-		fileOffset: int64(bp.FileOffset),
-		fileSize:   bp.TotalSize,
-		currentPos: 0,
+	// Map offset
+	streamParts, err := mapOffsetToParts(parts, bp.FileOffset, bp.TotalSize)
+	if err != nil {
+		return nil, "", 0, err
 	}
 
-	return stream, bp.MainFileName, bp.TotalSize, nil
+	vs := NewVirtualStream(streamParts, bp.TotalSize, 0)
+
+	return vs, bp.MainFileName, bp.TotalSize, nil
 }
 
-// Offset7zStream streams data from an uncompressed 7z archive by offset
-type Offset7zStream struct {
-	parts      []Part
-	fileOffset int64 // Where the file data starts in the archive
-	fileSize   int64 // Size of the file
-	currentPos int64 // Current read position within the file
-}
+// mapOffsetToParts slices the physical volume list into VirtualParts for a specific file range
+func mapOffsetToParts(volumes []Part, startOffset, size int64) ([]virtualPart, error) {
+	var vParts []virtualPart
+	
+	currentVolOffset := startOffset
+	remainingSize := size
+	virtualPos := int64(0)
 
-func (s *Offset7zStream) Read(p []byte) (int, error) {
-	if s.currentPos >= s.fileSize {
-		return 0, io.EOF
-	}
-
-	// Calculate absolute position in archive
-	absPos := s.fileOffset + s.currentPos
-
-	// Find which part contains this position
-	var partOffset int64
-	var currentPart *Part
-	for i := range s.parts {
-		if absPos >= partOffset && absPos < partOffset+s.parts[i].Size {
-			currentPart = &s.parts[i]
+	for _, vol := range volumes {
+		if remainingSize <= 0 {
 			break
 		}
-		partOffset += s.parts[i].Size
+
+		// Skip volume if startOffset is completely past it
+		if currentVolOffset >= vol.Size {
+			currentVolOffset -= vol.Size
+			continue
+		}
+
+		// Calculate how much we can take from this volume
+		availableInVol := vol.Size - currentVolOffset
+		take := remainingSize
+		if take > availableInVol {
+			take = availableInVol
+		}
+
+		// Ensure we act on a valid UnpackableFile
+		// Part.Reader holds the *loader.File which adheres to UnpackableFile
+		uf, ok := vol.Reader.(UnpackableFile)
+		if !ok {
+			return nil, fmt.Errorf("volume reader does not satisfy UnpackableFile")
+		}
+
+		vParts = append(vParts, virtualPart{
+			VirtualStart: virtualPos,
+			VirtualEnd:   virtualPos + take,
+			VolFile:      uf,
+			VolOffset:    currentVolOffset,
+		})
+
+		virtualPos += take
+		remainingSize -= take
+		currentVolOffset = 0 // For subsequent volumes, we start from 0
 	}
 
-	if currentPart == nil {
-		return 0, io.EOF
+	if remainingSize > 0 {
+		return nil, fmt.Errorf("unexpected EOF - could not map full file range (missing %d bytes)", remainingSize)
 	}
 
-	// Read from the part
-	relativeOffset := absPos - partOffset
-	toRead := int64(len(p))
-	if toRead > s.fileSize-s.currentPos {
-		toRead = s.fileSize - s.currentPos
-	}
-	if toRead > currentPart.Size-relativeOffset {
-		toRead = currentPart.Size - relativeOffset
-	}
-
-	n, err := currentPart.Reader.ReadAt(p[:toRead], relativeOffset)
-	s.currentPos += int64(n)
-
-	if err != nil && err != io.EOF {
-		return n, err
-	}
-
-	if s.currentPos >= s.fileSize {
-		return n, io.EOF
-	}
-
-	return n, nil
-}
-
-func (s *Offset7zStream) Seek(offset int64, whence int) (int64, error) {
-	var newPos int64
-
-	switch whence {
-	case io.SeekStart:
-		newPos = offset
-	case io.SeekCurrent:
-		newPos = s.currentPos + offset
-	case io.SeekEnd:
-		newPos = s.fileSize + offset
-	}
-
-	if newPos < 0 {
-		return 0, errors.New("invalid seek position")
-	}
-
-	s.currentPos = newPos
-	return newPos, nil
-}
-
-func (s *Offset7zStream) Close() error {
-	return nil
+	return vParts, nil
 }
 
 // Part represents a segment of data available via a ReaderAt

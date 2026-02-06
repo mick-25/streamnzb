@@ -1,6 +1,7 @@
 package prowlarr
 
 import (
+	"context"
 	"crypto/tls"
 	"encoding/xml"
 	"fmt"
@@ -160,7 +161,15 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 
 // DownloadNZB downloads an NZB file by URL
 func (c *Client) DownloadNZB(nzbURL string) ([]byte, error) {
-	resp, err := c.client.Get(nzbURL)
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "GET", nzbURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	resp, err := c.client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to download NZB: %w", err)
 	}
