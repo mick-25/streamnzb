@@ -71,8 +71,18 @@ func main() {
 	// Initialize Triage Service
 	triageService := triage.NewService(4)
 
+	availNZBUrl := cfg.AvailNZBURL;
+	if availNZBUrl == "" {
+		availNZBUrl = AvailNZBURL
+	}
+
+	availNZBAPIKey := cfg.AvailNZBAPIKey;
+	if availNZBAPIKey == "" {
+		availNZBAPIKey = AvailNZBAPIKey
+	}
+
 	// Initialize AvailNZB client
-	availClient := availnzb.NewClient(AvailNZBURL, AvailNZBAPIKey)
+	availClient := availnzb.NewClient(availNZBUrl, availNZBAPIKey)
 
 	// Initialize TMDB client
 	// Prefer Env Var, fallback to ldflag

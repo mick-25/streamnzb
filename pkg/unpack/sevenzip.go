@@ -78,6 +78,11 @@ func Open7zStream(files []*loader.File, firstVolName string) (ReadSeekCloser, st
 				continue
 			}
 
+			if IsSampleFile(name) {
+				logger.Debug("Skipping sample file in 7z", "name", filepath.Base(name))
+				continue
+			}
+
 			logger.Debug("Found uncompressed video file in 7z", "name", filepath.Base(name), "offset", fi.Offset, "size", fi.Size)
 
 			// Map the logical file range to physical volume parts
@@ -147,9 +152,13 @@ func CreateSevenZipBlueprint(files []*loader.File, firstVolName string) (*SevenZ
 				continue // Skip compressed files
 			}
 
+			if IsSampleFile(name) {
+				logger.Debug("Skipping sample file in blueprint creation", "name", name)
+				continue
+			}
+
 			// Scoring logic:
-			// 1. Prefer non-sample files
-			// 2. Prefer larger files
+			// 1. Prefer larger files
 
 			if bestIdx == -1 {
 				bestIdx = i
@@ -157,22 +166,10 @@ func CreateSevenZipBlueprint(files []*loader.File, firstVolName string) (*SevenZ
 				continue
 			}
 
-			isSample := IsSampleFile(name)
-			bestIsSample := IsSampleFile(fileInfos[bestIdx].Name)
-
-			if !isSample && bestIsSample {
-				// Found a real file, replace sample
+			// Both are real files, pick largest
+			if int64(fi.Size) > bestSize {
 				bestIdx = i
 				bestSize = int64(fi.Size)
-			} else if isSample && !bestIsSample {
-				// Found sample but we have a real file, ignore sample
-				continue
-			} else {
-				// Both are samples or both are real files, pick largest
-				if int64(fi.Size) > bestSize {
-					bestIdx = i
-					bestSize = int64(fi.Size)
-				}
 			}
 		}
 	}

@@ -54,11 +54,11 @@ type Config struct {
 	SecurityToken string `json:"security_token"`
 
 	// AvailNZB (Internal/Community)
-	AvailNZBURL    string `json:"availnzb_url"`
-	AvailNZBAPIKey string `json:"availnzb_api_key"`
+	AvailNZBURL    string `json:"-"`
+	AvailNZBAPIKey string `json:"-"`
 
 	// TMDB Settings
-	TMDBAPIKey string `json:"tmdb_api_key"`
+	TMDBAPIKey string `json:"-"`
 	
 	// Internal - where was this config loaded from?
 	LoadedPath string `json:"-"`
@@ -78,10 +78,10 @@ func Load() (*Config, error) {
 		CacheTTLSeconds:          getEnvInt("CACHE_TTL_SECONDS", 3600),
 		ValidationSampleSize:     getEnvInt("VALIDATION_SAMPLE_SIZE", 5),
 		MaxConcurrentValidations: getEnvInt("MAX_CONCURRENT_VALIDATIONS", 20),
-		SecurityToken:            os.Getenv("SECURITY_TOKEN"),
-		AvailNZBURL:              getEnv("AVAILNZB_URL", "https://avail.streamnzb.com"),
-		AvailNZBAPIKey:           os.Getenv("AVAILNZB_API_KEY"),
-		TMDBAPIKey:               os.Getenv("TMDB_API_KEY"),
+		SecurityToken:            getEnv("SECURITY_TOKEN", ""),
+		AvailNZBURL:              getEnv("AVAILNZB_URL", ""),
+		AvailNZBAPIKey:           getEnv("AVAILNZB_API_KEY", ""),
+		TMDBAPIKey:               getEnv("TMDB_API_KEY", ""),
 	}
 	
 	cfg.Providers = loadProviders()

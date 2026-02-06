@@ -181,10 +181,17 @@ func (s *Server) handleSaveConfigWS(conn *websocket.Conn, client *Client, payloa
 		return
 	}
 
-	// Preserve the LoadedPath from the existing config
 	loadedPath := s.config.LoadedPath
+	availURL := s.config.AvailNZBURL
+	availKey := s.config.AvailNZBAPIKey
+	tmdbKey := s.config.TMDBAPIKey
+
 	*s.config = newCfg
+	
 	s.config.LoadedPath = loadedPath
+	s.config.AvailNZBURL = availURL
+	s.config.AvailNZBAPIKey = availKey
+	s.config.TMDBAPIKey = tmdbKey
 
 	// Apply Log Level immediately
 	logger.SetLevel(s.config.LogLevel)
