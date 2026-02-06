@@ -99,6 +99,8 @@ func main() {
 			initialization.WaitForInputAndExit(fmt.Errorf("Failed to initialize NNTP proxy: %v", err))
 		}
 		
+		apiServer.SetProxyServer(proxyServer)
+
 		go func() {
 			logger.Info("Starting NNTP proxy", "host", cfg.ProxyHost, "port", cfg.ProxyPort)
 			if err := proxyServer.Start(); err != nil {

@@ -4,4 +4,4 @@ streamnzb.exe~
 .git
 dist/
 config.json
-pkg/web/static/assets
+pkg/web/static

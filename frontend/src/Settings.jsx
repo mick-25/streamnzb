@@ -10,7 +10,7 @@ import { Separator } from "@/components/ui/separator"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Form, FormField, FormItem, FormLabel, FormControl, FormMessage } from "@/components/ui/form"
 import { PasswordInput } from "@/components/ui/password-input"
-import { Trash2, Plus, Loader2 } from "lucide-react"
+import { Trash2, Plus, Loader2, RotateCcw } from "lucide-react"
 
 function Settings({ initialConfig, sendCommand, saveStatus, isSaving, onClose }) {
   const [loading, setLoading] = useState(!initialConfig)
@@ -21,7 +21,18 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, onClose })
       nzbhydra_api_key: '',
       prowlarr_url: '',
       prowlarr_api_key: '',
+      addon_port: 7000,
+      addon_base_url: '',
+      log_level: 'INFO',
+      security_token: '',
+      proxy_enabled: false,
+      proxy_port: 119,
+      proxy_host: '',
+      proxy_auth_user: '',
+      proxy_auth_pass: '',
       cache_ttl_seconds: 300,
+      validation_sample_size: 5,
+      max_concurrent_validations: 20,
       providers: []
     }
   })
@@ -37,7 +48,11 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, onClose })
     if (initialConfig) {
       const formattedData = {
         ...initialConfig,
+        addon_port: Number(initialConfig.addon_port),
+        proxy_port: Number(initialConfig.proxy_port),
         cache_ttl_seconds: Number(initialConfig.cache_ttl_seconds),
+        validation_sample_size: Number(initialConfig.validation_sample_size),
+        max_concurrent_validations: Number(initialConfig.max_concurrent_validations),
         providers: initialConfig.providers?.map(p => ({
           ...p,
           port: Number(p.port),
@@ -145,25 +160,216 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, onClose })
                             </CardContent>
                         </Card>
 
-                        {/* Validation Cache */}
-                         <Card>
+                        {/* Addon Settings */}
+                        <Card>
                             <CardHeader>
-                                <CardTitle className="text-lg">Cache Settings</CardTitle>
+                                <CardTitle className="text-lg">Addon Settings</CardTitle>
+                                <CardDescription>Configure how the Stremio addon listens and is accessed.</CardDescription>
                             </CardHeader>
-                            <CardContent>
+                            <CardContent className="grid gap-4">
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <FormField
+                                        control={control}
+                                        name="addon_base_url"
+                                        render={({ field }) => (
+                                            <FormItem>
+                                                <FormLabel>Base URL</FormLabel>
+                                                <FormControl>
+                                                    <Input placeholder="http://localhost:7000" {...field} />
+                                                </FormControl>
+                                                <FormMessage />
+                                            </FormItem>
+                                        )}
+                                    />
+                                    <FormField
+                                        control={control}
+                                        name="addon_port"
+                                        render={({ field }) => (
+                                            <FormItem>
+                                                <FormLabel>Port (Requires Restart)</FormLabel>
+                                                <FormControl>
+                                                    <Input type="number" {...field} onChange={e => field.onChange(e.target.valueAsNumber)} />
+                                                </FormControl>
+                                                <FormMessage />
+                                            </FormItem>
+                                        )}
+                                    />
+                                </div>
                                 <FormField
                                     control={control}
-                                    name="cache_ttl_seconds"
+                                    name="security_token"
                                     render={({ field }) => (
                                         <FormItem>
-                                            <FormLabel>Validation Cache TTL (Seconds)</FormLabel>
+                                            <FormLabel>Security Token (Requires Restart)</FormLabel>
                                             <FormControl>
-                                                <Input type="number" {...field} onChange={e => field.onChange(e.target.valueAsNumber)} />
+                                                <PasswordInput placeholder="Secure secret path" {...field} />
                                             </FormControl>
                                             <FormMessage />
                                         </FormItem>
                                     )}
                                 />
+                            </CardContent>
+                        </Card>
+
+                        {/* NNTP Proxy Settings */}
+                        {/* ... (no changes here) ... */}
+                        
+                        {/* ... (rest of form) ... */}
+                        
+                        <Card>
+                            <CardHeader>
+                                <CardTitle className="text-lg">NNTP Proxy Server</CardTitle>
+                                <CardDescription>Allow other apps (SABnzbd, NBZGet) to use StreamNZB as a localized news server.</CardDescription>
+                            </CardHeader>
+                            <CardContent className="grid gap-4">
+                                <FormField
+                                    control={control}
+                                    name="proxy_enabled"
+                                    render={({ field }) => (
+                                        <FormItem className="flex flex-row items-center justify-between rounded-lg border p-4">
+                                            <div className="space-y-0.5">
+                                                <FormLabel className="text-base">Enable Proxy</FormLabel>
+                                            </div>
+                                            <FormControl>
+                                                <Checkbox
+                                                    checked={field.value}
+                                                    onCheckedChange={field.onChange}
+                                                />
+                                            </FormControl>
+                                        </FormItem>
+                                    )}
+                                />
+                                {form.watch('proxy_enabled') && (
+                                    <>
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                            <FormField
+                                                control={control}
+                                                name="proxy_host"
+                                                render={({ field }) => (
+                                                    <FormItem>
+                                                        <FormLabel>Bind Host</FormLabel>
+                                                        <FormControl>
+                                                            <Input placeholder="0.0.0.0" {...field} />
+                                                        </FormControl>
+                                                        <FormMessage />
+                                                    </FormItem>
+                                                )}
+                                            />
+                                            <FormField
+                                                control={control}
+                                                name="proxy_port"
+                                                render={({ field }) => (
+                                                    <FormItem>
+                                                        <FormLabel>Port</FormLabel>
+                                                        <FormControl>
+                                                            <Input type="number" {...field} onChange={e => field.onChange(e.target.valueAsNumber)} />
+                                                        </FormControl>
+                                                        <FormMessage />
+                                                    </FormItem>
+                                                )}
+                                            />
+                                        </div>
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                            <FormField
+                                                control={control}
+                                                name="proxy_auth_user"
+                                                render={({ field }) => (
+                                                    <FormItem>
+                                                        <FormLabel>Proxy Username</FormLabel>
+                                                        <FormControl>
+                                                            <Input {...field} />
+                                                        </FormControl>
+                                                        <FormMessage />
+                                                    </FormItem>
+                                                )}
+                                            />
+                                            <FormField
+                                                control={control}
+                                                name="proxy_auth_pass"
+                                                render={({ field }) => (
+                                                    <FormItem>
+                                                        <FormLabel>Proxy Password</FormLabel>
+                                                        <FormControl>
+                                                            <PasswordInput {...field} />
+                                                        </FormControl>
+                                                        <FormMessage />
+                                                    </FormItem>
+                                                )}
+                                            />
+                                        </div>
+                                    </>
+                                )}
+                            </CardContent>
+                        </Card>
+                        <Card>
+                            <CardHeader>
+                                <CardTitle className="text-lg">Advanced Settings</CardTitle>
+                            </CardHeader>
+                            <CardContent>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                     <FormField
+                                        control={control}
+                                        name="log_level"
+                                        render={({ field }) => (
+                                            <FormItem>
+                                                <FormLabel>Log Level</FormLabel>
+                                                <div className="relative w-full">
+                                                    <select 
+                                                        className="flex h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                                                        {...field}
+                                                    >
+                                                        <option value="DEBUG">DEBUG</option>
+                                                        <option value="INFO">INFO</option>
+                                                        <option value="WARN">WARN</option>
+                                                        <option value="ERROR">ERROR</option>
+                                                    </select>
+                                                </div>
+                                                <FormMessage />
+                                            </FormItem>
+                                        )}
+                                    />
+                                    <FormField
+                                        control={control}
+                                        name="cache_ttl_seconds"
+                                        render={({ field }) => (
+                                            <FormItem>
+                                                <FormLabel>Validation Cache TTL (Seconds)</FormLabel>
+                                                <FormControl>
+                                                    <Input type="number" {...field} onChange={e => field.onChange(e.target.valueAsNumber)} />
+                                                </FormControl>
+                                                <FormMessage />
+                                            </FormItem>
+                                        )}
+                                    />
+                                </div>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+                                    <FormField
+                                        control={control}
+                                        name="validation_sample_size"
+                                        render={({ field }) => (
+                                            <FormItem>
+                                                <FormLabel>Validation Sample Size</FormLabel>
+                                                <FormControl>
+                                                    <Input type="number" {...field} onChange={e => field.onChange(e.target.valueAsNumber)} />
+                                                </FormControl>
+                                                <FormMessage />
+                                            </FormItem>
+                                        )}
+                                    />
+                                    <FormField
+                                        control={control}
+                                        name="max_concurrent_validations"
+                                        render={({ field }) => (
+                                            <FormItem>
+                                                <FormLabel>Max Concurrent Validations</FormLabel>
+                                                <FormControl>
+                                                    <Input type="number" {...field} onChange={e => field.onChange(e.target.valueAsNumber)} />
+                                                </FormControl>
+                                                <FormMessage />
+                                            </FormItem>
+                                        )}
+                                    />
+                                </div>
                             </CardContent>
                         </Card>
 
@@ -298,6 +504,43 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, onClose })
               {saveStatus.msg}
            </div>
            <div className="flex gap-2">
+              <Button type="button" variant="destructive" onClick={() => {
+                  if (confirm('Are you sure you want to restart StreamNZB?')) {
+                      // Calculate new URL based on current form values (which should be saved)
+                      const currentPort = window.location.port || (window.location.protocol === 'https:' ? '443' : '80');
+                      const newPort = form.getValues('addon_port').toString();
+                      const newToken = form.getValues('security_token');
+                      
+                      // Check if we need to redirect
+                      // Note: We use existing hostname. 
+                      // If security token is set, path should start with /token/
+                      // If empty, path is /
+                      
+                      const hostname = window.location.hostname;
+                      const protocol = window.location.protocol;
+                      
+                      let newPath = '/';
+                      if (newToken) {
+                          newPath = `/${newToken}/`;
+                      }
+                      
+                      const newUrl = `${protocol}//${hostname}:${newPort}${newPath}`;
+                      
+                      sendCommand('restart', {})
+                      
+                      // If URL changed, redirect after a delay
+                      if (newPort !== currentPort || !window.location.pathname.startsWith(newPath)) {
+                           // Use a slightly longer timeout to allow the backend to receive the command and die
+                           // and hopefully start coming back up.
+                          setTimeout(() => {
+                              window.location.href = newUrl;
+                          }, 3000); 
+                      }
+                  }
+              }}>
+                 <RotateCcw className="mr-2 h-4 w-4" />
+                 Restart App
+              </Button>
               <Button type="button" onClick={handleSubmit(onSubmit)} disabled={isSaving || formState.isSubmitting}>
                  {(isSaving || formState.isSubmitting) && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                  Save Changes

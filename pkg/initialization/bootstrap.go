@@ -21,7 +21,7 @@ type InitializedComponents struct {
 
 // WaitForInputAndExit prints an error and waits for user input before exiting
 func WaitForInputAndExit(err error) {
-	fmt.Printf("\n❌ CRITICAL ERROR: %v\n", err)
+	logger.Error("CRITICAL ERROR", "err", err)
 	fmt.Println("\nPress Enter to exit...")
 	var input string
 	fmt.Scanln(&input)

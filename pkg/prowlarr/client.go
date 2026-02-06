@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"streamnzb/pkg/indexer"
+	"streamnzb/pkg/logger"
 	"strings"
 	"time"
 )
@@ -119,7 +120,7 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 	apiURL := fmt.Sprintf("%s/api?%s", c.baseURL, params.Encode())
 	
 	// Debug: Log the actual API URL being called
-	fmt.Printf("Prowlarr API URL: %s\n", apiURL)
+	logger.Debug("Prowlarr API URL: %s\n", apiURL)
 	
 	resp, err := c.client.Get(apiURL)
 	if err != nil {

@@ -1,6 +1,8 @@
 package api
 
 import (
+	"fmt"
+	"net"
 	"sort"
 	"time"
 
@@ -64,6 +66,55 @@ func (s *Server) collectStats() SystemStats {
 
 	// Active Sessions (Detailed)
 	stats.ActiveSessions = s.sessionMgr.GetActiveSessions()
+
+	// Append Proxy Sessions (Aggregated by IP)
+	s.mu.RLock() // Lock for proxyServer access
+	if s.proxyServer != nil {
+		proxySessions := s.proxyServer.GetSessions()
+		
+		// Group by Client IP
+		type proxyGroup struct {
+			count int
+			group string
+			ip    string
+		}
+		groups := make(map[string]*proxyGroup)
+		
+		for _, ps := range proxySessions {
+			// Extract IP (naive strip port if present, or use as is)
+			// Assuming remote_addr is "ip:port"
+			ip := ps.RemoteAddr
+			if host, _, err := net.SplitHostPort(ip); err == nil {
+				ip = host
+			}
+			
+			if _, exists := groups[ip]; !exists {
+				groups[ip] = &proxyGroup{ip: ip}
+			}
+			g := groups[ip]
+			g.count++
+			// Keep last non-empty group as representative?
+			if ps.CurrentGroup != "" {
+				g.group = ps.CurrentGroup
+			}
+		}
+		
+		// Convert groups to ActiveSessionInfo
+		for ip, g := range groups {
+			title := fmt.Sprintf("Proxy Client (%d conns)", g.count)
+			if g.group != "" {
+				title = fmt.Sprintf("Proxy: %s (%d conns)", g.group, g.count)
+			}
+			
+			stats.ActiveSessions = append(stats.ActiveSessions, session.ActiveSessionInfo{
+				ID:      fmt.Sprintf("proxy-%s", ip),
+				Title:   title,
+				Clients: []string{ip},
+			})
+		}
+	}
+	s.mu.RUnlock()
+
 	stats.ActiveStreams = len(stats.ActiveSessions)
 
 	return stats

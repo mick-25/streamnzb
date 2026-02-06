@@ -57,6 +57,11 @@ func (s *Session) ShouldQuit() bool {
 	return s.shouldQuit
 }
 
+// CurrentGroup returns the currently selected newsgroup
+func (s *Session) CurrentGroup() string {
+	return s.currentGroup
+}
+
 // HandleCommand processes an NNTP command
 func (s *Session) HandleCommand(cmd string, args []string) error {
 	// Commands that don't require auth

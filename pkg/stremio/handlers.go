@@ -272,7 +272,7 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string) 
 		return nil, fmt.Errorf("indexer search failed: %w", err)
 	}
 	
-	logger.Info("Found NZB results", "count", len(searchResp.Channel.Items))
+	logger.Debug("Found NZB results", "count", len(searchResp.Channel.Items))
 	
 	// Filter results using Triage Service
 	candidates := s.triageService.Filter(searchResp.Channel.Items)
@@ -396,7 +396,7 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string) 
 			// Build rich stream metadata from PTT
 			stream := buildStreamMetadata(streamURL, displayTitle, cand, sizeGB, nzbParsed.TotalSize())
 
-			logger.Info("Created stream", "name", stream.Name, "url", stream.URL)
+			logger.Debug("Created stream", "name", stream.Name, "url", stream.URL)
 			resultChan <- nzbResult{stream: stream, group: cand.Group}
 		}(candidate)
 	}
@@ -428,7 +428,7 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string) 
 			// SD is bonus
 			
 			if has4k && has1080p && has720p {
-				logger.Info("Fast-Path: Quotas met. Cancelling checks.", "4k", counts["4k"], "1080p", counts["1080p"], "720p", counts["720p"])
+				logger.Debug("Fast-Path: Quotas met. Cancelling checks.", "4k", counts["4k"], "1080p", counts["1080p"], "720p", counts["720p"])
 				cancel() // Stop others!
 				break // Return immediately to user
 			}

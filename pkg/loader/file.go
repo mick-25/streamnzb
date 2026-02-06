@@ -333,7 +333,7 @@ func (f *File) DownloadSegment(ctx context.Context, index int) ([]byte, error) {
 
 	
 	// Error handling: If all providers fail, ZERO-FILL to keep stream alive
-	logger.Warn("Segment failed on all providers, zero-filling", "index", index, "err", lastErr)
+	logger.Debug("Segment failed on all providers, zero-filling", "index", index, "err", lastErr)
 	
 	// Maintain stream alignment by returning exactly what matches the current offsets
 	size := int(seg.EndOffset - seg.StartOffset)

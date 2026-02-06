@@ -12,6 +12,7 @@ import (
 	"streamnzb/pkg/availnzb"
 	"streamnzb/pkg/config"
 	"streamnzb/pkg/initialization"
+	"streamnzb/pkg/logger"
 	"streamnzb/pkg/nntp"
 	"streamnzb/pkg/nzbhydra"
 	"streamnzb/pkg/prowlarr"
@@ -42,37 +43,70 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 
-	log.Printf("[WS] Client connected: %s", r.RemoteAddr)
+	// Create Client
+	client := &Client{conn: conn, send: make(chan WSMessage, 256)}
+	s.AddClient(client)
+
+	// Ensure cleanup
+	defer func() {
+		s.RemoveClient(client)
+		conn.Close()
+	}()
+
+	logger.Debug("WS Client connected", "remote", r.RemoteAddr)
 
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
 	// Notify current stats and config immediately
-	s.sendStats(conn)
-	s.sendConfig(conn)
-
-	// Command output channel for the write loop
-	responses := make(chan WSMessage, 10)
+	// We push to the send channel instead of writing directly to avoid concurrency issues
+	// But since this is the only goroutine at this point (before read/write loops), direct write is risky if we start the read loop early? 
+	// No, we haven't started write loop yet.
+	// Actually, let's just push to channel.
+	go func() {
+		stats := s.collectStats()
+		payload, _ := json.Marshal(stats)
+		client.send <- WSMessage{Type: "stats", Payload: payload}
+		
+		cfgPayload, _ := json.Marshal(s.config)
+		client.send <- WSMessage{Type: "config", Payload: cfgPayload}
+		
+		// Send log history
+		s.sendLogHistory(client)
+	}()
 
 	// Read loop (Client -> Server)
-	done := make(chan struct{})
 	go func() {
-		defer close(done)
+		defer func() {
+			// When read fails, we close the connection, which triggers the write loop to exit via error or context?
+			// Actually, usually we close the done channel or something.
+			// Here we just let the write loop detect the closed channel (via RemoveClient)
+			// But RemoveClient is called in defer of the main function.
+			// We need to signal main function to exit.
+			// Best way: Read loop is a separate goroutine. Main function is Write loop.
+		}()
+		
 		for {
 			var msg WSMessage
 			if err := conn.ReadJSON(&msg); err != nil {
 				if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
 					log.Printf("[WS] Error: %v", err)
 				}
+				// Signal disconnect
+				// We can close the connection here?
+				// Or use a channel.
+				// Since we can't easily break the main loop from here,
+				// we'll rely on the write loop failing or us closing the conn.
+				conn.Close()
 				return
 			}
 
 			// Handle commands
 			switch msg.Type {
 			case "get_config":
-				s.sendConfig(conn)
+				s.sendConfig(client)
 			case "save_config":
-				s.handleSaveConfigWS(conn, msg.Payload, responses)
+				s.handleSaveConfigWS(conn, client, msg.Payload)
 			case "close_session":
 				s.handleCloseSessionWS(msg.Payload)
 			case "restart":
@@ -85,33 +119,52 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	for {
 		select {
 		case <-ticker.C:
-			s.sendStats(conn)
-		case resp := <-responses:
-			if err := conn.WriteJSON(resp); err != nil {
+			s.sendStats(client)
+		case msg, ok := <-client.send:
+			if !ok {
+				// Channel closed by RemoveClient
+				conn.WriteMessage(websocket.CloseMessage, []byte{})
 				return
 			}
-		case <-done:
-			log.Printf("[WS] Client disconnected: %s", r.RemoteAddr)
-			return
+			if err := conn.WriteJSON(msg); err != nil {
+				return
+			}
 		}
 	}
 }
 
-func (s *Server) sendStats(conn *websocket.Conn) {
+func (s *Server) sendStats(client *Client) {
 	stats := s.collectStats()
 	payload, _ := json.Marshal(stats)
-	conn.WriteJSON(WSMessage{Type: "stats", Payload: payload})
+	select {
+	case client.send <- WSMessage{Type: "stats", Payload: payload}:
+	default:
+	}
 }
 
-func (s *Server) sendConfig(conn *websocket.Conn) {
+func (s *Server) sendConfig(client *Client) {
 	payload, _ := json.Marshal(s.config)
-	conn.WriteJSON(WSMessage{Type: "config", Payload: payload})
+	select {
+	case client.send <- WSMessage{Type: "config", Payload: payload}:
+	default:
+	}
 }
 
-func (s *Server) handleSaveConfigWS(conn *websocket.Conn, payload json.RawMessage, responses chan WSMessage) {
+func (s *Server) sendLogHistory(client *Client) {
+	// Fetch history from global logger
+	history := logger.GetHistory()
+	payload, _ := json.Marshal(history)
+
+	select {
+	case client.send <- WSMessage{Type: "log_history", Payload: payload}:
+	default:
+	}
+}
+
+func (s *Server) handleSaveConfigWS(conn *websocket.Conn, client *Client, payload json.RawMessage) {
 	var newCfg config.Config
 	if err := json.Unmarshal(payload, &newCfg); err != nil {
-		responses <- WSMessage{Type: "save_status", Payload: json.RawMessage(`{"status":"error","message":"Invalid config data"}`)}
+		client.send <- WSMessage{Type: "save_status", Payload: json.RawMessage(`{"status":"error","message":"Invalid config data"}`)}
 		return
 	}
 
@@ -123,7 +176,7 @@ func (s *Server) handleSaveConfigWS(conn *websocket.Conn, payload json.RawMessag
 			"message": "Validation failed",
 			"errors":  fieldErrors,
 		})
-		responses <- WSMessage{Type: "save_status", Payload: errorPayload}
+		client.send <- WSMessage{Type: "save_status", Payload: errorPayload}
 		return
 	}
 
@@ -132,10 +185,16 @@ func (s *Server) handleSaveConfigWS(conn *websocket.Conn, payload json.RawMessag
 	*s.config = newCfg
 	s.config.LoadedPath = loadedPath
 
+	// Apply Log Level immediately
+	logger.SetLevel(s.config.LogLevel)
+
 	if err := s.config.Save(); err != nil {
-		responses <- WSMessage{Type: "save_status", Payload: json.RawMessage([]byte(fmt.Sprintf(`{"status":"error","message":"%s"}`, err.Error())))}
+		client.send <- WSMessage{Type: "save_status", Payload: json.RawMessage([]byte(fmt.Sprintf(`{"status":"error","message":"%s"}`, err.Error())))}
 		return
 	}
+
+	// push updated config back to client so UI is in sync
+	s.sendConfig(client)
 
 	// Trigger Hot-Reload
 	go func() {
@@ -157,7 +216,7 @@ func (s *Server) handleSaveConfigWS(conn *websocket.Conn, payload json.RawMessag
 		log.Printf("[Reload] Configuration reloaded successfully")
 	}()
 
-	responses <- WSMessage{Type: "save_status", Payload: json.RawMessage(`{"status":"success","message":"Configuration saved and reloaded."}`)}
+	client.send <- WSMessage{Type: "save_status", Payload: json.RawMessage(`{"status":"success","message":"Configuration saved and reloaded."}`)}
 }
 
 // validateConfig checks connectivity for all components and returns a map of field errors

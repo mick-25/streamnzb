@@ -4,6 +4,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"sort"
+	"streamnzb/pkg/logger"
 	"sync"
 )
 
@@ -73,7 +74,7 @@ func (a *Aggregator) Search(req SearchRequest) (*SearchResponse, error) {
 			if err != nil {
 				// Log error but don't fail entire search?
 				// For now we just return empty result for this indexer
-				fmt.Printf("Indexer %s search failed: %v\n", indexer.Name(), err)
+				logger.Warn("Indexer search failed", "indexer", indexer.Name(), "err", err)
 				resultsChan <- []Item{}
 				return
 			}

@@ -70,6 +70,10 @@ func (s *Server) Start() error {
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
+			// Check if we are shutting down
+			if strings.Contains(err.Error(), "use of closed network connection") || strings.Contains(err.Error(), "closed") {
+				return nil
+			}
 			logger.Error("NNTP proxy accept error", "err", err)
 			continue
 		}
@@ -105,7 +109,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 		s.mu.Unlock()
 	}()
 	
-	logger.Info("NNTP proxy: New connection", "remote", conn.RemoteAddr())
+	logger.Debug("NNTP proxy: New connection", "remote", conn.RemoteAddr())
 	
 	// Send welcome banner
 	session.WriteLine("200 StreamNZB NNTP Proxy ready (posting prohibited)")
@@ -147,5 +151,28 @@ func (s *Server) handleConnection(conn net.Conn) {
 		logger.Error("NNTP proxy scanner error", "remote", conn.RemoteAddr(), "err", err)
 	}
 	
-	logger.Info("NNTP proxy: Connection closed", "remote", conn.RemoteAddr())
+	logger.Debug("NNTP proxy: Connection closed", "remote", conn.RemoteAddr())
+}
+
+// ProxySessionInfo represents a snapshot of an active proxy session
+type ProxySessionInfo struct {
+	ID           string `json:"id"`
+	RemoteAddr   string `json:"remote_addr"`
+	CurrentGroup string `json:"current_group"`
+}
+
+// GetSessions returns a list of active proxy sessions
+func (s *Server) GetSessions() []ProxySessionInfo {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var list []ProxySessionInfo
+	for id, session := range s.sessions {
+		list = append(list, ProxySessionInfo{
+			ID:           id,
+			RemoteAddr:   id,
+			CurrentGroup: session.CurrentGroup(),
+		})
+	}
+	return list
 }

@@ -54,7 +54,7 @@ services:
     restart: unless-stopped
     ports:
       - "7000:7000"
-      - "1119:1119"
+      - "119:119"
     volumes:
       - /path/to/config:/app/data
 ```
@@ -83,10 +83,6 @@ Alternatively you can set environment variables to configure the application on 
 - Ensure `NZBHYDRA2_URL` and API Key are correct.
 - Check if your Usenet providers are active.
 - Verify that `VALIDATION_SAMPLE_SIZE` is not too high (checking too many articles can timeout).
-
-**Connection Refused on Port 119**
-- Linux often requires `sudo` to bind to port 119.
-- Change `NNTP_PROXY_PORT` to `1119` or similar if running without root.
 
 **Slow Downloads**
 - Increase `MAX_CONCURRENT_VALIDATIONS`.

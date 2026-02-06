@@ -47,7 +47,18 @@ function App() {
   const [ws, setWs] = useState(null)
   const [theme, setTheme] = useState(localStorage.getItem('theme') || 'system')
   
+  const [logs, setLogs] = useState([])
+  const logsEndRef = useRef(null)
+  
   const MAX_HISTORY = 60
+  const MAX_LOGS = 200
+
+  // Auto-scroll logs
+  useEffect(() => {
+    if (logsEndRef.current) {
+        logsEndRef.current.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [logs]);
 
   useEffect(() => {
     const root = window.document.documentElement;
@@ -81,6 +92,7 @@ function App() {
         setWsStatus('connected');
         setError(null);
         setWs(socket);
+        setLogs([]); // Clear logs on reconnect
       };
 
       socket.onmessage = (event) => {
@@ -98,6 +110,21 @@ function App() {
           case 'config': {
             setConfig(msg.payload);
             break;
+          }
+          case 'log_entry': {
+             // Append log entry
+             setLogs(prev => [...prev, msg.payload].slice(-MAX_LOGS));
+             break;
+          }
+          case 'log_history': {
+             // Replace logs with history
+             setLogs(msg.payload.slice(-MAX_LOGS));
+             setTimeout(() => {
+                 if (logsEndRef.current) {
+                     logsEndRef.current.scrollIntoView({ behavior: "auto" });
+                 }
+             }, 100);
+             break;
           }
           case 'save_status': {
             setSaveStatus({
@@ -286,7 +313,7 @@ function App() {
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
         <Card className="flex flex-col">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Active Streams</CardTitle>
+            <CardTitle className="text-sm font-medium">Active Connections</CardTitle>
             <Activity className={`h-4 w-4 ${stats.active_sessions?.length > 0 ? 'text-primary animate-pulse' : 'text-muted-foreground'}`} />
           </CardHeader>
           <CardContent className="flex-1 overflow-y-auto max-h-[140px] pt-2">
@@ -420,6 +447,27 @@ function App() {
           ))}
         </div>
       </div>
+
+      <div className="mt-8">
+        <Card className="flex flex-col h-[300px]">
+            <CardHeader className="py-3 px-4 border-b bg-muted/20">
+                <div className="flex items-center gap-2">
+                    <Clipboard className="h-4 w-4 text-muted-foreground" />
+                    <CardTitle className="text-sm font-medium">System Logs</CardTitle>
+                </div>
+            </CardHeader>
+            <CardContent className="flex-1 p-0 overflow-hidden relative">
+                 <div className="absolute inset-0 overflow-y-auto p-4 font-mono text-xs space-y-1">
+                    {logs.length === 0 && <div className="text-muted-foreground italic">Waiting for logs...</div>}
+                    {logs.map((log, i) => (
+                        <div key={i} className="whitespace-pre-wrap break-all border-b border-border/40 pb-0.5 mb-0.5 last:border-0">{log}</div>
+                    ))}
+                    <div ref={logsEndRef} />
+                 </div>
+            </CardContent>
+        </Card>
+      </div>
+
     </div>
   )
 }

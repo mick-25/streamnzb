@@ -303,7 +303,12 @@ func (c *Client) GetArticle(messageID string) (string, error) {
 		lines = append(lines, line)
 	}
 	
-	return strings.Join(lines, "\n"), nil
+	// Success! Return article
+	result := strings.Join(lines, "\n")
+	if c.pool != nil {
+		c.pool.TrackRead(len(result))
+	}
+	return result, nil
 }
 
 // GetBody fetches article body by message ID (for proxy)
@@ -334,7 +339,11 @@ func (c *Client) GetBody(messageID string) (string, error) {
 		lines = append(lines, line)
 	}
 	
-	return strings.Join(lines, "\n"), nil
+	result := strings.Join(lines, "\n")
+	if c.pool != nil {
+		c.pool.TrackRead(len(result))
+	}
+	return result, nil
 }
 
 // GetHead fetches article headers by message ID (for proxy)
@@ -365,7 +374,11 @@ func (c *Client) GetHead(messageID string) (string, error) {
 		lines = append(lines, line)
 	}
 	
-	return strings.Join(lines, "\n"), nil
+	result := strings.Join(lines, "\n")
+	if c.pool != nil {
+		c.pool.TrackRead(len(result))
+	}
+	return result, nil
 }
 
 // CheckArticle checks if an article exists (STAT command, for proxy)

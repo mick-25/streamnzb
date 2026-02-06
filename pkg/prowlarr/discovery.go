@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"streamnzb/pkg/indexer"
+	"streamnzb/pkg/logger"
 	"time"
 )
 
@@ -47,7 +48,7 @@ func GetConfiguredIndexers(baseURL, apiKey string) ([]indexer.Indexer, error) {
 			// Pass Prowlarr API key as it works for the proxied endpoints too
 			idx, err := NewClient(indexerURL, apiKey)
 			if err != nil {
-				fmt.Printf("Failed to init Prowlarr indexer %s: %v\n", def.Name, err)
+				logger.Error("Failed to init Prowlarr indexer", "name", def.Name, "err", err)
 				continue
 			}
 			
