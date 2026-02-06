@@ -42,6 +42,10 @@ type Item struct {
 	Description string      `xml:"description"`
 	Size        int64       `xml:"size"`
 	Attributes  []Attribute `xml:"attr"`
+
+	// SourceIndexer is the indexer that provided this item
+	// This is not part of the XML, but populated by the client
+	SourceIndexer Indexer `xml:"-"`
 }
 
 // Attribute represents Newznab attributes

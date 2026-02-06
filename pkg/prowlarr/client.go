@@ -147,6 +147,11 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 		return nil, fmt.Errorf("failed to parse Prowlarr response: %w", err)
 	}
 	
+	// Populate SourceIndexer for each item
+	for i := range result.Channel.Items {
+		result.Channel.Items[i].SourceIndexer = c
+	}
+
 	return &result, nil
 }
 

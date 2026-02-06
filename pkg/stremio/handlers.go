@@ -288,41 +288,78 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string) 
 	resultChan := make(chan nzbResult, len(candidates))
 	var wg sync.WaitGroup
 
-	// Limit concurrent validations to prevent connection pool exhaustion
-	// With 5 candidates per group (up to 20 total), we can try to process them all 
-	// in roughly one batch if we allow 20 concurrent validations.
-	// Even if this exceeds pool size (queuing at pool level), it's faster than batching.
-	sem := make(chan struct{}, 20)
+	// Limit concurrent validations (Concurrent Worker Pool)
+	// Reduced from 20 to 5 to verify candidates sequentially/lazily
+	const maxWorkers = 5
+	sem := make(chan struct{}, maxWorkers)
+
+	// Quota Tracker (Thread-Safe)
+	// Allows workers to skip candidates if we already have enough for that group
+	var quotaMu sync.Mutex
+	quotaCounts := make(map[string]int)
+	const quotaPerGroup = 2
+	
+	// Helper to check if we still need more of this group
+	needsMore := func(group string) bool {
+		quotaMu.Lock()
+		defer quotaMu.Unlock()
+		return quotaCounts[group] < quotaPerGroup
+	}
+
+	// Helper to record success
+	addSuccess := func(group string) {
+		quotaMu.Lock()
+		defer quotaMu.Unlock()
+		quotaCounts[group]++
+	}
 
 	// Create cancellable context to stop pending downloads once we have enough results
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	for _, candidate := range candidates {
+		// Early check: if we already have enough for this group, don't even spawn/queue
+		// Note: This is an optimization; the worker also checks.
+		if !needsMore(candidate.Group) {
+			continue
+		}
+
 		wg.Add(1)
 		go func(cand triage.Candidate) {
 			defer wg.Done()
 			
-			// Acquire semaphore
-			sem <- struct{}{}
-			defer func() { <-sem }()
-			
-			// Check if we should abort (early exit triggered)
+			// Acquire semaphore (respect context)
 			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
 			case <-ctx.Done():
-				resultChan <- nzbResult{err: ctx.Err()}
+				return // Abort if cancelled while waiting
+			}
+			
+			// Double-check: Do we still need this group?
+			// (Another worker might have finished while we were waiting)
+			if !needsMore(cand.Group) {
 				return
-			default:
 			}
 			
 			// Use candidate's result item
 			item := cand.Result
 			
 			// Download NZB
-			nzbData, err := s.indexer.DownloadNZB(item.Link)
+			var nzbData []byte
+			var err error
+
+			if item.SourceIndexer != nil {
+				// Use the specific indexer that found this item (Load Balancing)
+				nzbData, err = item.SourceIndexer.DownloadNZB(item.Link)
+			} else {
+				// Fallback to default indexer/aggregator
+				nzbData, err = s.indexer.DownloadNZB(item.Link)
+			}
+
 			if err != nil {
 				logger.Error("Failed to download NZB", "title", item.Title, "err", err)
-				resultChan <- nzbResult{err: err}
+				// Don't report error to channel to keep it clean, just return
 				return
 			}
 			
@@ -330,7 +367,6 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string) 
 			nzbParsed, err := nzb.Parse(bytes.NewReader(nzbData))
 			if err != nil {
 				logger.Error("Failed to parse NZB", "title", item.Title, "err", err)
-				resultChan <- nzbResult{err: err}
 				return
 			}
 			
@@ -338,14 +374,12 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string) 
 			// Pass cancelable context
 			validationResults := s.validator.ValidateNZB(ctx, nzbParsed)
 			if len(validationResults) == 0 {
-				resultChan <- nzbResult{err: fmt.Errorf("validation failed")}
 				return
 			}
 			
 			// Find best provider
 			bestResult := validation.GetBestProvider(validationResults)
 			if bestResult == nil {
-				resultChan <- nzbResult{err: fmt.Errorf("no provider available")}
 				return
 			}
 
@@ -353,12 +387,7 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string) 
 			go func() {
 				nzbID := nzbParsed.CalculateID()
 				if nzbID != "" {
-					err := s.availClient.ReportAvailability(nzbID, bestResult.Host, true)
-					if err != nil {
-						// logger.Error("Failed to report availability to AvailNZB", "nzb_id", nzbID, "err", err)
-					} else {
-						logger.Debug("Reported availability to AvailNZB", "nzb_id", nzbID, "provider", bestResult.Provider)
-					}
+					_ = s.availClient.ReportAvailability(nzbID, bestResult.Host, true)
 				}
 			}()
 
@@ -366,35 +395,22 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string) 
 			sessionID := nzbParsed.Hash()
 			
 			// Store NZB in session manager
-			sess, err := s.sessionManager.CreateSession(sessionID, nzbParsed)
+			_, err = s.sessionManager.CreateSession(sessionID, nzbParsed)
 			if err != nil {
-				resultChan <- nzbResult{err: err}
 				return
 			}
 			
-			// Deep Inspection
-			var displayTitle string = item.Title
-			// Format size
-			sizeGB := float64(nzbParsed.TotalSize()) / (1024 * 1024 * 1024)
-			
-			if len(sess.Files) > 0 {
-				// Try to inspect RAR
-				_, err := unpack.InspectRAR(sess.Files)
-				logger.Debug("Inspected archive", "files", len(sess.Files), "err", err)
-				// if err != nil && strings.Contains(err.Error(), "nested archive detected") {
-				// 	// True error (nested archive, no video in valid RAR, etc.)
-				// 	logger.Debug("RAR inspection failed", "title", item.Title, "err", err)
-				// 	s.sessionManager.DeleteSession(sessionID)
-				// 	resultChan <- nzbResult{err: fmt.Errorf("deep inspection failed: %w", err)}
-				// 	return
-				// }
-			}
-
 			// Create stream URL
 			streamURL := fmt.Sprintf("%s/play/%s", s.baseURL, sessionID)
+			
+			// Determine size
+			sizeGB := float64(nzbParsed.TotalSize()) / (1024 * 1024 * 1024)
 
 			// Build rich stream metadata from PTT
-			stream := buildStreamMetadata(streamURL, displayTitle, cand, sizeGB, nzbParsed.TotalSize())
+			stream := buildStreamMetadata(streamURL, item.Title, cand, sizeGB, nzbParsed.TotalSize())
+
+			// Record success
+			addSuccess(cand.Group)
 
 			logger.Debug("Created stream", "name", stream.Name, "url", stream.URL)
 			resultChan <- nzbResult{stream: stream, group: cand.Group}
@@ -409,28 +425,27 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string) 
 	
 	// Collect results with Early Exit
 	var streams []Stream
-	counts := make(map[string]int)
+	
+	// Monitor loop to stop completely if ALL quotas are met
+	// We check current quotas from `quotaCounts`?
+	// The resultChan receive is still useful to build the final list.
 	
 	for result := range resultChan {
 		if result.err == nil {
 			streams = append(streams, result.stream)
 			
-			// Track quotas
-			// cand.Group is passed via nzbResult now
-			// We need to add 'group' to nzbResult struct
-			counts[result.group]++
-			
-			// Check if we have enough
-			// Need 2 of 4k, 2 of 1080p, 2 of 720p
-			has4k := counts["4k"] >= 2
-			has1080p := counts["1080p"] >= 2
-			has720p := counts["720p"] >= 2
-			// SD is bonus
+			// Check global completion
+			// We can check the shared state (it's updated by workers)
+			quotaMu.Lock()
+			has4k := quotaCounts["4k"] >= quotaPerGroup
+			has1080p := quotaCounts["1080p"] >= quotaPerGroup
+			has720p := quotaCounts["720p"] >= quotaPerGroup
+			quotaMu.Unlock()
 			
 			if has4k && has1080p && has720p {
-				logger.Debug("Fast-Path: Quotas met. Cancelling checks.", "4k", counts["4k"], "1080p", counts["1080p"], "720p", counts["720p"])
+				logger.Debug("Fast-Path: All quotas met. Cancelling checks.")
 				cancel() // Stop others!
-				break // Return immediately to user
+				break // Return immediately
 			}
 		}
 	}
@@ -454,7 +469,7 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string) 
 		buckets[bucket] = append(buckets[bucket], s)
 	}
 
-	// Select top 2 from each bucket
+	// Select top N from each bucket (redundant if quota worked, but safe)
 	var finalStreams []Stream
 	priorities := []string{"4k", "1080p", "720p", "sd"}
 	
@@ -466,13 +481,7 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string) 
 			return getQualityScore(bucketStreams[i].Name) > getQualityScore(bucketStreams[j].Name)
 		})
 		
-		// Take top 2
-		count := 2
-		if len(bucketStreams) < count {
-			count = len(bucketStreams)
-		}
-		
-		finalStreams = append(finalStreams, bucketStreams[:count]...)
+		finalStreams = append(finalStreams, bucketStreams...)
 	}
 
 	// Final sort by quality for display

@@ -65,7 +65,7 @@ func main() {
 	logger.Info("Session manager initialized", "ttl", sessionTTL)
 
 	// Initialize Triage Service
-	triageService := triage.NewService(5)
+	triageService := triage.NewService(4)
 
 	// Initialize AvailNZB client
 	availClient := availnzb.NewClient(AvailNZBURL, AvailNZBAPIKey)
