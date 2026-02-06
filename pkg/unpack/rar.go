@@ -20,6 +20,7 @@ type ArchiveBlueprint struct {
 	MainFileName string
 	TotalSize    int64
 	Parts        []VirtualPartDef
+	IsCompressed bool // True if RAR uses compression (not STORE)
 }
 
 type VirtualPartDef struct {
@@ -48,6 +49,11 @@ func OpenRarStream(files []*loader.File, _ string) (io.ReadSeekCloser, string, i
 }
 
 func StreamFromBlueprint(bp *ArchiveBlueprint) (io.ReadSeekCloser, string, int64, error) {
+	// Check if archive is compressed - streaming not supported
+	if bp.IsCompressed {
+		return nil, "", 0, fmt.Errorf("compressed RAR archives are not supported for streaming (file: %s). The archive must use STORE mode (0%% compression) for streaming to work", bp.MainFileName)
+	}
+	
 	var parts []virtualPart
 	for _, p := range bp.Parts {
 		parts = append(parts, virtualPart{
@@ -72,7 +78,7 @@ func ScanArchive(files []UnpackableFile) (*ArchiveBlueprint, error) {
 		if strings.HasSuffix(lower, ExtPar2) {
 			continue
 		}
-		if strings.HasSuffix(lower, ExtRar) || strings.Contains(lower, ".part") || IsRarPart(lower) {
+		if strings.HasSuffix(lower, ExtRar) || strings.Contains(lower, ".part") || IsRarPart(lower) || IsSplitArchivePart(lower) {
 			rarFiles = append(rarFiles, f)
 		}
 	}
@@ -86,6 +92,7 @@ func ScanArchive(files []UnpackableFile) (*ArchiveBlueprint, error) {
 		PackedSize   int64
 		VolFile      UnpackableFile
 		VolName      string
+		IsCompressed bool // True if PackedSize < UnpackedSize (needs decompression)
 	}
 	
 	var mu sync.Mutex
@@ -155,6 +162,10 @@ func ScanArchive(files []UnpackableFile) (*ArchiveBlueprint, error) {
 					logger.Debug("Found file in archive", "clean_name", cleanName, "name", info.Name, "unpacked_size", info.TotalUnpackedSize)
 
 					for _, p := range info.Parts {
+						// Detect compression: if packed size is significantly smaller than unpacked, it's compressed
+						// Allow small overhead for RAR headers (5% tolerance)
+						isCompressed := p.PackedSize < (info.TotalUnpackedSize * 95 / 100)
+						
 						mu.Lock()
 						parts = append(parts, FilePartInfo{
 							Name:       info.Name,
@@ -164,6 +175,7 @@ func ScanArchive(files []UnpackableFile) (*ArchiveBlueprint, error) {
 							PackedSize: p.PackedSize,
 							VolFile:    f,
 							VolName:    f.Name(),
+							IsCompressed: isCompressed,
 						})
 						mu.Unlock()
 					}
@@ -174,6 +186,13 @@ func ScanArchive(files []UnpackableFile) (*ArchiveBlueprint, error) {
 	
 	wg.Wait()
 	logger.Info("Scan complete", "files", len(rarFiles), "duration", time.Since(start))
+	
+	// Check for compression immediately - fail fast before processing parts
+	for _, p := range parts {
+		if p.IsCompressed {
+			return nil, fmt.Errorf("compressed RAR archives are not supported for streaming (file: %s). The archive must use STORE mode (0%% compression) for streaming to work", p.Name)
+		}
+	}
 	
 	// 3. Aggregate Parts
 	fileCounts := make(map[string]int64)
@@ -345,8 +364,8 @@ func ScanArchive(files []UnpackableFile) (*ArchiveBlueprint, error) {
 					Name:       bestName,
 					IsMain:     true,
 					UnpackedSize: totalHeaderSize, 
-					DataOffset: firstPart.DataOffset, 
-					PackedSize: f.Size() - firstPart.DataOffset, 
+					DataOffset: 0, // Assume raw split part (no header) if scan failed
+					PackedSize: f.Size(), // Use full file
 					VolFile:    f,
 					VolName:    f.Name(),
 				}
@@ -359,9 +378,20 @@ func ScanArchive(files []UnpackableFile) (*ArchiveBlueprint, error) {
 		}
 	}
 
+	// Check if any part is compressed
+	isCompressed := false
+	for _, p := range mainParts {
+		if p.IsCompressed {
+			isCompressed = true
+			logger.Warn("Detected compressed RAR archive - streaming not supported", "file", bestName)
+			break
+		}
+	}
+	
 	bp := &ArchiveBlueprint{
 		MainFileName: bestName,
 		TotalSize:    totalHeaderSize,
+		IsCompressed: isCompressed,
 	}
 	
 	var vOffset int64 = 0

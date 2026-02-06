@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -141,6 +142,8 @@ func (s *Server) SetupRoutes(mux *http.ServeMux) {
 			s.handleStream(w, r)
 		} else if strings.HasPrefix(path, "/play/") {
 			s.handlePlay(w, r)
+		} else if strings.HasPrefix(path, "/debug/play") {
+			s.handleDebugPlay(w, r)
 		} else if path == "/health" {
 			s.handleHealth(w, r)
 		} else if strings.HasPrefix(path, "/api/") {
@@ -623,6 +626,123 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request) {
 	
 	// Log completion (ServeContent blocks until done)
 	logger.Debug("Finished serving media", "session", sessionID)
+}
+
+// handleDebugPlay allows playing directly from an NZB URL or local file for debugging
+func (s *Server) handleDebugPlay(w http.ResponseWriter, r *http.Request) {
+	nzbPath := r.URL.Query().Get("nzb")
+	if nzbPath == "" {
+		http.Error(w, "Missing 'nzb' query parameter (URL or file path)", http.StatusBadRequest)
+		return
+	}
+
+	logger.Info("Debug Play request", "nzb", nzbPath)
+
+	var nzbData []byte
+	var err error
+
+	// Check if it's a local file path (starts with / or drive letter on Windows)
+	if strings.HasPrefix(nzbPath, "/") || (len(nzbPath) > 2 && nzbPath[1] == ':') {
+		// Local file path
+		logger.Debug("Reading NZB from local file", "path", nzbPath)
+		nzbData, err = os.ReadFile(nzbPath)
+		if err != nil {
+			logger.Error("Failed to read local NZB file", "path", nzbPath, "err", err)
+			http.Error(w, "Failed to read local NZB file: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+	} else {
+		// URL - try indexer download first
+		nzbData, err = s.indexer.DownloadNZB(nzbPath)
+		if err != nil {
+			// Fallback to simple HTTP GET
+			resp, httpErr := http.Get(nzbPath)
+			if httpErr != nil {
+				logger.Error("Failed to download NZB", "url", nzbPath, "err", err, "httpErr", httpErr)
+				http.Error(w, "Failed to download NZB: "+err.Error(), http.StatusInternalServerError)
+				return
+			}
+			defer resp.Body.Close()
+			
+			if resp.StatusCode != 200 {
+				msg := fmt.Sprintf("Failed to download NZB (HTTP %d)", resp.StatusCode)
+				logger.Error(msg, "url", nzbPath)
+				http.Error(w, msg, http.StatusInternalServerError)
+				return
+			}
+			
+			nzbData, err = io.ReadAll(resp.Body)
+			if err != nil {
+				http.Error(w, "Failed to read NZB body", http.StatusInternalServerError)
+				return
+			}
+		}
+	}
+
+	// Parse NZB
+	nzbParsed, err := nzb.Parse(bytes.NewReader(nzbData))
+	if err != nil {
+		logger.Error("Failed to parse NZB", "err", err)
+		http.Error(w, "Failed to parse NZB", http.StatusInternalServerError)
+		return
+	}
+
+	// Create Session
+	// Use hash of path as ID to allow repeating same path
+	sessionID := fmt.Sprintf("debug-%x", nzbPath)
+	// Or use NZB hash
+	// sessionID := nzbParsed.Hash()
+	
+	// Create/Get Session
+	sess, err := s.sessionManager.CreateSession(sessionID, nzbParsed)
+	if err != nil {
+		logger.Error("Failed to create session", "err", err)
+		http.Error(w, "Failed to create session", http.StatusInternalServerError)
+		return
+	}
+
+	// Get Files
+	files := sess.Files
+	if len(files) == 0 {
+		http.Error(w, "No files in NZB", http.StatusInternalServerError)
+		return
+	}
+
+	// Get Media Stream (same logic as handlePlay)
+	stream, name, size, bp, err := unpack.GetMediaStream(files, sess.Blueprint)
+	if err != nil {
+		logger.Error("Failed to open media stream", "err", err)
+		http.Error(w, "Failed to open media stream: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if bp != nil && sess.Blueprint == nil {
+		sess.SetBlueprint(bp)
+	}
+
+	clientIP, _, _ := net.SplitHostPort(r.RemoteAddr)
+	if clientIP == "" { clientIP = r.RemoteAddr }
+	
+	s.sessionManager.StartPlayback(sessionID, clientIP)
+	defer s.sessionManager.EndPlayback(sessionID, clientIP)
+
+	monitoredStream := &StreamMonitor{
+		ReadSeekCloser: stream,
+		sessionID:      sessionID,
+		clientIP:       clientIP,
+		manager:        s.sessionManager,
+		lastUpdate:     time.Now(),
+	}
+	defer monitoredStream.Close()
+
+	logger.Info("Serving debug media", "name", name, "size", size)
+	logger.Debug("HTTP Request", "method", r.Method, "range", r.Header.Get("Range"), "user_agent", r.Header.Get("User-Agent"))
+
+	w.Header().Set("Content-Type", "video/mp4")
+	w.Header().Set("Accept-Ranges", "bytes")
+	http.ServeContent(w, r, name, time.Time{}, monitoredStream)
+	
+	logger.Debug("Finished serving debug media")
 }
 
 // handleHealth serves health check endpoint

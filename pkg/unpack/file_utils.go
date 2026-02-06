@@ -64,7 +64,8 @@ func IsArchiveFile(name string) bool {
 	       strings.HasSuffix(lower, ExtZip) || 
 	       strings.HasSuffix(lower, Ext7z) || 
 	       strings.HasSuffix(lower, ExtIso) ||
-	       IsRarPart(lower)
+	       IsRarPart(lower) ||
+		   IsSplitArchivePart(lower)
 }
 
 // IsSampleFile checks if the filename looks like a sample/trailer.
@@ -122,4 +123,26 @@ func IsMiddleRarVolume(name string) bool {
 
 func isDigit(b byte) bool {
 	return b >= '0' && b <= '9'
+}
+
+// IsSplitArchivePart checks for .z01, .001, etc.
+func IsSplitArchivePart(name string) bool {
+	if len(name) < 4 {
+		return false
+	}
+	
+	lower := strings.ToLower(name)
+	ext := lower[len(lower)-4:]
+	
+	// Check .zNN (Zip/7z split)
+	if ext[0] == '.' && ext[1] == 'z' && isDigit(ext[2]) && isDigit(ext[3]) {
+		return true
+	}
+
+	// Check .0NN (7z/HJSplit)
+	if ext[0] == '.' && isDigit(ext[1]) && isDigit(ext[2]) && isDigit(ext[3]) {
+		return true
+	}
+	
+	return false
 }

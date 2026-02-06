@@ -2,6 +2,7 @@ package triage
 
 import (
 	"sort"
+	"strconv"
 	"strings"
 
 	"streamnzb/pkg/indexer"
@@ -65,18 +66,12 @@ func (s *Service) Filter(results []indexer.Item) []Candidate {
 			continue
 		}
 		
-		// Sort by score descending
-		sort.Slice(candidates, func(i, j int) bool {
-			return candidates[i].Score > candidates[j].Score
-		})
-		
-		// Take top N
+		// Use Round-Robin selection to ensure indexer diversity
+		// This prevents one indexer (with high grab counts) from dominating the quota
 		count := s.MaxPerGroup
-		if count > len(candidates) {
-			count = len(candidates)
-		}
+		balanced := roundRobinSelect(candidates, count)
 		
-		selected = append(selected, candidates[:count]...)
+		selected = append(selected, balanced...)
 	}
 	
 	return selected
@@ -99,36 +94,84 @@ func determineGroup(p *parser.ParsedRelease) string {
 }
 
 func calculateScore(res indexer.Item, p *parser.ParsedRelease) int {
+	// Base score is download count (popularity)
 	score := 0
-	
-	// Prefer larger files (within reason) - weak signal but useful
-	// We assume larger likely better quality for same resolution
-	// Capped at 10 points
-	sizeGB := float64(res.Size) / (1024 * 1024 * 1024)
-	if sizeGB > 0 {
-		score += int(sizeGB) 
+	grabsStr := res.GetAttribute("grabs")
+	if grabsStr != "" {
+		if val, err := strconv.Atoi(grabsStr); err == nil {
+			score = val
+		}
 	}
-	
-	// Prefer newer releases (less chance of takedown?) or older?
-	// Actually older might have health issues, but 'repost' is good.
-	// Let's rely on keywords.
-	
-	if p.Repack {
-		score += 50
-	}
-	if p.Proper {
-		score += 50
-	}
-	if p.Extended {
-		score += 20
-	}
-	
-	// Penalize CAM/TS
+
+	// Penalize strictly bad quality (CAM/TS)
+	// We want these at the absolute bottom, even if popular
 	if strings.Contains(strings.ToLower(p.Quality), "cam") || 
 	   strings.Contains(strings.ToLower(p.Quality), "telesync") || 
 	   strings.Contains(strings.ToLower(p.Quality), "ts") {
-		score -= 1000
+		score -= 1000000
 	}
 	
 	return score
+}
+
+// roundRobinSelect picks top candidates ensuring indexer diversity
+func roundRobinSelect(candidates []Candidate, n int) []Candidate {
+	if n <= 0 {
+		return nil
+	}
+	
+	// Group by Indexer
+	byIndexer := make(map[string][]Candidate)
+	var indexerNames []string
+	
+	for _, c := range candidates {
+		name := "unknown"
+		if c.Result.SourceIndexer != nil {
+			name = c.Result.SourceIndexer.Name()
+		}
+		
+		if _, exists := byIndexer[name]; !exists {
+			indexerNames = append(indexerNames, name)
+		}
+		byIndexer[name] = append(byIndexer[name], c)
+	}
+	
+	// Sort candidates within each indexer by score (desc)
+	for name := range byIndexer {
+		list := byIndexer[name]
+		sort.Slice(list, func(i, j int) bool {
+			return list[i].Score > list[j].Score
+		})
+		byIndexer[name] = list
+	}
+	
+	// Sort indexer names for deterministic iteration
+	sort.Strings(indexerNames)
+	
+	// Round Robin selection
+	var selected []Candidate
+	
+	for len(selected) < n {
+		addedAnything := false
+		
+		for _, name := range indexerNames {
+			if len(selected) >= n {
+				break
+			}
+			
+			list := byIndexer[name]
+			if len(list) > 0 {
+				// Pop best from this indexer
+				selected = append(selected, list[0])
+				byIndexer[name] = list[1:]
+				addedAnything = true
+			}
+		}
+		
+		if !addedAnything {
+			break // Run out of candidates
+		}
+	}
+	
+	return selected
 }

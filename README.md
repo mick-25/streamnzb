@@ -88,8 +88,29 @@ Alternatively you can set environment variables to configure the application on 
 - Increase `MAX_CONCURRENT_VALIDATIONS`.
 - Ensure your system has sufficient bandwidth.
 
+## Troubleshooting Playback Issues
 **Why am I seeing Big Buck Bunny instead of my movie?**
-- If you're seeing Big Buck Bunny, it means streamNZB was unable to play movie from Usenet and you should try another one.
+Big Buck Bunny appears when StreamNZB cannot play the selected content. Common causes:
+### Archive Issues
+- ❌ **Compressed archive** - Only uncompressed (STORE mode) archives work
+  - *Solution:* Try a different release or uploader
+- ❌ **Password-protected** - Encrypted archives aren't supported
+  - *Solution:* Avoid password-protected releases
+- ❌ **No video files** - Archive contains only samples/extras
+  - *Solution:* Verify NZB contents, select different result
+### Usenet Issues  
+- ❌ **Missing articles** - Content expired or incomplete
+  - *Solution:* Try newer release or add more providers
+- ❌ **Provider offline** - NNTP server unreachable
+  - *Solution:* Check provider status, verify credentials
+- ❌ **Connection limit** - Too many concurrent connections
+  - *Solution:* Reduce connection count in config
+### Network Issues
+- ❌ **Download errors** - Network interruption or corrupted data
+  - *Solution:* Retry playback or try different provider
+- ❌ **Timeout** - Very large archive taking too long to scan
+  - *Solution:* Try smaller release
+**Tip:** Check the logs (Settings → Logs) for specific error messages.
 
 ### ☕ Support
 

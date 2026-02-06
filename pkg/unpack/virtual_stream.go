@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"streamnzb/pkg/logger"
 	"sync"
 )
 
@@ -85,6 +86,7 @@ func (s *VirtualStream) worker(initialOffset int64) {
 		}
 		
 		if activePart == nil {
+			logger.Error("VirtualStream: offset not mapped", "offset", currentOffset, "totalSize", s.totalSize, "parts", len(s.parts))
 			select {
 			case s.errChan <- fmt.Errorf("offset %d not mapped", currentOffset):
 				return
@@ -115,6 +117,7 @@ func (s *VirtualStream) worker(initialOffset int64) {
 				}
 			}
 			
+			logger.Debug("VirtualStream: opening volume", "partIdx", partIdx, "volFile", activePart.VolFile.Name(), "volOffset", volOff, "virtualOffset", currentOffset)
 			s.currentReader = r
 			s.currentPartIdx = partIdx
 		}
@@ -146,8 +149,12 @@ func (s *VirtualStream) worker(initialOffset int64) {
 		
 		if err != nil {
 			if err == io.EOF {
+				// EOF on this part - move to next part
+				logger.Debug("VirtualStream: EOF on volume", "partIdx", s.currentPartIdx, "advancing to", activePart.VirtualEnd)
 				s.currentReader.Close()
 				s.currentReader = nil
+				// Advance to end of this part so we move to the next one
+				currentOffset = activePart.VirtualEnd
 			} else {
 				select {
 				case s.errChan <- err:
@@ -228,6 +235,7 @@ func (s *VirtualStream) Seek(offset int64, whence int) (int64, error) {
 		}
 	}
 	
+	logger.Debug("VirtualStream: seek complete", "target", target, "whence", whence)
 	s.currentOffset = target
 	return target, nil
 }

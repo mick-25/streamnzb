@@ -28,7 +28,7 @@ func GetMediaStream(files []*loader.File, cachedBP interface{}) (ReadSeekCloser,
 			continue
 		}
 		
-		if strings.HasSuffix(lower, ExtRar) || strings.Contains(lower, ".part") || IsRarPart(lower) {
+		if strings.HasSuffix(lower, ExtRar) || strings.Contains(lower, ".part") || IsRarPart(lower) || IsSplitArchivePart(lower) {
 			rarFiles = append(rarFiles, f)
 		}
 	}
@@ -115,7 +115,7 @@ func GetMediaStream(files []*loader.File, cachedBP interface{}) (ReadSeekCloser,
 	var largestFile *loader.File
 	for _, f := range files {
 		name := strings.ToLower(ExtractFilename(f.Name()))
-		if strings.HasSuffix(name, ExtRar) || strings.Contains(name, ".part") || IsRarPart(name) {
+		if strings.HasSuffix(name, ExtRar) || strings.Contains(name, ".part") || IsRarPart(name) || IsSplitArchivePart(name) {
 			continue
 		}
 		if strings.HasSuffix(name, ExtPar2) || strings.HasSuffix(name, ExtNzb) || strings.HasSuffix(name, ExtNfo) {
