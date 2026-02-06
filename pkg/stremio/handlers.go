@@ -508,7 +508,7 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string) 
 
 	// Select top N from each bucket (redundant if quota worked, but safe)
 	var finalStreams []Stream
-	priorities := []string{"4k", "1080p", "720p", "sd"}
+	priorities := []string{"4k", "1080p", "720p"}
 	
 	for _, bucketName := range priorities {
 		bucketStreams := buckets[bucketName]

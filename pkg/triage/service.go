@@ -57,7 +57,7 @@ func (s *Service) Filter(results []indexer.Item) []Candidate {
 	var selected []Candidate
 	
 	// Processing order (priority)
-	priorities := []string{"4k", "1080p", "720p", "sd"}
+	priorities := []string{"4k", "1080p", "720p"}
 	
 	for _, groupName := range priorities {
 		candidates, ok := groups[groupName]
