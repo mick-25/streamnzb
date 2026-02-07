@@ -11,13 +11,13 @@ import (
 // buildStreamMetadata creates a rich Stream object with PTT metadata
 func buildStreamMetadata(url, filename string, cand triage.Candidate, sizeGB float64, totalBytes int64) Stream {
 	meta := cand.Metadata
-	
+
 	// Build stream name (left side - provider/quality badge)
 	name := buildStreamName(meta, cand.Group)
-	
+
 	// Build detailed description (right side - technical details)
 	description := buildDetailedDescription(meta, sizeGB, filename)
-	
+
 	// Create behavior hints
 	hints := &BehaviorHints{
 		NotWebReady: false,
@@ -25,7 +25,7 @@ func buildStreamMetadata(url, filename string, cand triage.Candidate, sizeGB flo
 		VideoSize:   totalBytes,
 		Filename:    filename,
 	}
-	
+
 	return Stream{
 		URL:           url,
 		Name:          name,
@@ -37,10 +37,10 @@ func buildStreamMetadata(url, filename string, cand triage.Candidate, sizeGB flo
 // buildStreamName creates the left-side name (provider badge + quality)
 func buildStreamName(meta *parser.ParsedRelease, group string) string {
 	parts := []string{}
-	
+
 	// Resolution
 	parts = append(parts, strings.ToUpper(group))
-	
+
 	// Source type
 	if meta.Quality != "" {
 		// Simplify quality string
@@ -49,14 +49,14 @@ func buildStreamName(meta *parser.ParsedRelease, group string) string {
 		quality = strings.ReplaceAll(quality, "WEB-DL", "WEB")
 		parts = append(parts, quality)
 	}
-	
+
 	return strings.Join(parts, " ")
 }
 
 // getQualityEmoji returns emoji based on source quality
 func getQualityEmoji(meta *parser.ParsedRelease) string {
 	quality := strings.ToLower(meta.Quality)
-	
+
 	if strings.Contains(quality, "remux") {
 		return "⚡" // REMUX
 	}
@@ -75,14 +75,14 @@ func getQualityEmoji(meta *parser.ParsedRelease) string {
 	if strings.Contains(quality, "hdtv") {
 		return "📺" // HDTV
 	}
-	
+
 	return "🎬"
 }
 
 // buildDetailedDescription creates the right-side technical details
 func buildDetailedDescription(meta *parser.ParsedRelease, sizeGB float64, filename string) string {
 	lines := []string{}
-	
+
 	// Line 1: Source + Codec + Quality
 	line1 := []string{}
 	if meta.Quality != "" {
@@ -102,7 +102,7 @@ func buildDetailedDescription(meta *parser.ParsedRelease, sizeGB float64, filena
 	if len(line1) > 0 {
 		lines = append(lines, strings.Join(line1, " "))
 	}
-	
+
 	// Line 2: HDR + Audio
 	line2 := []string{}
 	if len(meta.HDR) > 0 {
@@ -119,7 +119,7 @@ func buildDetailedDescription(meta *parser.ParsedRelease, sizeGB float64, filena
 	if len(line2) > 0 {
 		lines = append(lines, strings.Join(line2, " • "))
 	}
-	
+
 	// Line 3: Special flags
 	flags := []string{}
 	if meta.Proper {
@@ -140,7 +140,7 @@ func buildDetailedDescription(meta *parser.ParsedRelease, sizeGB float64, filena
 	if len(flags) > 0 {
 		lines = append(lines, strings.Join(flags, " "))
 	}
-	
+
 	// Line 4: Size + Release Group
 	line4 := []string{}
 	line4 = append(line4, fmt.Sprintf("💾 %.2f GB", sizeGB))
@@ -148,15 +148,15 @@ func buildDetailedDescription(meta *parser.ParsedRelease, sizeGB float64, filena
 		line4 = append(line4, fmt.Sprintf("👥 %s", meta.Group))
 	}
 	lines = append(lines, strings.Join(line4, " • "))
-	
+
 	// Line 5: Languages
 	if len(meta.Languages) > 0 {
 		langs := strings.Join(meta.Languages, " | ")
 		lines = append(lines, fmt.Sprintf("🌍 %s", langs))
 	}
-	
+
 	// Line 6: Filename
 	lines = append(lines, fmt.Sprintf("📄 %s", filename))
-	
+
 	return strings.Join(lines, "\n")
 }

@@ -42,7 +42,7 @@ func (n *NZBFS) Open(name string) (fs.File, error) {
 		return nil, fs.ErrNotExist
 	}
 	// NZBFS: Opening
-	
+
 	stream, err := f.OpenStream()
 	if err != nil {
 		return nil, fmt.Errorf("failed to open stream: %w", err)

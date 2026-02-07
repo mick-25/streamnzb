@@ -115,46 +115,48 @@ func (n *NZB) TotalSize() int64 {
 // GetFileInfo returns parsed information about all files in the NZB
 func (n *NZB) GetFileInfo() []*FileInfo {
 	infos := make([]*FileInfo, 0, len(n.Files))
-	
+
 	for i := range n.Files {
 		file := &n.Files[i]
 		info := analyzeFile(file)
 		infos = append(infos, info)
 	}
-	
+
 	return infos
 }
 
 // GetContentFiles returns all files related to the main content (e.g. all rar volumes)
 func (n *NZB) GetContentFiles() []*FileInfo {
 	infos := n.GetFileInfo()
-	
+
 	// 1. Identify "Main" file logic extended to groups
 	var mainPattern string
 	var maxSize int64
 	var mainIsArchive bool
 	_ = mainIsArchive // Prevent unused error if needed later, or just remove
-	
+
 	// First pass: Find the "main" content (largest video or archive)
 	for _, info := range infos {
 		if info.IsSample || info.IsExtra {
 			continue
 		}
-		
+
 		if info.Size > maxSize {
 			// Check if it's a valid content type
 			if info.IsVideo || isArchivePart(info.Extension) || info.Extension == ".rar" || info.Extension == ".7z" {
 				maxSize = info.Size
 				mainPattern = getFilePattern(info.Filename)
-				mainIsArchive = !info.IsVideo 
+				mainIsArchive = !info.IsVideo
 			}
 		}
 	}
-	
+
 	// If no main content found, fallback to largest file overall
 	if mainPattern == "" {
 		for _, info := range infos {
-			if info.IsSample || info.IsExtra { continue }
+			if info.IsSample || info.IsExtra {
+				continue
+			}
 			if info.Size > maxSize {
 				maxSize = info.Size
 				mainPattern = getFilePattern(info.Filename)
@@ -171,7 +173,7 @@ func (n *NZB) GetContentFiles() []*FileInfo {
 			}
 		}
 	}
-	
+
 	return contentFiles
 }
 
@@ -181,13 +183,13 @@ func getFilePattern(filename string) string {
 	// "Release.Name.part01.rar" -> "release.name"
 	// "Release.Name.r00" -> "release.name"
 	// "Release.Name.mkv" -> "release.name"
-	
+
 	s := strings.ToLower(filename)
-	
+
 	// Remove extensions
 	ext := filepath.Ext(s)
 	s = strings.TrimSuffix(s, ext)
-	
+
 	// Remove common multipart suffixes
 	// part01, vol01, .r01
 	if idx := strings.LastIndex(s, ".part"); idx != -1 {
@@ -196,10 +198,10 @@ func getFilePattern(filename string) string {
 	if idx := strings.LastIndex(s, ".vol"); idx != -1 {
 		s = s[:idx]
 	}
-	
+
 	// Handle .7z.001 style
 	s = strings.TrimSuffix(s, ".7z")
-	
+
 	return strings.Trim(s, " .-_")
 }
 
@@ -217,19 +219,19 @@ func analyzeFile(file *File) *FileInfo {
 	// Extract filename from subject
 	// Subject format is usually: "filename" yEnc (1/50) or similar
 	filename := ExtractFilename(file.Subject)
-	
+
 	// Calculate total size
 	var size int64
 	for _, seg := range file.Segments {
 		size += seg.Bytes
 	}
-	
+
 	// Get extension
 	ext := strings.ToLower(filepath.Ext(filename))
-	
+
 	// Parse the filename for metadata
 	parsed := ptt.Parse(filename)
-	
+
 	info := &FileInfo{
 		File:       file,
 		Filename:   filename,
@@ -237,12 +239,12 @@ func analyzeFile(file *File) *FileInfo {
 		Size:       size,
 		ParsedInfo: parsed,
 	}
-	
+
 	// Determine file type
 	info.IsVideo = isVideoExtension(ext)
 	info.IsSample = isSampleFile(filename)
 	info.IsExtra = isExtraFile(filename, ext)
-	
+
 	return info
 }
 
@@ -252,25 +254,25 @@ func ExtractFilename(subject string) string {
 	// "filename.mkv" yEnc (1/50)
 	// filename.mkv (1/50)
 	// [1/50] - "filename.mkv" yEnc
-	
+
 	// Try to find quoted filename
 	if start := strings.Index(subject, "\""); start != -1 {
 		if end := strings.Index(subject[start+1:], "\""); end != -1 {
 			return subject[start+1 : start+1+end]
 		}
 	}
-	
+
 	// Try to extract before yEnc or (1/50) pattern
 	subject = strings.TrimSpace(subject)
-	
+
 	if idx := strings.Index(subject, " yEnc"); idx != -1 {
 		subject = subject[:idx]
 	}
-	
+
 	if idx := strings.Index(subject, " ("); idx != -1 {
 		subject = subject[:idx]
 	}
-	
+
 	return strings.Trim(subject, "\"' ")
 }
 
@@ -317,11 +319,11 @@ func isExtraFile(filename string, ext string) bool {
 		// Parity files
 		".par2": true,
 	}
-	
+
 	if extraExts[ext] {
 		return true
 	}
-	
+
 	lower := strings.ToLower(filename)
 	return strings.Contains(lower, "proof") ||
 		strings.Contains(lower, "cover")

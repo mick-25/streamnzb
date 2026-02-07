@@ -23,21 +23,21 @@ func GetMediaStream(files []*loader.File, cachedBP interface{}) (ReadSeekCloser,
 	for _, f := range files {
 		name := ExtractFilename(f.Name())
 		lower := strings.ToLower(name)
-		
+
 		if strings.HasSuffix(lower, ExtPar2) {
 			continue
 		}
-		
+
 		// Skip 7z split archives (.7z.001, .7z.002, etc.) - they'll be handled by 7z detection
 		if strings.Contains(lower, ".7z.") {
 			continue
 		}
-		
+
 		if strings.HasSuffix(lower, ExtRar) || strings.Contains(lower, ".part") || IsRarPart(lower) || IsSplitArchivePart(lower) {
 			rarFiles = append(rarFiles, f)
 		}
 	}
-	
+
 	if len(rarFiles) > 0 {
 		// Check for cached blueprint
 		if cachedBP != nil {
@@ -47,9 +47,9 @@ func GetMediaStream(files []*loader.File, cachedBP interface{}) (ReadSeekCloser,
 				return s, name, size, bp, err
 			}
 		}
-		
+
 		logger.Info("Detected RAR archive", "volumes", len(rarFiles))
-		
+
 		// Convert to UnpackableFile interface
 		unpackables := make([]UnpackableFile, len(files))
 		for i, f := range files {
@@ -70,7 +70,6 @@ func GetMediaStream(files []*loader.File, cachedBP interface{}) (ReadSeekCloser,
 			}
 			return s, name, size, bp, err
 		}
-		
 
 	}
 
@@ -79,7 +78,7 @@ func GetMediaStream(files []*loader.File, cachedBP interface{}) (ReadSeekCloser,
 		name := ExtractFilename(f.Name())
 		if strings.HasSuffix(strings.ToLower(name), Ext7z) || strings.Contains(strings.ToLower(name), ".7z.001") {
 			logger.Info("Detected 7z archive", "name", name)
-			
+
 			// Check for cached blueprint
 			if cachedBP != nil {
 				if bp7z, ok := cachedBP.(*SevenZipBlueprint); ok {
@@ -88,13 +87,13 @@ func GetMediaStream(files []*loader.File, cachedBP interface{}) (ReadSeekCloser,
 					return s, n, sz, bp7z, err
 				}
 			}
-			
+
 			// Create blueprint on first access
 			newBp, err := CreateSevenZipBlueprint(files, name)
 			if err != nil {
 				return nil, "", 0, nil, err
 			}
-			
+
 			// Open stream from blueprint
 			s, n, sz, err := Open7zStreamFromBlueprint(newBp)
 			return s, n, sz, newBp, err
@@ -104,7 +103,7 @@ func GetMediaStream(files []*loader.File, cachedBP interface{}) (ReadSeekCloser,
 	// 3. Look for MKV/MP4 directly
 	for _, f := range files {
 		name := ExtractFilename(f.Name())
-		
+
 		if IsVideoFile(name) {
 			stream, err := f.OpenStream()
 			if err != nil {
@@ -126,7 +125,7 @@ func GetMediaStream(files []*loader.File, cachedBP interface{}) (ReadSeekCloser,
 		if strings.HasSuffix(name, ExtPar2) || strings.HasSuffix(name, ExtNzb) || strings.HasSuffix(name, ExtNfo) {
 			continue
 		}
-		
+
 		if largestFile == nil || f.Size() > largestFile.Size() {
 			largestFile = f
 		}
@@ -134,12 +133,12 @@ func GetMediaStream(files []*loader.File, cachedBP interface{}) (ReadSeekCloser,
 
 	if largestFile != nil && largestFile.Size() > 50*1024*1024 {
 		logger.Warn("No clear media found, probing largest file for magic signature", "name", largestFile.Name(), "size", largestFile.Size())
-		
+
 		unpackables := make([]UnpackableFile, len(files))
 		for i, f := range files {
 			unpackables[i] = f
 		}
-		
+
 		logger.Info("Attempting heuristic RAR scan on unknown files")
 		bp, err := ScanArchive(unpackables)
 		if err == nil {
@@ -151,7 +150,7 @@ func GetMediaStream(files []*loader.File, cachedBP interface{}) (ReadSeekCloser,
 		} else {
 			logger.Warn("Heuristic RAR scan failed, falling back to direct stream of largest file", "err", err)
 		}
-		
+
 		// Fallback: Direct Stream largest file
 		extractedName := ExtractFilename(largestFile.Name())
 		stream, err := largestFile.OpenStream()
@@ -167,4 +166,3 @@ func GetMediaStream(files []*loader.File, cachedBP interface{}) (ReadSeekCloser,
 	logger.Warn("GetMediaStream found no suitable media", "files", len(files), "rar_candidates", len(rarFiles))
 	return nil, "", 0, nil, io.EOF
 }
-

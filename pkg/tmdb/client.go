@@ -38,10 +38,10 @@ type FindResponse struct {
 // Result represents a search result item
 type Result struct {
 	ID            int    `json:"id"`
-	Name          string `json:"name"`            // TV
-	Title         string `json:"title"`           // Movie
-	OriginalName  string `json:"original_name"`   // TV
-	OriginalTitle string `json:"original_title"`  // Movie
+	Name          string `json:"name"`           // TV
+	Title         string `json:"title"`          // Movie
+	OriginalName  string `json:"original_name"`  // TV
+	OriginalTitle string `json:"original_title"` // Movie
 	MediaType     string `json:"media_type"`
 	Overview      string `json:"overview"`
 }
@@ -60,7 +60,7 @@ type ExternalIDsResponse struct {
 
 func (c *Client) doRequest(endpoint string, params url.Values) (*http.Response, error) {
 	reqURL := fmt.Sprintf("%s?%s", endpoint, params.Encode())
-	
+
 	req, err := http.NewRequest("GET", reqURL, nil)
 	if err != nil {
 		return nil, err

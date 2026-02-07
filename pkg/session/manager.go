@@ -1,29 +1,39 @@
 package session
 
 import (
+	"bytes"
 	"fmt"
 	"strings"
 	"sync"
 	"time"
 
+	"streamnzb/pkg/indexer"
 	"streamnzb/pkg/loader"
+	"streamnzb/pkg/logger"
 	"streamnzb/pkg/nntp"
 	"streamnzb/pkg/nzb"
 )
 
 // Session represents an active streaming session
 type Session struct {
-	ID          string
-	NZB         *nzb.NZB
-	Files       []*loader.File // All files related to the content (e.g. RAR volumes)
-	File        *loader.File   // Helper for single-file content, or first file of archive
+	ID    string
+	NZB   *nzb.NZB // Parsed NZB (may be nil if deferred)
+	Files []*loader.File // All files related to the content (e.g. RAR volumes)
+	File  *loader.File   // Helper for single-file content, or first file of archive
 	// Cache for archive structure
-	Blueprint interface{} // type *unpack.ArchiveBlueprint (interface to avoid strict cycle, though safe)
+	Blueprint   interface{} // type *unpack.ArchiveBlueprint (interface to avoid strict cycle, though safe)
 	CreatedAt   time.Time
 	LastAccess  time.Time
 	ActivePlays int32
 	Clients     map[string]time.Time // IP -> Connected time
 	mu          sync.Mutex
+
+	// Deferred download fields
+	NZBURL      string
+	IndexerName string
+	ItemTitle   string          // Used for logging
+	Indexer     indexer.Indexer // Interface to download
+	GUID        string          // External ID for reporting
 }
 
 // Manager manages active streaming sessions
@@ -50,18 +60,18 @@ func NewManager(pools []*nntp.ClientPool, ttl time.Duration) *Manager {
 		estimator: loader.NewSegmentSizeEstimator(),
 		ttl:       ttl,
 	}
-	
+
 	// Start cleanup goroutine
 	go m.cleanupLoop()
-	
+
 	return m
 }
 
 // CreateSession creates a new session for the given NZB
-func (m *Manager) CreateSession(sessionID string, nzbData *nzb.NZB) (*Session, error) {
+func (m *Manager) CreateSession(sessionID string, nzbData *nzb.NZB, guid string) (*Session, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	
+
 	// Check if session already exists
 	if existing, ok := m.sessions[sessionID]; ok {
 		existing.mu.Lock()
@@ -69,23 +79,23 @@ func (m *Manager) CreateSession(sessionID string, nzbData *nzb.NZB) (*Session, e
 		existing.mu.Unlock()
 		return existing, nil
 	}
-	
+
 	// Get content files from NZB
 	contentFiles := nzbData.GetContentFiles()
 	if len(contentFiles) == 0 {
 		return nil, fmt.Errorf("no content files found in NZB")
 	}
-	
+
 	// Create loader.File for each content file
 	var loaderFiles []*loader.File
 	for _, info := range contentFiles {
 		lf := loader.NewFile(info.File, m.pools, m.estimator)
 		loaderFiles = append(loaderFiles, lf)
 	}
-	
+
 	// Helper: File is the first one (often sufficient for simple check or single file)
 	firstFile := loaderFiles[0]
-	
+
 	session := &Session{
 		ID:         sessionID,
 		NZB:        nzbData,
@@ -94,27 +104,109 @@ func (m *Manager) CreateSession(sessionID string, nzbData *nzb.NZB) (*Session, e
 		CreatedAt:  time.Now(),
 		LastAccess: time.Now(),
 		Clients:    make(map[string]time.Time),
+		GUID:       guid,
 	}
-	
+
 	m.sessions[sessionID] = session
 	return session, nil
+}
+
+// CreateDeferredSession creates a session placeholder without downloading the NZB yet
+func (m *Manager) CreateDeferredSession(sessionID, nzbURL, indexerName, itemTitle string, idx indexer.Indexer, guid string) (*Session, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Check if session already exists
+	if existing, ok := m.sessions[sessionID]; ok {
+		existing.mu.Lock()
+		existing.LastAccess = time.Now()
+		existing.mu.Unlock()
+		return existing, nil
+	}
+
+	session := &Session{
+		ID:          sessionID,
+		NZB:         nil, // Deferred
+		CreatedAt:   time.Now(),
+		LastAccess:  time.Now(),
+		Clients:     make(map[string]time.Time),
+		// Deferred fields
+		NZBURL:      nzbURL,
+		IndexerName: indexerName,
+		ItemTitle:   itemTitle,
+		Indexer:     idx,
+		GUID:        guid,
+	}
+
+	m.sessions[sessionID] = session
+	return session, nil
+}
+
+// GetOrDownloadNZB returns the NZB, downloading it if necessary
+func (s *Session) GetOrDownloadNZB(manager *Manager) (*nzb.NZB, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.NZB != nil {
+		return s.NZB, nil
+	}
+
+	// Double-check if we have deferred info
+	if s.NZBURL == "" || s.Indexer == nil {
+		return nil, fmt.Errorf("session has no NZB and no deferred download info")
+	}
+
+	// Download it now!
+	// We use the stored Indexer interface
+	logger.Info("Lazy Downloading NZB...", "title", s.ItemTitle, "indexer", s.IndexerName)
+	
+	data, err := s.Indexer.DownloadNZB(s.NZBURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to lazy download NZB: %w", err)
+	}
+
+	// Parse it
+	parsedNZB, err := nzb.Parse(bytes.NewReader(data))
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse lazy downloaded NZB: %w", err)
+	}
+
+	// Initialize files (same logic as CreateSession)
+	contentFiles := parsedNZB.GetContentFiles()
+	if len(contentFiles) == 0 {
+		return nil, fmt.Errorf("no content files found in lazy NZB")
+	}
+
+	// We need access to manager's pools/estimator to create loader files
+	// We passed manager as arg to avoid storing it in Session (circular ref or just clean design)
+	var loaderFiles []*loader.File
+	for _, info := range contentFiles {
+		lf := loader.NewFile(info.File, manager.pools, manager.estimator)
+		loaderFiles = append(loaderFiles, lf)
+	}
+
+	s.NZB = parsedNZB
+	s.Files = loaderFiles
+	s.File = loaderFiles[0]
+	
+	return s.NZB, nil
 }
 
 // GetSession retrieves an existing session
 func (m *Manager) GetSession(sessionID string) (*Session, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	
+
 	session, ok := m.sessions[sessionID]
 	if !ok {
 		return nil, fmt.Errorf("session not found: %s", sessionID)
 	}
-	
+
 	// Update last access time
 	session.mu.Lock()
 	session.LastAccess = time.Now()
 	session.mu.Unlock()
-	
+
 	return session, nil
 }
 
@@ -122,7 +214,7 @@ func (m *Manager) GetSession(sessionID string) (*Session, error) {
 func (m *Manager) DeleteSession(sessionID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	
+
 	delete(m.sessions, sessionID)
 }
 
@@ -130,7 +222,7 @@ func (m *Manager) DeleteSession(sessionID string) {
 func (m *Manager) cleanupLoop() {
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
-	
+
 	for range ticker.C {
 		m.cleanup()
 	}
@@ -140,7 +232,7 @@ func (m *Manager) cleanupLoop() {
 func (m *Manager) cleanup() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	
+
 	now := time.Now()
 	for id, session := range m.sessions {
 		session.mu.Lock()
@@ -155,7 +247,7 @@ func (m *Manager) cleanup() {
 func (m *Manager) Stats() map[string]interface{} {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	
+
 	return map[string]interface{}{
 		"active_sessions": len(m.sessions),
 		"ttl_minutes":     m.ttl.Minutes(),
@@ -173,10 +265,10 @@ func (m *Manager) Count() int {
 func (m *Manager) CountActive() int {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	
+
 	count := 0
 	for _, s := range m.sessions {
-		// We can read ActivePlays without session lock if we accept slight race, 
+		// We can read ActivePlays without session lock if we accept slight race,
 		// but better to allow atomic access or just lock.
 		// Since we use atomic for updates (or lock), let's just lock for correctness.
 		s.mu.Lock()
@@ -240,7 +332,7 @@ func (m *Manager) GetActiveSessions() []ActiveSessionInfo {
 	var result []ActiveSessionInfo
 	for _, s := range m.sessions {
 		s.mu.Lock()
-		
+
 		// 1. Purge IPs that haven't been seen for 60 seconds
 		for ip, lastSeen := range s.Clients {
 			if time.Since(lastSeen) > 60*time.Second {
@@ -249,7 +341,7 @@ func (m *Manager) GetActiveSessions() []ActiveSessionInfo {
 		}
 
 		// 2. A session is active if it has clients.
-		// Search availability checks create sessions but don't register clients, 
+		// Search availability checks create sessions but don't register clients,
 		// so they won't appear as active streams.
 		isActive := len(s.Clients) > 0
 
@@ -258,7 +350,7 @@ func (m *Manager) GetActiveSessions() []ActiveSessionInfo {
 			for ip := range s.Clients {
 				clients = append(clients, ip)
 			}
-			
+
 			title := "Unknown"
 			if s.NZB != nil && len(s.NZB.Files) > 0 {
 				parts := strings.Split(nzb.ExtractFilename(s.NZB.Files[0].Subject), ".")
@@ -280,6 +372,7 @@ func (m *Manager) GetActiveSessions() []ActiveSessionInfo {
 	}
 	return result
 }
+
 // UpdatePools swaps the provider pools at runtime
 func (m *Manager) UpdatePools(pools []*nntp.ClientPool) {
 	m.mu.Lock()

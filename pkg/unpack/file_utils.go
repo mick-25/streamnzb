@@ -30,7 +30,7 @@ func ExtractFilename(subject string) string {
 
 	// 2. Clean common NZB suffixes
 	clean := strings.TrimSpace(subject)
-	
+
 	// Remove trailing (x/y) or [x/y]
 	if idx := strings.LastIndex(clean, " ("); idx != -1 {
 		// Verify it looks like (1/2)
@@ -39,7 +39,7 @@ func ExtractFilename(subject string) string {
 			clean = strings.TrimSpace(clean[:idx])
 		}
 	}
-	
+
 	// Remove trailing " yEnc"
 	if strings.HasSuffix(clean, " yEnc") {
 		clean = strings.TrimSuffix(clean, " yEnc")
@@ -52,20 +52,20 @@ func ExtractFilename(subject string) string {
 // IsVideoFile checks if the filename has a common video extension.
 func IsVideoFile(name string) bool {
 	lower := strings.ToLower(name)
-	return strings.HasSuffix(lower, ExtMkv) || 
-	       strings.HasSuffix(lower, ExtMp4) || 
-	       strings.HasSuffix(lower, ExtAvi)
+	return strings.HasSuffix(lower, ExtMkv) ||
+		strings.HasSuffix(lower, ExtMp4) ||
+		strings.HasSuffix(lower, ExtAvi)
 }
 
 // IsArchiveFile checks if the filename involves an archive (RAR, Zip, 7z, ISO).
 func IsArchiveFile(name string) bool {
 	lower := strings.ToLower(name)
-	return strings.HasSuffix(lower, ExtRar) || 
-	       strings.HasSuffix(lower, ExtZip) || 
-	       strings.HasSuffix(lower, Ext7z) || 
-	       strings.HasSuffix(lower, ExtIso) ||
-	       IsRarPart(lower) ||
-		   IsSplitArchivePart(lower)
+	return strings.HasSuffix(lower, ExtRar) ||
+		strings.HasSuffix(lower, ExtZip) ||
+		strings.HasSuffix(lower, Ext7z) ||
+		strings.HasSuffix(lower, ExtIso) ||
+		IsRarPart(lower) ||
+		IsSplitArchivePart(lower)
 }
 
 // IsSampleFile checks if the filename looks like a sample/trailer.
@@ -94,21 +94,21 @@ func IsRarPart(name string) bool {
 // IsMiddleRarVolume checks if a RAR file is a middle volume (not the first)
 func IsMiddleRarVolume(name string) bool {
 	name = strings.ToLower(name)
-	
+
 	// Match .partXX.rar format
 	if strings.Contains(name, ".part") && strings.HasSuffix(name, ExtRar) {
 		// First volumes: .part1.rar, .part01.rar, .part001.rar
 		// Note: we check for "part1.", "part01.", "part001."
 		// Because the dot after part number is important (part10 vs part1)
-		if strings.Contains(name, ".part1.rar") || 
-		   strings.Contains(name, ".part01.rar") || 
-		   strings.Contains(name, ".part001.rar") {
+		if strings.Contains(name, ".part1.rar") ||
+			strings.Contains(name, ".part01.rar") ||
+			strings.Contains(name, ".part001.rar") {
 			return false
 		}
 		// Any other .partXX.rar is a middle volume
 		return true
 	}
-	
+
 	// Match .r01, .r02, etc. (but not .r00 or .rar)
 	if len(name) >= 4 && name[len(name)-4:len(name)-2] == ".r" {
 		lastTwo := name[len(name)-2:]
@@ -117,7 +117,7 @@ func IsMiddleRarVolume(name string) bool {
 			return true
 		}
 	}
-	
+
 	return false
 }
 
@@ -130,10 +130,10 @@ func IsSplitArchivePart(name string) bool {
 	if len(name) < 4 {
 		return false
 	}
-	
+
 	lower := strings.ToLower(name)
 	ext := lower[len(lower)-4:]
-	
+
 	// Check .zNN (Zip/7z split)
 	if ext[0] == '.' && ext[1] == 'z' && isDigit(ext[2]) && isDigit(ext[3]) {
 		return true
@@ -143,6 +143,6 @@ func IsSplitArchivePart(name string) bool {
 	if ext[0] == '.' && isDigit(ext[1]) && isDigit(ext[2]) && isDigit(ext[3]) {
 		return true
 	}
-	
+
 	return false
 }

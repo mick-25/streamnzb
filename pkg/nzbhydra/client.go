@@ -36,13 +36,13 @@ func (c *Client) Ping() error {
 		return err
 	}
 	defer resp.Body.Close()
-	
+
 	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnauthorized {
 		return fmt.Errorf("NZBHydra2 error: invalid API key")
 	}
 
 	body, _ := io.ReadAll(resp.Body)
-	
+
 	// Check if the response is an XML error
 	var apiErr APIError
 	if err := xml.Unmarshal(body, &apiErr); err == nil && apiErr.Description != "" {
@@ -67,7 +67,7 @@ func NewClient(baseURL, apiKey string) (*Client, error) {
 		MaxConnsPerHost:     100,
 		IdleConnTimeout:     90 * time.Second,
 	}
-	
+
 	c := &Client{
 		baseURL: baseURL,
 		apiKey:  apiKey,
@@ -95,7 +95,7 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 	params := url.Values{}
 	params.Set("apikey", c.apiKey)
 	params.Set("o", "xml")
-	
+
 	// Use appropriate search type based on category
 	// 2000 = Movies -> use t=movie
 	// 5000 = TV -> use t=tvsearch
@@ -107,7 +107,7 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 	} else {
 		params.Set("t", "search")
 	}
-	
+
 	if req.Query != "" {
 		params.Set("q", req.Query)
 	}
@@ -130,7 +130,7 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 	} else {
 		params.Set("limit", "10") // Default limit
 	}
-	
+
 	// Add season/episode for TV searches
 	if req.Season != "" {
 		params.Set("season", req.Season)
@@ -138,29 +138,29 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 	if req.Episode != "" {
 		params.Set("ep", req.Episode)
 	}
-	
+
 	apiURL := fmt.Sprintf("%s/api?%s", c.baseURL, params.Encode())
-	
+
 	// Debug: Log the actual API URL being called
 	// Debug: Log the actual API URL being called
 	logger.Debug("NZBHydra2 API URL", "url", apiURL)
-	
+
 	resp, err := c.client.Get(apiURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query NZBHydra2: %w", err)
 	}
 	defer resp.Body.Close()
-	
+
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("NZBHydra2 returned status %d: %s", resp.StatusCode, string(body))
 	}
-	
+
 	var result indexer.SearchResponse
 	if err := xml.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("failed to parse NZBHydra2 response: %w", err)
 	}
-	
+
 	// Populate SourceIndexer for each item
 	for i := range result.Channel.Items {
 		result.Channel.Items[i].SourceIndexer = c
@@ -184,15 +184,15 @@ func (c *Client) DownloadNZB(nzbURL string) ([]byte, error) {
 		return nil, fmt.Errorf("failed to download NZB: %w", err)
 	}
 	defer resp.Body.Close()
-	
+
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("NZB download returned status %d", resp.StatusCode)
 	}
-	
+
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read NZB data: %w", err)
 	}
-	
+
 	return data, nil
 }

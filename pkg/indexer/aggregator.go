@@ -69,7 +69,7 @@ func (a *Aggregator) Search(req SearchRequest) (*SearchResponse, error) {
 		wg.Add(1)
 		go func(indexer Indexer) {
 			defer wg.Done()
-			
+
 			resp, err := indexer.Search(req)
 			if err != nil {
 				// Log error but don't fail entire search?
@@ -78,7 +78,7 @@ func (a *Aggregator) Search(req SearchRequest) (*SearchResponse, error) {
 				resultsChan <- []Item{}
 				return
 			}
-			
+
 			if resp != nil {
 				resultsChan <- resp.Channel.Items
 			}
@@ -99,24 +99,24 @@ func (a *Aggregator) Search(req SearchRequest) (*SearchResponse, error) {
 	// Simple map-based dedup
 	seen := make(map[string]bool)
 	uniqueItems := []Item{}
-	
+
 	for _, item := range allItems {
 		key := item.GUID
 		if key == "" {
 			key = item.Link
 		}
-		
+
 		if !seen[key] {
 			seen[key] = true
 			uniqueItems = append(uniqueItems, item)
 		}
 	}
-	
+
 	// Sort by size descending (usually preferred) or published date?
 	// Let's keep original order (roughly) but maybe size sort helps
 	// Stremio addon usually sorts by quality/size later anyway.
 	// Let's just return unique items.
-	
+
 	// Sort by size descending as a default heuristic
 	sort.Slice(uniqueItems, func(i, j int) bool {
 		return uniqueItems[i].Size > uniqueItems[j].Size

@@ -20,7 +20,7 @@ type File struct {
 	totalSize int64
 	detected  bool
 	mu        sync.Mutex
-	
+
 	// Single-segment cache to optimized scattered reads (e.g. header parsing)
 	lastSegIndex int
 	lastSegData  []byte
@@ -53,7 +53,7 @@ func NewFile(f *nzb.File, pools []*nntp.ClientPool, estimator *SegmentSizeEstima
 		totalSize:    offset,
 		lastSegIndex: -1,
 	}
-	
+
 	return fl
 }
 
@@ -64,7 +64,7 @@ func (f *File) ensureSegmentMap() error {
 		return nil
 	}
 	f.mu.Unlock()
-	
+
 	return f.detectSegmentSize()
 }
 
@@ -97,21 +97,21 @@ func (f *File) detectSegmentSize() error {
 	if err != nil {
 		return err
 	}
-	
+
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	
+
 	if f.detected {
 		return nil
 	}
-	
+
 	if len(data) == 0 {
 		return errors.New("empty first segment")
 	}
-	
+
 	segSize := int64(len(data))
 	logger.Debug("Detected segment size", "name", f.Name(), "size", segSize, "nzb_size", f.segments[0].Bytes)
-	
+
 	if f.estimator != nil {
 		f.estimator.Set(f.segments[0].Bytes, segSize)
 	}
@@ -124,7 +124,7 @@ func (f *File) applySegmentSize(segSize int64) {
 	var offset int64
 	for i := range f.segments {
 		f.segments[i].StartOffset = offset
-		
+
 		if i < len(f.segments)-1 {
 			f.segments[i].EndOffset = offset + segSize
 			offset += segSize
@@ -135,15 +135,15 @@ func (f *File) applySegmentSize(segSize int64) {
 			offset += estSize
 		}
 	}
-	
+
 	f.totalSize = offset
 	f.detected = true
 	logger.Debug("Recalculated total decoded size", "size", f.totalSize)
 }
 
 func (f *File) Size() int64 {
-    f.mu.Lock()
-    defer f.mu.Unlock()
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	return f.totalSize
 }
 
@@ -173,9 +173,9 @@ func (f *File) ReadAt(p []byte, off int64) (n int, err error) {
 
 	for i := startSegIdx; i < len(f.segments) && totalRead < len(p); i++ {
 		seg := f.segments[i]
-		
+
 		segInternalOffset := currentOffset - seg.StartOffset
-		
+
 		// Use smart getter
 		data, err := f.getSegmentData(i)
 		if err != nil {
@@ -185,7 +185,7 @@ func (f *File) ReadAt(p []byte, off int64) (n int, err error) {
 
 		if segInternalOffset >= int64(len(data)) {
 			// Should not happen ideally
-			continue 
+			continue
 		}
 
 		copied := copy(p[totalRead:], data[segInternalOffset:])
@@ -211,7 +211,7 @@ func (f *File) getSegmentData(index int) ([]byte, error) {
 
 	// Not in cache, fetch it
 	// We release lock during network IO to allow concurrency on other methods
-	
+
 	// TODO: Propagate context from ReadAt if available? Default to Background for now.
 	data, err := f.DownloadSegment(context.Background(), index)
 	if err != nil {
@@ -324,32 +324,32 @@ func (f *File) DownloadSegment(ctx context.Context, index int) ([]byte, error) {
 			lastErr = err
 			continue
 		}
-		
+
 		// Success!
 		pool.Put(client)
 		return frame.Data, nil
 	}
 
-
-	
 	// Error handling: If all providers fail, ZERO-FILL to keep stream alive
 	logger.Debug("Segment failed on all providers, zero-filling", "index", index, "err", lastErr)
-	
+
 	// Maintain stream alignment by returning exactly what matches the current offsets
 	size := int(seg.EndOffset - seg.StartOffset)
-	if size < 0 { size = 0 } // Safety check
-	
+	if size < 0 {
+		size = 0
+	} // Safety check
+
 	return make([]byte, size), nil
 }
 
 func (f *File) Name() string {
 	// Simple extraction: look for "filename.ext" in subject?
-	// Often it's in quotes or just standard part of subject. 
+	// Often it's in quotes or just standard part of subject.
 	// For prototype, let's assume standard format or just return Subject.
-    // Better: extract the string ending in .rar or .rXX or .mkv
-    
-    // Quick hack:
-    return f.nzbFile.Subject 
+	// Better: extract the string ending in .rar or .rXX or .mkv
+
+	// Quick hack:
+	return f.nzbFile.Subject
 }
 
 // OpenStream creates a new BufferedStream starting at offset 0 (or Seek later).
@@ -413,13 +413,13 @@ func NewSegmentSizeEstimator() *SegmentSizeEstimator {
 func (e *SegmentSizeEstimator) Get(encodedSize int64) (int64, bool) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-	
+
 	for _, entry := range e.entries {
 		diff := entry.encoded - encodedSize
 		if diff < 0 {
 			diff = -diff
 		}
-		
+
 		// If encoded size is within 4KB (arbitrary tolerance for yEnc overhead variation)
 		// We assume it maps to the same decoded size.
 		// Standard segment sizes are usually far apart (384KB, 512KB, 768KB, etc.)
@@ -433,7 +433,7 @@ func (e *SegmentSizeEstimator) Get(encodedSize int64) (int64, bool) {
 func (e *SegmentSizeEstimator) Set(encodedSize, decodedSize int64) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	
+
 	// Check if already covered
 	for _, entry := range e.entries {
 		diff := entry.encoded - encodedSize
@@ -445,7 +445,7 @@ func (e *SegmentSizeEstimator) Set(encodedSize, decodedSize int64) {
 			return
 		}
 	}
-	
+
 	e.entries = append(e.entries, sizeEntry{
 		encoded: encodedSize,
 		decoded: decodedSize,

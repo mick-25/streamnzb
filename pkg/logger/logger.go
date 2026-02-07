@@ -30,7 +30,7 @@ func (h *BroadcastHandler) Handle(ctx context.Context, r slog.Record) error {
 			msg += fmt.Sprintf(" %s=%v", a.Key, a.Value)
 			return true
 		})
-		
+
 		select {
 		case h.ch <- msg:
 		default:
@@ -45,11 +45,11 @@ var broadcastCh chan<- string
 // SetBroadcast sets a channel to receive log messages
 func SetBroadcast(ch chan<- string) {
 	broadcastCh = ch
-	// Re-init listener is hard without storing current level, 
-	// so we rely on the custom handler checking the global var or 
+	// Re-init listener is hard without storing current level,
+	// so we rely on the custom handler checking the global var or
 	// valid re-init.
 	// Actually, easier: modify Init to wrap the handler if broadcastCh is set.
-	// But Init creates a NEW logger. 
+	// But Init creates a NEW logger.
 }
 
 // Init initializes the global logger
@@ -71,13 +71,13 @@ func Init(levelStr string) {
 	}
 
 	baseHandler := slog.NewTextHandler(os.Stdout, opts)
-	
+
 	// Always wrap with our broadcaster
 	// We use the global broadcastCh so we can set it anytime
 	handler := &GlobalBroadcastHandler{
 		Handler: baseHandler,
 	}
-	
+
 	Log = slog.New(handler)
 	slog.SetDefault(Log)
 }
@@ -88,14 +88,14 @@ type GlobalBroadcastHandler struct {
 }
 
 var (
-	history   []string
-	historyMu sync.RWMutex
+	history    []string
+	historyMu  sync.RWMutex
 	maxHistory = 500
 )
 
 func (h *GlobalBroadcastHandler) Handle(ctx context.Context, r slog.Record) error {
 	err := h.Handler.Handle(ctx, r)
-	
+
 	// Format message
 	msg := fmt.Sprintf("time=%s level=%s msg=%q", r.Time.Format("2006-01-02T15:04:05.000Z07:00"), r.Level, r.Message)
 	r.Attrs(func(a slog.Attr) bool {

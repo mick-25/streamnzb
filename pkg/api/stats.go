@@ -71,7 +71,7 @@ func (s *Server) collectStats() SystemStats {
 	s.mu.RLock() // Lock for proxyServer access
 	if s.proxyServer != nil {
 		proxySessions := s.proxyServer.GetSessions()
-		
+
 		// Group by Client IP
 		type proxyGroup struct {
 			count int
@@ -79,7 +79,7 @@ func (s *Server) collectStats() SystemStats {
 			ip    string
 		}
 		groups := make(map[string]*proxyGroup)
-		
+
 		for _, ps := range proxySessions {
 			// Extract IP (naive strip port if present, or use as is)
 			// Assuming remote_addr is "ip:port"
@@ -87,7 +87,7 @@ func (s *Server) collectStats() SystemStats {
 			if host, _, err := net.SplitHostPort(ip); err == nil {
 				ip = host
 			}
-			
+
 			if _, exists := groups[ip]; !exists {
 				groups[ip] = &proxyGroup{ip: ip}
 			}
@@ -98,14 +98,14 @@ func (s *Server) collectStats() SystemStats {
 				g.group = ps.CurrentGroup
 			}
 		}
-		
+
 		// Convert groups to ActiveSessionInfo
 		for ip, g := range groups {
 			title := fmt.Sprintf("Proxy Client (%d conns)", g.count)
 			if g.group != "" {
 				title = fmt.Sprintf("Proxy: %s (%d conns)", g.group, g.count)
 			}
-			
+
 			stats.ActiveSessions = append(stats.ActiveSessions, session.ActiveSessionInfo{
 				ID:      fmt.Sprintf("proxy-%s", ip),
 				Title:   title,

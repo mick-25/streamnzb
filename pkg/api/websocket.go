@@ -61,17 +61,17 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	// Notify current stats and config immediately
 	// We push to the send channel instead of writing directly to avoid concurrency issues
-	// But since this is the only goroutine at this point (before read/write loops), direct write is risky if we start the read loop early? 
+	// But since this is the only goroutine at this point (before read/write loops), direct write is risky if we start the read loop early?
 	// No, we haven't started write loop yet.
 	// Actually, let's just push to channel.
 	go func() {
 		stats := s.collectStats()
 		payload, _ := json.Marshal(stats)
 		client.send <- WSMessage{Type: "stats", Payload: payload}
-		
+
 		cfgPayload, _ := json.Marshal(s.config)
 		client.send <- WSMessage{Type: "config", Payload: cfgPayload}
-		
+
 		// Send log history
 		s.sendLogHistory(client)
 	}()
@@ -86,7 +86,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			// We need to signal main function to exit.
 			// Best way: Read loop is a separate goroutine. Main function is Write loop.
 		}()
-		
+
 		for {
 			var msg WSMessage
 			if err := conn.ReadJSON(&msg); err != nil {
@@ -187,7 +187,7 @@ func (s *Server) handleSaveConfigWS(conn *websocket.Conn, client *Client, payloa
 	tmdbKey := s.config.TMDBAPIKey
 
 	*s.config = newCfg
-	
+
 	s.config.LoadedPath = loadedPath
 	s.config.AvailNZBURL = availURL
 	s.config.AvailNZBAPIKey = availKey
@@ -208,13 +208,13 @@ func (s *Server) handleSaveConfigWS(conn *websocket.Conn, client *Client, payloa
 	go func() {
 		// Wait a bit for the save to settle and response to be sent
 		time.Sleep(100 * time.Millisecond)
-		
+
 		comp, err := initialization.BuildComponents(s.config)
 		if err != nil {
 			log.Printf("[Reload] Failed to build components: %v", err)
 			return
 		}
-		
+
 		// Build dependencies for Stremio Server reload
 		validator := validation.NewChecker(comp.ProviderPools, 24*time.Hour, 10, 5)
 		triageService := triage.NewService(5)

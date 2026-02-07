@@ -3,6 +3,7 @@ package stremio
 import (
 	"bytes"
 	"context"
+	"crypto/md5"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -43,10 +44,10 @@ type Server struct {
 }
 
 // NewServer creates a new Stremio addon server
-func NewServer(baseURL string, port int, indexer indexer.Indexer, validator *validation.Checker, 
-	sessionMgr *session.Manager, triageService *triage.Service, availClient *availnzb.Client, 
+func NewServer(baseURL string, port int, indexer indexer.Indexer, validator *validation.Checker,
+	sessionMgr *session.Manager, triageService *triage.Service, availClient *availnzb.Client,
 	tmdbClient *tmdb.Client, securityToken string) (*Server, error) {
-	
+
 	actualBaseURL := baseURL
 	if securityToken != "" {
 		if !strings.HasSuffix(actualBaseURL, "/") {
@@ -107,24 +108,24 @@ func (s *Server) SetupRoutes(mux *http.ServeMux) {
 		s.mu.RUnlock()
 
 		path := r.URL.Path
-		
+
 		if securityToken != "" {
 			// Path format: /{token}/manifest.json or /{token}/stream/...
 			trimmedPath := strings.TrimPrefix(path, "/")
 			parts := strings.SplitN(trimmedPath, "/", 2)
-			
+
 			if len(parts) < 1 || parts[0] != securityToken {
 				logger.Error("Unauthorized request", "path", path, "remote", r.RemoteAddr)
 				http.Error(w, "Unauthorized", http.StatusUnauthorized)
 				return
 			}
-			
+
 			// Ensure trailing slash for root token path to support relative assets
 			if len(parts) == 1 && !strings.HasSuffix(path, "/") {
 				http.Redirect(w, r, path+"/", http.StatusTemporaryRedirect)
 				return
 			}
-			
+
 			// Strip token from path for internal routing
 			if len(parts) > 1 {
 				path = "/" + parts[1]
@@ -170,10 +171,10 @@ func (s *Server) SetupRoutes(mux *http.ServeMux) {
 // handleManifest serves the addon manifest
 func (s *Server) handleManifest(w http.ResponseWriter, r *http.Request) {
 	logger.Debug("Manifest request", "remote", r.RemoteAddr)
-	
+
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
-	
+
 	s.mu.RLock()
 	manifest := s.manifest
 	s.mu.RUnlock()
@@ -183,7 +184,7 @@ func (s *Server) handleManifest(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to generate manifest", http.StatusInternalServerError)
 		return
 	}
-	
+
 	w.Write(data)
 }
 
@@ -192,39 +193,39 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	// Parse URL: /stream/{type}/{id}.json
 	path := strings.TrimPrefix(r.URL.Path, "/stream/")
 	path = strings.TrimSuffix(path, ".json")
-	
+
 	parts := strings.Split(path, "/")
 	if len(parts) < 2 {
 		http.Error(w, "Invalid stream URL", http.StatusBadRequest)
 		return
 	}
-	
+
 	contentType := parts[0] // "movie" or "series"
 	id := parts[1]          // IMDb ID (tt1234567) or TMDB ID
-	
+
 	logger.Info("Stream request", "type", contentType, "id", id)
-	
+
 	// Search NZBHydra2
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
-	
+
 	streams, err := s.searchAndValidate(ctx, contentType, id)
 	if err != nil {
 		logger.Error("Error searching for streams", "err", err)
 		streams = []Stream{} // Return empty list on error
 	}
-	
+
 	response := StreamResponse{
 		Streams: streams,
 	}
-	
+
 	// Debug: Log the response
 	responseJSON, _ := json.MarshalIndent(response, "", "  ")
 	logger.Debug("Sending stream response", "json", string(responseJSON))
-	
+
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
-	
+
 	json.NewEncoder(w).Encode(response)
 }
 
@@ -233,7 +234,7 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string) 
 	req := indexer.SearchRequest{
 		Limit: 1000,
 	}
-	
+
 	// For series, extract IMDb/TMDB ID and season/episode
 	searchID := id
 	if contentType == "series" && strings.Contains(id, ":") {
@@ -255,19 +256,19 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string) 
 		// Handle movie "tmdb:12345"
 		searchID = strings.TrimPrefix(id, "tmdb:")
 	}
-	
+
 	if strings.HasPrefix(searchID, "tt") {
 		req.IMDbID = searchID
 	} else {
 		req.TMDBID = searchID
 	}
-	
+
 	// Set category based on content type
 	if contentType == "movie" {
 		req.Cat = "2000" // Movies category
 	} else {
 		req.Cat = "5000" // TV category
-		
+
 		// Attempt to resolve TVDB ID using TMDB (if available) for better indexer results
 		// Only relevant if we have an IMDb ID and no specific TVDB ID yet
 		if req.IMDbID != "" && req.TVDBID == "" && s.tmdbClient != nil {
@@ -281,18 +282,18 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string) 
 			}
 		}
 	}
-	
+
 	// Debug: Log search parameters
 	logger.Debug("Indexer search", "imdb", req.IMDbID, "tvdb", req.TVDBID, "cat", req.Cat, "season", req.Season, "ep", req.Episode)
-	
+
 	// Search Indexer
 	searchResp, err := s.indexer.Search(req)
 	if err != nil {
 		return nil, fmt.Errorf("indexer search failed: %w", err)
 	}
-	
+
 	logger.Debug("Found NZB results", "count", len(searchResp.Channel.Items))
-	
+
 	// Filter results using Triage Service
 	candidates := s.triageService.Filter(searchResp.Channel.Items)
 	logger.Debug("Selected candidates after triage", "count", len(candidates))
@@ -303,23 +304,27 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string) 
 		err    error
 		group  string
 	}
-	
+
 	resultChan := make(chan nzbResult, len(candidates))
 	var wg sync.WaitGroup
 
 	// Limit concurrent validations (Concurrent Worker Pool)
-	// Reduced from 20 to 5 to verify candidates sequentially/lazily
-	const maxWorkers = 5
-	sem := make(chan struct{}, maxWorkers)
+	// We use "Lanes" to ensure one group doesn't starve others.
+	// Total concurrency = 1+1+1+1 = 4
+	semaphores := map[string]chan struct{}{
+		"4k":    make(chan struct{}, 1),
+		"1080p": make(chan struct{}, 1),
+		"720p":  make(chan struct{}, 1),
+		"sd":    make(chan struct{}, 1),
+	}
 
 	// Quota Tracker (Thread-Safe)
 	// Allows workers to skip candidates if we already have enough for that group
-	// Quota Tracker (Thread-Safe)
 	var quotaMu sync.Mutex
 	quotaCounts := make(map[string]int)      // Successful validations
 	processingCounts := make(map[string]int) // Currently in-progress validations
 	const quotaPerGroup = 2
-	
+
 	// Helper to check if we still need more of this group
 	// Returns true if (success + processing) < quota
 	needsMore := func(group string) bool {
@@ -363,7 +368,14 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string) 
 		wg.Add(1)
 		go func(cand triage.Candidate) {
 			defer wg.Done()
-			
+
+			// Select correct semaphore lane
+			sem, ok := semaphores[cand.Group]
+			if !ok {
+				// Fallback for unknown groups (shouldn't happen with current parser)
+				sem = semaphores["sd"]
+			}
+
 			// Acquire semaphore (respect context)
 			select {
 			case sem <- struct{}{}:
@@ -371,83 +383,160 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string) 
 			case <-ctx.Done():
 				return // Abort if cancelled while waiting
 			}
-			
+
 			// Double-check: Do we still need this group?
 			// (Another worker might have finished while we were waiting)
 			if !needsMore(cand.Group) {
 				return
 			}
-			
+
 			// Mark as processing to block other workers from picking up this group unnecessarily
 			startProcessing(cand.Group)
 			defer endProcessing(cand.Group) // Ensure we decrement even on panic/return
-			
+
 			// Use candidate's result item
 			item := cand.Result
-			
-			// Download NZB
-			var nzbData []byte
-			var err error
 
+			// AvailNZB: Pre-Download Check
+			// Check if we already know this NZB is good/bad based on previous reports
+			var indexerName string
 			if item.SourceIndexer != nil {
-				// Use the specific indexer that found this item (Load Balancing)
-				nzbData, err = item.SourceIndexer.DownloadNZB(item.Link)
-			} else {
-				// Fallback to default indexer/aggregator
-				nzbData, err = s.indexer.DownloadNZB(item.Link)
-			}
-
-			if err != nil {
-				logger.Error("Failed to download NZB", "title", item.Title, "err", err)
-				// Don't report error to channel to keep it clean, just return
-				return
-			}
-			
-			// Parse NZB
-			nzbParsed, err := nzb.Parse(bytes.NewReader(nzbData))
-			if err != nil {
-				logger.Error("Failed to parse NZB", "title", item.Title, "err", err)
-				return
-			}
-			
-			// Validate availability via HEAD check
-			// Pass cancelable context
-			validationResults := s.validator.ValidateNZB(ctx, nzbParsed)
-			if len(validationResults) == 0 {
-				return
-			}
-			
-			// Find best provider
-			bestResult := validation.GetBestProvider(validationResults)
-			if bestResult == nil {
-				return
-			}
-
-			// Async report to AvailNZB
-			go func() {
-				nzbID := nzbParsed.CalculateID()
-				if nzbID != "" {
-					_ = s.availClient.ReportAvailability(nzbID, bestResult.Host, true)
+				indexerName = item.SourceIndexer.Name()
+				// Prowlarr indexers are often named "Prowlarr: IndexerName"
+				// We want just "IndexerName" for AvailNZB
+				if strings.HasPrefix(indexerName, "Prowlarr:") {
+					indexerName = strings.TrimSpace(strings.TrimPrefix(indexerName, "Prowlarr:"))
 				}
-			}()
-
-			// Create session ID from NZB hash
-			sessionID := nzbParsed.Hash()
-			
-			// Store NZB in session manager
-			_, err = s.sessionManager.CreateSession(sessionID, nzbParsed)
-			if err != nil {
-				return
 			}
+
+			// Flag to skip full validation if we trust the pre-check
+			skipValidation := false
+
+			// Get configured providers
+			providerHosts := s.validator.GetProviderHosts()
 			
+			logger.Info("AvailNZB: Pre-check", "title", item.Title, "guid", item.GUID)
+			// If we have an indexer name and GUID, check crowdsourced availability
+			if indexerName != "" && item.GUID != "" && len(providerHosts) > 0 {
+				nzbID, isHealthy, lastUpdated, provider, err := s.availClient.CheckPreDownload(indexerName, item.GUID, providerHosts)
+				if err == nil && nzbID != "" {
+					if isHealthy {
+						logger.Info("AvailNZB: Pre-check PASSED (Crowdsourced)", "title", item.Title, "guid", item.GUID, "provider", provider)
+						// OPTIMIZATION: Skip validation entirely if healthy on one of OUR providers
+						// We proceed to session creation immediately, effectively trusting the crowdsourced data
+						skipValidation = true
+					} else {
+						// Logic: If unhealthy, check last_updated
+						if time.Since(lastUpdated) > 24*time.Hour {
+							logger.Info("AvailNZB: Pre-check FAILED but OLD (Retrying)", "title", item.Title, "guid", item.GUID, "age", time.Since(lastUpdated))
+							// Retry: Continue to standard validation (don't return)
+						} else {
+							logger.Warn("AvailNZB: Pre-check FAILED (Skipping)", "title", item.Title, "guid", item.GUID, "age", time.Since(lastUpdated))
+							// Skip this candidate
+							return
+						}
+						}
+					}
+				}
+
+			// Variables to be populated by either path
+			var sessionID string
+			var streamSize int64
+
+			if skipValidation {
+				// -----------------------------------------------------
+				// PATH A: DEFERRED (Lazy)
+				// -----------------------------------------------------
+				// We trust AvailNZB and the Indexer metadata.
+				
+				// Generate a session ID (Use GUID hash since we don't have NZB content hash)
+				sessionID = fmt.Sprintf("%x", md5.Sum([]byte(item.GUID)))
+				streamSize = item.Size
+
+				logger.Info("Deferring NZB download (Lazy)", "title", item.Title, "session_id", sessionID)
+
+				// Create Deferred Session
+				_, err = s.sessionManager.CreateDeferredSession(
+					sessionID,
+					item.Link,
+					indexerName,
+					item.Title,
+					item.SourceIndexer,
+					item.GUID,
+				)
+				if err != nil {
+					logger.Error("Failed to create deferred session", "err", err)
+					return
+				}
+				
+			} else {
+				// -----------------------------------------------------
+				// PATH B: IMMEDIATE (Download & Validate)
+				// -----------------------------------------------------
+				logger.Info("Downloading NZB for manual validation (AvailNZB unknown/failed)", "title", item.Title)
+				
+				// Download NZB
+				var nzbData []byte
+				var err error
+
+				if item.SourceIndexer != nil {
+					// Use the specific indexer that found this item (Load Balancing)
+					nzbData, err = item.SourceIndexer.DownloadNZB(item.Link)
+				} else {
+					// Fallback to default indexer/aggregator
+					nzbData, err = s.indexer.DownloadNZB(item.Link)
+				}
+
+				if err != nil {
+					logger.Error("Failed to download NZB", "title", item.Title, "err", err)
+					return
+				}
+
+				// Parse NZB
+				nzbParsed, err := nzb.Parse(bytes.NewReader(nzbData))
+				if err != nil {
+					logger.Error("Failed to parse NZB", "title", item.Title, "err", err)
+					return
+				}
+				
+				streamSize = nzbParsed.TotalSize()
+				sessionID = nzbParsed.Hash()
+				
+				// Validate availability via HEAD check
+				validationResults := s.validator.ValidateNZB(ctx, nzbParsed)
+				if len(validationResults) == 0 {
+					return
+				}
+
+				// Find best provider
+				bestResult := validation.GetBestProvider(validationResults)
+				if bestResult == nil {
+					return
+				}
+
+				// Async report to AvailNZB
+				go func() {
+					nzbID := nzbParsed.CalculateID()
+					if nzbID != "" {
+						_ = s.availClient.ReportAvailability(nzbID, bestResult.Host, true, indexerName, item.GUID)
+					}
+				}()
+
+				// Store NZB in session manager
+				_, err = s.sessionManager.CreateSession(sessionID, nzbParsed, item.GUID)
+				if err != nil {
+					return
+				}
+			}
+
 			// Create stream URL
 			streamURL := fmt.Sprintf("%s/play/%s", s.baseURL, sessionID)
-			
+
 			// Determine size
-			sizeGB := float64(nzbParsed.TotalSize()) / (1024 * 1024 * 1024)
+			sizeGB := float64(streamSize) / (1024 * 1024 * 1024)
 
 			// Build rich stream metadata from PTT
-			stream := buildStreamMetadata(streamURL, item.Title, cand, sizeGB, nzbParsed.TotalSize())
+			stream := buildStreamMetadata(streamURL, item.Title, cand, sizeGB, streamSize)
 
 			// Record success
 			addSuccess(cand.Group)
@@ -456,24 +545,24 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string) 
 			resultChan <- nzbResult{stream: stream, group: cand.Group}
 		}(candidate)
 	}
-	
+
 	// Close result channel when all goroutines finish
 	go func() {
 		wg.Wait()
 		close(resultChan)
 	}()
-	
+
 	// Collect results with Early Exit
 	var streams []Stream
-	
+
 	// Monitor loop to stop completely if ALL quotas are met
 	// We check current quotas from `quotaCounts`?
 	// The resultChan receive is still useful to build the final list.
-	
+
 	for result := range resultChan {
 		if result.err == nil {
 			streams = append(streams, result.stream)
-			
+
 			// Check global completion
 			// We can check the shared state (it's updated by workers)
 			quotaMu.Lock()
@@ -481,15 +570,15 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string) 
 			has1080p := quotaCounts["1080p"] >= quotaPerGroup
 			has720p := quotaCounts["720p"] >= quotaPerGroup
 			quotaMu.Unlock()
-			
+
 			if has4k && has1080p && has720p {
 				logger.Debug("Fast-Path: All quotas met. Cancelling checks.")
 				cancel() // Stop others!
-				break // Return immediately
+				break    // Return immediately
 			}
 		}
 	}
-	
+
 	// Group valid streams by resolution bucket
 	buckets := make(map[string][]Stream)
 	for _, s := range streams {
@@ -497,7 +586,7 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string) 
 		bucket := "sd"
 		nameLower := strings.ToLower(s.Name)
 		descLower := strings.ToLower(s.Description)
-		
+
 		if strings.Contains(nameLower, "4k") || strings.Contains(nameLower, "2160") || strings.Contains(descLower, "2160") {
 			bucket = "4k"
 		} else if strings.Contains(nameLower, "1080") || strings.Contains(descLower, "1080") {
@@ -505,22 +594,22 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string) 
 		} else if strings.Contains(nameLower, "720") || strings.Contains(descLower, "720") {
 			bucket = "720p"
 		}
-		
+
 		buckets[bucket] = append(buckets[bucket], s)
 	}
 
 	// Select top N from each bucket (redundant if quota worked, but safe)
 	var finalStreams []Stream
 	priorities := []string{"4k", "1080p", "720p"}
-	
+
 	for _, bucketName := range priorities {
 		bucketStreams := buckets[bucketName]
-		
+
 		// Sort by quality score within bucket to get best ones
 		sort.Slice(bucketStreams, func(i, j int) bool {
 			return getQualityScore(bucketStreams[i].Name) > getQualityScore(bucketStreams[j].Name)
 		})
-		
+
 		finalStreams = append(finalStreams, bucketStreams...)
 	}
 
@@ -528,7 +617,7 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string) 
 	sort.Slice(finalStreams, func(i, j int) bool {
 		return getQualityScore(finalStreams[i].Name) > getQualityScore(finalStreams[j].Name)
 	})
-	
+
 	logger.Info("Returning validated streams", "count", len(finalStreams))
 	return finalStreams, nil
 }
@@ -541,7 +630,7 @@ func extractFilenameFromSubject(subject string) string {
 			return subject[start+1 : start+1+end]
 		}
 	}
-	
+
 	// Fallback: extract before yEnc or (1/50) pattern
 	subject = strings.TrimSpace(subject)
 	if idx := strings.Index(subject, " yEnc"); idx != -1 {
@@ -550,24 +639,36 @@ func extractFilenameFromSubject(subject string) string {
 	if idx := strings.Index(subject, " ("); idx != -1 {
 		subject = subject[:idx]
 	}
-	
+
 	return strings.Trim(subject, "\"' ")
 }
 
 // handlePlay handles playback requests - serves actual video content
 func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request) {
 	sessionID := strings.TrimPrefix(r.URL.Path, "/play/")
-	
+
 	logger.Info("Play request", "session", sessionID)
-	
+
+	// Get session
 	// Get session
 	sess, err := s.sessionManager.GetSession(sessionID)
 	if err != nil {
-		logger.Error("Session not found", "err", err)
-		forceDisconnect(w)
+		http.Error(w, "Session expired or not found", http.StatusNotFound)
 		return
 	}
 	
+	// Lazy Load NZB if needed
+	_, err = sess.GetOrDownloadNZB(s.sessionManager)
+	if err != nil {
+		logger.Error("Failed to lazy load NZB", "id", sessionID, "err", err)
+		http.Error(w, "Failed to load NZB content", http.StatusInternalServerError)
+		return
+	}
+
+	// Track active playback
+	s.sessionManager.StartPlayback(sessionID, r.RemoteAddr)
+	defer s.sessionManager.EndPlayback(sessionID, r.RemoteAddr)
+
 	// Get files from session
 	files := sess.Files
 	if len(files) == 0 {
@@ -580,21 +681,44 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	
+
 	// Get media stream (handles RAR, 7z, and direct files)
 	// Pass cached blueprint if available
 	stream, name, size, bp, err := unpack.GetMediaStream(files, sess.Blueprint)
 	if err != nil {
 		logger.Error("Failed to open media stream", "id", sessionID, "err", err)
+
+		// Report as Bad to AvailNZB if it's a structural issue (like compression)
+		if strings.Contains(err.Error(), "compressed") || strings.Contains(err.Error(), "encrypted") {
+			logger.Info("Reporting bad/unstreamable release to AvailNZB", "id", sessionID, "reason", err.Error())
+			go func() {
+				// We need NZB ID for reporting.
+				var nzbID string
+				if sess.NZB != nil {
+					nzbID = sess.NZB.CalculateID()
+				}
+				
+				if nzbID != "" && sess.GUID != "" {
+					// Retrieve capable provider? We don't have it here easily unless we store it.
+					// But for "Bad", provider might not matter as much as the fact that the RELEASE is bad.
+					// Pass empty provider for now, or "unknown".
+					// Actually AvailNZB might require provider.
+					// If it's a structural failure (RAR compression), it's bad on ALL providers.
+					// We'll pass "structural" as provider or similar if API allows, or just "" and let API handle.
+					_ = s.availClient.ReportAvailability(nzbID, "ALL", false, sess.IndexerName, sess.GUID)
+				}
+			}()
+		}
+
 		forceDisconnect(w)
 		return
 	}
-	
+
 	// Cache the blueprint if new one returned
 	if bp != nil && sess.Blueprint == nil {
 		sess.SetBlueprint(bp)
 	}
-	
+
 	// Track active playback
 	clientIP, _, _ := net.SplitHostPort(r.RemoteAddr)
 	if clientIP == "" {
@@ -614,16 +738,16 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request) {
 	defer monitoredStream.Close()
 
 	logger.Info("Serving media", "name", name, "size", size, "session", sessionID)
-	
+
 	// Set headers
 	w.Header().Set("Content-Type", "video/mp4") // Stremio often prefers this or generic buffer
 	w.Header().Set("Accept-Ranges", "bytes")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
-	
+
 	// Handle streaming using standard library ServeContent
 	// This automatically handles Range requests, HEAD requests, and efficient copying.
 	http.ServeContent(w, r, name, time.Time{}, monitoredStream)
-	
+
 	// Log completion (ServeContent blocks until done)
 	logger.Debug("Finished serving media", "session", sessionID)
 }
@@ -663,14 +787,14 @@ func (s *Server) handleDebugPlay(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			defer resp.Body.Close()
-			
+
 			if resp.StatusCode != 200 {
 				msg := fmt.Sprintf("Failed to download NZB (HTTP %d)", resp.StatusCode)
 				logger.Error(msg, "url", nzbPath)
 				http.Error(w, msg, http.StatusInternalServerError)
 				return
 			}
-			
+
 			nzbData, err = io.ReadAll(resp.Body)
 			if err != nil {
 				http.Error(w, "Failed to read NZB body", http.StatusInternalServerError)
@@ -692,9 +816,9 @@ func (s *Server) handleDebugPlay(w http.ResponseWriter, r *http.Request) {
 	sessionID := fmt.Sprintf("debug-%x", nzbPath)
 	// Or use NZB hash
 	// sessionID := nzbParsed.Hash()
-	
+
 	// Create/Get Session
-	sess, err := s.sessionManager.CreateSession(sessionID, nzbParsed)
+	sess, err := s.sessionManager.CreateSession(sessionID, nzbParsed, "")
 	if err != nil {
 		logger.Error("Failed to create session", "err", err)
 		http.Error(w, "Failed to create session", http.StatusInternalServerError)
@@ -721,8 +845,10 @@ func (s *Server) handleDebugPlay(w http.ResponseWriter, r *http.Request) {
 	}
 
 	clientIP, _, _ := net.SplitHostPort(r.RemoteAddr)
-	if clientIP == "" { clientIP = r.RemoteAddr }
-	
+	if clientIP == "" {
+		clientIP = r.RemoteAddr
+	}
+
 	s.sessionManager.StartPlayback(sessionID, clientIP)
 	defer s.sessionManager.EndPlayback(sessionID, clientIP)
 
@@ -741,7 +867,7 @@ func (s *Server) handleDebugPlay(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "video/mp4")
 	w.Header().Set("Accept-Ranges", "bytes")
 	http.ServeContent(w, r, name, time.Time{}, monitoredStream)
-	
+
 	logger.Debug("Finished serving debug media")
 }
 
@@ -763,32 +889,32 @@ type StreamResponse struct {
 type Stream struct {
 	// URL for direct streaming (HTTP video file)
 	URL string `json:"url,omitempty"`
-	
+
 	// ExternalUrl for external player (alternative to URL)
 	ExternalUrl string `json:"externalUrl,omitempty"`
-	
+
 	// Display name in Stremio
 	Name string `json:"name,omitempty"`
-	
+
 	// Optional metadata (shown in Stremio UI)
-	Title       string            `json:"title,omitempty"`
-	Description string            `json:"description,omitempty"`
-	BehaviorHints *BehaviorHints  `json:"behaviorHints,omitempty"`
+	Title         string         `json:"title,omitempty"`
+	Description   string         `json:"description,omitempty"`
+	BehaviorHints *BehaviorHints `json:"behaviorHints,omitempty"`
 }
 
 // BehaviorHints provides hints to Stremio about stream behavior
 type BehaviorHints struct {
-	NotWebReady      bool   `json:"notWebReady,omitempty"`
-	BingeGroup       string `json:"bingeGroup,omitempty"`
+	NotWebReady      bool     `json:"notWebReady,omitempty"`
+	BingeGroup       string   `json:"bingeGroup,omitempty"`
 	CountryWhitelist []string `json:"countryWhitelist,omitempty"`
-	VideoSize        int64  `json:"videoSize,omitempty"`
-	Filename         string `json:"filename,omitempty"`
+	VideoSize        int64    `json:"videoSize,omitempty"`
+	Filename         string   `json:"filename,omitempty"`
 }
 
 // getQualityScore assigns a score for sorting (higher = better quality)
 func getQualityScore(name string) int {
 	nameLower := strings.ToLower(name)
-	
+
 	// Resolution scoring (primary)
 	score := 0
 	if strings.Contains(nameLower, "4k") || strings.Contains(nameLower, "2160p") {
@@ -800,7 +926,7 @@ func getQualityScore(name string) int {
 	} else {
 		score += 1000 // SD
 	}
-	
+
 	// Source quality bonus
 	if strings.Contains(nameLower, "remux") {
 		score += 500
@@ -811,12 +937,12 @@ func getQualityScore(name string) int {
 	} else if strings.Contains(nameLower, "webrip") {
 		score += 200
 	}
-	
+
 	// HDR bonus
 	if strings.Contains(nameLower, "hdr") || strings.Contains(nameLower, "dv") {
 		score += 100
 	}
-	
+
 	// Atmos/TrueHD bonus
 	if strings.Contains(nameLower, "atmos") {
 		score += 50
@@ -824,7 +950,7 @@ func getQualityScore(name string) int {
 	if strings.Contains(nameLower, "truehd") {
 		score += 40
 	}
-	
+
 	return score
 }
 
@@ -843,7 +969,7 @@ func forceDisconnect(w http.ResponseWriter) {
 }
 
 // Reload updates the server components at runtime
-func (s *Server) Reload(baseURL string, indexer indexer.Indexer, validator *validation.Checker, 
+func (s *Server) Reload(baseURL string, indexer indexer.Indexer, validator *validation.Checker,
 	triage *triage.Service, avail *availnzb.Client, tmdbClient *tmdb.Client, securityToken string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -878,7 +1004,7 @@ type StreamMonitor struct {
 
 func (s *StreamMonitor) Read(p []byte) (n int, err error) {
 	n, err = s.ReadSeekCloser.Read(p)
-	
+
 	// Non-blocking update check
 	// We don't want to lock on every read, so just check time occasionally
 	if time.Since(s.lastUpdate) > 10*time.Second {
@@ -889,7 +1015,6 @@ func (s *StreamMonitor) Read(p []byte) (n int, err error) {
 		}
 		s.mu.Unlock()
 	}
-	
+
 	return n, err
 }
-

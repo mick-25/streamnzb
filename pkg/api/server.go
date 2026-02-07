@@ -30,7 +30,7 @@ type Server struct {
 	sessionMgr     *session.Manager
 	strmServer     *stremio.Server
 	proxyServer    *proxy.Server
-	
+
 	// WebSocket Client Registry
 	clients   map[*Client]bool
 	clientsMu sync.Mutex
@@ -49,7 +49,7 @@ func NewServer(cfg *config.Config, pools map[string]*nntp.ClientPool, sessMgr *s
 	for _, p := range pools {
 		list = append(list, p)
 	}
-	
+
 	s := &Server{
 		config:         cfg,
 		providerPools:  pools,
@@ -72,7 +72,7 @@ func NewServer(cfg *config.Config, pools map[string]*nntp.ClientPool, sessMgr *s
 func (s *Server) broadcastLogs() {
 	for msgStr := range s.logCh {
 		msg := WSMessage{Type: "log_entry", Payload: json.RawMessage(fmt.Sprintf("%q", msgStr))}
-		
+
 		s.clientsMu.Lock()
 		for client := range s.clients {
 			select {
@@ -108,7 +108,7 @@ func (s *Server) SetProxyServer(p *proxy.Server) {
 }
 
 // Reload updates the server components at runtime
-func (s *Server) Reload(cfg *config.Config, pools map[string]*nntp.ClientPool, indexers indexer.Indexer, 
+func (s *Server) Reload(cfg *config.Config, pools map[string]*nntp.ClientPool, indexers indexer.Indexer,
 	validator *validation.Checker, triage *triage.Service, avail *availnzb.Client, tmdbClient *tmdb.Client) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -131,7 +131,7 @@ func (s *Server) Reload(cfg *config.Config, pools map[string]*nntp.ClientPool, i
 	// 3. Update State
 	s.config = cfg
 	s.providerPools = pools
-	
+
 	// Rebuild streaming pools list
 	var newStreamingPools []*nntp.ClientPool
 	for _, p := range pools {
@@ -142,7 +142,7 @@ func (s *Server) Reload(cfg *config.Config, pools map[string]*nntp.ClientPool, i
 	// 4. Update dependencies
 	logger.SetLevel(cfg.LogLevel)
 	s.sessionMgr.UpdatePools(newStreamingPools)
-	
+
 	if s.strmServer != nil {
 		s.strmServer.Reload(cfg.AddonBaseURL, indexers, validator, triage, avail, tmdbClient, cfg.SecurityToken)
 	}
@@ -178,4 +178,3 @@ func (s *Server) Handler() http.Handler {
 
 	return mux
 }
-

@@ -10,11 +10,11 @@ import (
 
 // Session represents a single NNTP client session
 type Session struct {
-	conn         net.Conn
-	pools        []*nntp.ClientPool
-	authUser     string
-	authPass     string
-	
+	conn     net.Conn
+	pools    []*nntp.ClientPool
+	authUser string
+	authPass string
+
 	authenticated bool
 	currentGroup  string
 	shouldQuit    bool
@@ -73,12 +73,12 @@ func (s *Session) HandleCommand(cmd string, args []string) error {
 	case "AUTHINFO":
 		return s.handleAuthInfo(args)
 	}
-	
+
 	// Check authentication for other commands
 	if !s.authenticated {
 		return s.WriteLine("480 Authentication required")
 	}
-	
+
 	// Authenticated commands
 	switch cmd {
 	case "GROUP":

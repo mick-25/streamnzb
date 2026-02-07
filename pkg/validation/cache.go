@@ -7,9 +7,9 @@ import (
 
 // Cache stores validation results with TTL
 type Cache struct {
-	data  map[string]*cacheEntry
-	mu    sync.RWMutex
-	ttl   time.Duration
+	data map[string]*cacheEntry
+	mu   sync.RWMutex
+	ttl  time.Duration
 }
 
 type cacheEntry struct {

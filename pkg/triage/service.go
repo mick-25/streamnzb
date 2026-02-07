@@ -11,10 +11,10 @@ import (
 
 // Candidate represents a filtered search result suitable for deep inspection
 type Candidate struct {
-	Result     indexer.Item
-	Metadata   *parser.ParsedRelease
-	Group      string // 4K, 1080p, 720p, SD
-	Score      int
+	Result   indexer.Item
+	Metadata *parser.ParsedRelease
+	Group    string // 4K, 1080p, 720p, SD
+	Score    int
 }
 
 // Service implements smart triage logic
@@ -33,53 +33,53 @@ func NewService(maxPerGroup int) *Service {
 func (s *Service) Filter(results []indexer.Item) []Candidate {
 	// Group items
 	groups := make(map[string][]Candidate)
-	
+
 	for _, res := range results {
 		// Parse title
 		parsed := parser.ParseReleaseTitle(res.Title)
-		
+
 		// Determine group
 		group := determineGroup(parsed)
-		
+
 		// Calculate score
 		score := calculateScore(res, parsed)
-		
+
 		candidate := Candidate{
 			Result:   res,
 			Metadata: parsed,
 			Group:    group,
 			Score:    score,
 		}
-		
+
 		groups[group] = append(groups[group], candidate)
 	}
-	
+
 	// Select best candidates
 	var selected []Candidate
-	
+
 	// Processing order (priority)
 	priorities := []string{"4k", "1080p", "720p"}
-	
+
 	for _, groupName := range priorities {
 		candidates, ok := groups[groupName]
 		if !ok || len(candidates) == 0 {
 			continue
 		}
-		
+
 		// Use Round-Robin selection to ensure indexer diversity
 		// This prevents one indexer (with high grab counts) from dominating the quota
 		count := s.MaxPerGroup
 		balanced := roundRobinSelect(candidates, count)
-		
+
 		selected = append(selected, balanced...)
 	}
-	
+
 	return selected
 }
 
 func determineGroup(p *parser.ParsedRelease) string {
 	res := strings.ToLower(p.Resolution)
-	
+
 	if strings.Contains(res, "2160") || strings.Contains(res, "4k") {
 		return "4k"
 	}
@@ -89,7 +89,7 @@ func determineGroup(p *parser.ParsedRelease) string {
 	if strings.Contains(res, "720") {
 		return "720p"
 	}
-	
+
 	return "sd"
 }
 
@@ -105,12 +105,12 @@ func calculateScore(res indexer.Item, p *parser.ParsedRelease) int {
 
 	// Penalize strictly bad quality (CAM/TS)
 	// We want these at the absolute bottom, even if popular
-	if strings.Contains(strings.ToLower(p.Quality), "cam") || 
-	   strings.Contains(strings.ToLower(p.Quality), "telesync") || 
-	   strings.Contains(strings.ToLower(p.Quality), "ts") {
+	if strings.Contains(strings.ToLower(p.Quality), "cam") ||
+		strings.Contains(strings.ToLower(p.Quality), "telesync") ||
+		strings.Contains(strings.ToLower(p.Quality), "ts") {
 		score -= 1000000
 	}
-	
+
 	return score
 }
 
@@ -119,23 +119,23 @@ func roundRobinSelect(candidates []Candidate, n int) []Candidate {
 	if n <= 0 {
 		return nil
 	}
-	
+
 	// Group by Indexer
 	byIndexer := make(map[string][]Candidate)
 	var indexerNames []string
-	
+
 	for _, c := range candidates {
 		name := "unknown"
 		if c.Result.SourceIndexer != nil {
 			name = c.Result.SourceIndexer.Name()
 		}
-		
+
 		if _, exists := byIndexer[name]; !exists {
 			indexerNames = append(indexerNames, name)
 		}
 		byIndexer[name] = append(byIndexer[name], c)
 	}
-	
+
 	// Sort candidates within each indexer by score (desc)
 	for name := range byIndexer {
 		list := byIndexer[name]
@@ -144,21 +144,21 @@ func roundRobinSelect(candidates []Candidate, n int) []Candidate {
 		})
 		byIndexer[name] = list
 	}
-	
+
 	// Sort indexer names for deterministic iteration
 	sort.Strings(indexerNames)
-	
+
 	// Round Robin selection
 	var selected []Candidate
-	
+
 	for len(selected) < n {
 		addedAnything := false
-		
+
 		for _, name := range indexerNames {
 			if len(selected) >= n {
 				break
 			}
-			
+
 			list := byIndexer[name]
 			if len(list) > 0 {
 				// Pop best from this indexer
@@ -167,11 +167,11 @@ func roundRobinSelect(candidates []Candidate, n int) []Candidate {
 				addedAnything = true
 			}
 		}
-		
+
 		if !addedAnything {
 			break // Run out of candidates
 		}
 	}
-	
+
 	return selected
 }

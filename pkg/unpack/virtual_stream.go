@@ -12,39 +12,39 @@ import (
 type virtualPart struct {
 	VirtualStart int64
 	VirtualEnd   int64
-	
-	VolFile      UnpackableFile
-	VolOffset    int64 
+
+	VolFile   UnpackableFile
+	VolOffset int64
 }
 
 type VirtualStream struct {
-	parts       []virtualPart
-	totalSize   int64
-	
+	parts     []virtualPart
+	totalSize int64
+
 	currentOffset int64
-	
-	dataChan   chan []byte
-	errChan    chan error
-	closeChan  chan struct{}
-	seekChan   chan int64
-	
+
+	dataChan  chan []byte
+	errChan   chan error
+	closeChan chan struct{}
+	seekChan  chan int64
+
 	currentBuf []byte
 	bufOffset  int
-	
-	currentReader io.ReadCloser
+
+	currentReader  io.ReadCloser
 	currentPartIdx int
-	
+
 	workerOnce sync.Once
 }
 
 func NewVirtualStream(parts []virtualPart, totalSize int64, startOffset int64) *VirtualStream {
 	vs := &VirtualStream{
-		parts:     parts,
-		totalSize: totalSize,
-		dataChan:  make(chan []byte, 50),
-		errChan:   make(chan error, 1),
-		closeChan: make(chan struct{}),
-		seekChan:  make(chan int64),
+		parts:          parts,
+		totalSize:      totalSize,
+		dataChan:       make(chan []byte, 50),
+		errChan:        make(chan error, 1),
+		closeChan:      make(chan struct{}),
+		seekChan:       make(chan int64),
 		currentPartIdx: -1,
 	}
 	go vs.worker(startOffset)
@@ -54,27 +54,31 @@ func NewVirtualStream(parts []virtualPart, totalSize int64, startOffset int64) *
 func (s *VirtualStream) worker(initialOffset int64) {
 	var currentOffset int64 = initialOffset
 	const chunkSize = 1024 * 1024 // 1MB chunks
-	
+
 	select {
 	case off := <-s.seekChan:
 		currentOffset = off
 	default:
 	}
-	
+
 	for {
 		if currentOffset >= s.totalSize {
 			select {
 			case s.errChan <- io.EOF:
 				select {
-				case <-s.closeChan: return
-				case off := <-s.seekChan: currentOffset = off
+				case <-s.closeChan:
+					return
+				case off := <-s.seekChan:
+					currentOffset = off
 				}
-			case <-s.closeChan: return
-			case off := <-s.seekChan: currentOffset = off
+			case <-s.closeChan:
+				return
+			case off := <-s.seekChan:
+				currentOffset = off
 			}
 			continue
 		}
-		
+
 		var activePart *virtualPart
 		var partIdx int
 		for i := range s.parts {
@@ -84,18 +88,19 @@ func (s *VirtualStream) worker(initialOffset int64) {
 				break
 			}
 		}
-		
+
 		if activePart == nil {
 			logger.Error("VirtualStream: offset not mapped", "offset", currentOffset, "totalSize", s.totalSize, "parts", len(s.parts))
 			select {
 			case s.errChan <- fmt.Errorf("offset %d not mapped", currentOffset):
 				return
-			case <-s.closeChan: return
+			case <-s.closeChan:
+				return
 			}
 		}
-		
+
 		remaining := activePart.VirtualEnd - currentOffset
-		
+
 		// Optimize: Use cached reader if possible
 		if s.currentReader == nil || s.currentPartIdx != partIdx {
 			// Close old reader
@@ -103,39 +108,40 @@ func (s *VirtualStream) worker(initialOffset int64) {
 				s.currentReader.Close()
 				s.currentReader = nil
 			}
-			
+
 			// Open new Stream at offset using efficient OpenReaderAt
 			localOff := currentOffset - activePart.VirtualStart
 			volOff := activePart.VolOffset + localOff
-			
+
 			r, err := activePart.VolFile.OpenReaderAt(volOff)
 			if err != nil {
 				select {
 				case s.errChan <- err:
 					return
-				case <-s.closeChan: return
+				case <-s.closeChan:
+					return
 				}
 			}
-			
+
 			logger.Debug("VirtualStream: opening volume", "partIdx", partIdx, "volFile", activePart.VolFile.Name(), "volOffset", volOff, "virtualOffset", currentOffset)
 			s.currentReader = r
 			s.currentPartIdx = partIdx
 		}
-		
+
 		// Read from stream
 		readSize := int64(chunkSize)
 		if readSize > remaining {
 			readSize = remaining
 		}
-		
+
 		buf := make([]byte, readSize)
 		n, err := s.currentReader.Read(buf)
-		
+
 		if n > 0 {
 			// Send data
 			select {
 			case s.dataChan <- buf[:n]:
-			case <-s.closeChan: 
+			case <-s.closeChan:
 				s.currentReader.Close()
 				return
 			case off := <-s.seekChan:
@@ -146,7 +152,7 @@ func (s *VirtualStream) worker(initialOffset int64) {
 			}
 			currentOffset += int64(n)
 		}
-		
+
 		if err != nil {
 			if err == io.EOF {
 				// EOF on this part - move to next part
@@ -158,10 +164,10 @@ func (s *VirtualStream) worker(initialOffset int64) {
 			} else {
 				select {
 				case s.errChan <- err:
-				case <-s.closeChan: 
+				case <-s.closeChan:
 					s.currentReader.Close()
 					return
-				case off := <-s.seekChan: 
+				case off := <-s.seekChan:
 					currentOffset = off
 					s.currentReader.Close()
 					s.currentReader = nil
@@ -183,21 +189,21 @@ func (s *VirtualStream) Read(p []byte) (n int, err error) {
 			return 0, io.ErrClosedPipe
 		}
 	}
-	
+
 	available := len(s.currentBuf) - s.bufOffset
 	toCopy := len(p)
 	if available < toCopy {
 		toCopy = available
 	}
-	
+
 	copy(p, s.currentBuf[s.bufOffset:s.bufOffset+toCopy])
 	s.bufOffset += toCopy
 	s.currentOffset += int64(toCopy)
-	
+
 	if s.bufOffset >= len(s.currentBuf) {
 		s.currentBuf = nil
 	}
-	
+
 	return toCopy, nil
 }
 
@@ -211,21 +217,21 @@ func (s *VirtualStream) Seek(offset int64, whence int) (int64, error) {
 	case io.SeekEnd:
 		target = s.totalSize + offset
 	}
-	
+
 	if target < 0 || target > s.totalSize {
 		return 0, errors.New("seek out of bounds")
 	}
-	
+
 	s.currentBuf = nil
 	s.bufOffset = 0
-	
+
 	select {
 	case s.seekChan <- target:
 	case <-s.closeChan:
 		return 0, io.ErrClosedPipe
 	}
-	
-	Loop:
+
+Loop:
 	for {
 		select {
 		case <-s.dataChan:
@@ -234,7 +240,7 @@ func (s *VirtualStream) Seek(offset int64, whence int) (int64, error) {
 			break Loop
 		}
 	}
-	
+
 	logger.Debug("VirtualStream: seek complete", "target", target, "whence", whence)
 	s.currentOffset = target
 	return target, nil

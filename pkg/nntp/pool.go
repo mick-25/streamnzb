@@ -19,32 +19,32 @@ type ClientPool struct {
 	bytesRead int64
 	lastSpeed float64 // Mbps
 	lastCheck time.Time
-	
-	mu sync.Mutex
+
+	mu     sync.Mutex
 	closed bool
 }
 
 func NewClientPool(host string, port int, ssl bool, user, pass string, maxConn int) *ClientPool {
 	p := &ClientPool{
-		host:    host,
-		port:    port,
-		ssl:     ssl,
-		user:    user,
-		pass:    pass,
-		maxConn: maxConn,
+		host:        host,
+		port:        port,
+		ssl:         ssl,
+		user:        user,
+		pass:        pass,
+		maxConn:     maxConn,
 		idleClients: make(chan *Client, maxConn),
 		slots:       make(chan struct{}, maxConn),
 		lastCheck:   time.Now(),
 	}
-	
+
 	// Fill slots with permits
 	for i := 0; i < maxConn; i++ {
 		p.slots <- struct{}{}
 	}
-	
+
 	// Start Reaper
 	go p.reaperLoop()
-	
+
 	return p
 }
 
@@ -60,20 +60,20 @@ func (p *ClientPool) TrackRead(n int) {
 func (p *ClientPool) GetSpeed() float64 {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	
+
 	now := time.Now()
 	duration := now.Sub(p.lastCheck).Seconds()
-	
+
 	if duration >= 1.0 {
 		// Calculate Mbps: (bytes * 8) / (1024*1024) / seconds
 		mbps := (float64(p.bytesRead) * 8) / (1024 * 1024) / duration
 		p.lastSpeed = mbps
-		
+
 		// Reset
 		p.bytesRead = 0
 		p.lastCheck = now
 	}
-	
+
 	return p.lastSpeed
 }
 
@@ -84,7 +84,7 @@ func (p *ClientPool) Get() (*Client, error) {
 		return c, nil
 	default:
 	}
-	
+
 	// 2. Try to create new connection (check slots)
 	select {
 	case <-p.slots:
@@ -94,7 +94,7 @@ func (p *ClientPool) Get() (*Client, error) {
 			p.slots <- struct{}{} // Return permit on failure
 			return nil, err
 		}
-        c.SetPool(p)
+		c.SetPool(p)
 		if err := c.Authenticate(p.user, p.pass); err != nil {
 			c.Quit()
 			p.slots <- struct{}{}
@@ -132,7 +132,7 @@ func (p *ClientPool) TryGet() (*Client, bool) {
 		return c, true
 	default:
 	}
-	
+
 	// 2. Check Slots
 	select {
 	case <-p.slots:
@@ -153,9 +153,11 @@ func (p *ClientPool) TryGet() (*Client, bool) {
 }
 
 func (p *ClientPool) Put(c *Client) {
-	if c == nil { return }
+	if c == nil {
+		return
+	}
 	c.LastUsed = time.Now()
-	
+
 	select {
 	case p.idleClients <- c:
 	default:
@@ -169,7 +171,7 @@ func (p *ClientPool) Put(c *Client) {
 // InitializedPool creates 'count' connections immediately. (Legacy/Eager)
 func NewInitializedClientPool(host string, port int, ssl bool, user, pass string, count int) (*ClientPool, error) {
 	p := NewClientPool(host, port, ssl, user, pass, count)
-	
+
 	// Eagerly fill
 	// We consume slots and put into idleClients
 	for i := 0; i < count; i++ {
@@ -194,7 +196,7 @@ func NewInitializedClientPool(host string, port int, ssl bool, user, pass string
 func (p *ClientPool) reaperLoop() {
 	ticker := time.NewTicker(15 * time.Second) // Check every 15 seconds
 	timeout := 30 * time.Second                // Close connections idle >30s
-	
+
 	for range ticker.C {
 		p.mu.Lock()
 		if p.closed {
@@ -207,7 +209,7 @@ func (p *ClientPool) reaperLoop() {
 		// However, channel is FIFO/random.
 		// Strategy: Iterate 'count' times equal to current length.
 		// If used recently, put back. If old, close.
-		
+
 		count := len(p.idleClients)
 		for i := 0; i < count; i++ {
 			select {

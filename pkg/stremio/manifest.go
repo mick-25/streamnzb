@@ -6,16 +6,16 @@ import (
 
 // Manifest represents the Stremio addon manifest
 type Manifest struct {
-	ID          string       `json:"id"`
-	Version     string       `json:"version"`
-	Name        string       `json:"name"`
-	Description string       `json:"description"`
-	Resources   []string     `json:"resources"`
-	Types       []string     `json:"types"`
-	Catalogs    []Catalog    `json:"catalogs"`
-	IDPrefixes  []string     `json:"idPrefixes,omitempty"`
-	Background  string       `json:"background,omitempty"`
-	Logo        string       `json:"logo,omitempty"`
+	ID          string    `json:"id"`
+	Version     string    `json:"version"`
+	Name        string    `json:"name"`
+	Description string    `json:"description"`
+	Resources   []string  `json:"resources"`
+	Types       []string  `json:"types"`
+	Catalogs    []Catalog `json:"catalogs"`
+	IDPrefixes  []string  `json:"idPrefixes,omitempty"`
+	Background  string    `json:"background,omitempty"`
+	Logo        string    `json:"logo,omitempty"`
 }
 
 // Catalog represents a content catalog

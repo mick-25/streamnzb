@@ -6,16 +6,16 @@ import (
 
 // VirtualFile implements UnpackableFile for a file inside an archive.
 type VirtualFile struct {
-	name   string
-	size   int64
-	parts  []virtualPart
+	name  string
+	size  int64
+	parts []virtualPart
 }
 
 func NewVirtualFile(name string, size int64, parts []virtualPart) *VirtualFile {
 	return &VirtualFile{
-		name:   name,
-		size:   size,
-		parts:  parts,
+		name:  name,
+		size:  size,
+		parts: parts,
 	}
 }
 
@@ -40,11 +40,11 @@ func (f *VirtualFile) OpenReaderAt(offset int64) (io.ReadCloser, error) {
 func (f *VirtualFile) ReadAt(p []byte, off int64) (int, error) {
 	s := NewVirtualStream(f.parts, f.size, 0)
 	defer s.Close()
-	
+
 	if _, err := s.Seek(off, io.SeekStart); err != nil {
 		return 0, err
 	}
-	
+
 	n, err := io.ReadFull(s, p)
 	// io.ReadFull returns io.ErrUnexpectedEOF if n > 0 && n < len(p)
 	// ReaderAt allows returning EOF in that case (if limits hit)

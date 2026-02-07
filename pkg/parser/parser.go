@@ -20,22 +20,22 @@ type ParsedRelease struct {
 	Group      string
 	Season     int
 	Episode    int
-	
+
 	// Additional metadata
-	Languages  []string
-	Network    string
-	Repack     bool
-	Proper     bool
-	Extended   bool
-	Unrated    bool
-	ThreeD     string
-	Size       string
+	Languages []string
+	Network   string
+	Repack    bool
+	Proper    bool
+	Extended  bool
+	Unrated   bool
+	ThreeD    string
+	Size      string
 }
 
 // ParseReleaseTitle parses a release title using go-ptt
 func ParseReleaseTitle(title string) *ParsedRelease {
 	info := ptt.Parse(title)
-	
+
 	parsed := &ParsedRelease{
 		Title:      info.Title,
 		Resolution: info.Resolution,
@@ -55,14 +55,14 @@ func ParseReleaseTitle(title string) *ParsedRelease {
 		ThreeD:     info.ThreeD,
 		Size:       info.Size,
 	}
-	
+
 	// Convert year from string to int
 	if info.Year != "" {
 		if year, err := strconv.Atoi(info.Year); err == nil {
 			parsed.Year = year
 		}
 	}
-	
+
 	// Extract season/episode if available
 	if len(info.Seasons) > 0 {
 		parsed.Season = info.Seasons[0]
@@ -70,6 +70,6 @@ func ParseReleaseTitle(title string) *ParsedRelease {
 	if len(info.Episodes) > 0 {
 		parsed.Episode = info.Episodes[0]
 	}
-	
+
 	return parsed
 }

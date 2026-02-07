@@ -42,7 +42,7 @@ func NewClient(baseURL, apiKey string) (*Client, error) {
 		MaxConnsPerHost:     100,
 		IdleConnTimeout:     90 * time.Second,
 	}
-	
+
 	c := &Client{
 		baseURL: baseURL,
 		apiKey:  apiKey,
@@ -69,7 +69,7 @@ func (c *Client) Ping() error {
 		return err
 	}
 	defer resp.Body.Close()
-	
+
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("Prowlarr returned error status: %d", resp.StatusCode)
 	}
@@ -82,7 +82,7 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 	params := url.Values{}
 	params.Set("apikey", c.apiKey)
 	params.Set("o", "xml")
-	
+
 	// Use appropriate search type based on category
 	if req.Cat == "2000" {
 		params.Set("t", "movie")
@@ -91,7 +91,7 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 	} else {
 		params.Set("t", "search")
 	}
-	
+
 	if req.Query != "" {
 		params.Set("q", req.Query)
 	}
@@ -113,31 +113,31 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 	} else {
 		params.Set("limit", "10")
 	}
-	
+
 	if req.Season != "" {
 		params.Set("season", req.Season)
 	}
 	if req.Episode != "" {
 		params.Set("ep", req.Episode)
 	}
-	
+
 	apiURL := fmt.Sprintf("%s/api?%s", c.baseURL, params.Encode())
-	
+
 	// Debug: Log the actual API URL being called
 	logger.Debug("Prowlarr API URL: %s\n", apiURL)
-	
+
 	resp, err := c.client.Get(apiURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query Prowlarr: %w", err)
 	}
 	defer resp.Body.Close()
-	
+
 	// Read body first to debug
 	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read Prowlarr response body: %w", err)
 	}
-	
+
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("Prowlarr returned status %d: %s", resp.StatusCode, string(bodyBytes))
 	}
@@ -145,12 +145,12 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 	if len(bodyBytes) == 0 {
 		return nil, fmt.Errorf("Prowlarr returned empty body")
 	}
-	
+
 	var result indexer.SearchResponse
 	if err := xml.Unmarshal(bodyBytes, &result); err != nil {
 		return nil, fmt.Errorf("failed to parse Prowlarr response: %w", err)
 	}
-	
+
 	// Populate SourceIndexer for each item
 	for i := range result.Channel.Items {
 		result.Channel.Items[i].SourceIndexer = c
@@ -161,7 +161,7 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 
 // DownloadNZB downloads an NZB file by URL
 func (c *Client) DownloadNZB(nzbURL string) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, "GET", nzbURL, nil)
@@ -174,15 +174,15 @@ func (c *Client) DownloadNZB(nzbURL string) ([]byte, error) {
 		return nil, fmt.Errorf("failed to download NZB: %w", err)
 	}
 	defer resp.Body.Close()
-	
+
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("NZB download returned status %d", resp.StatusCode)
 	}
-	
+
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read NZB data: %w", err)
 	}
-	
+
 	return data, nil
 }

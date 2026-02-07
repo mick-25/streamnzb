@@ -23,9 +23,9 @@ func Handler() http.Handler {
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
-		
+
 		// 1. Try to serve exact file
-		// Clean path to prevent directory traversal is handled by http.FS, 
+		// Clean path to prevent directory traversal is handled by http.FS,
 		// but checking existence helps avoid 404 handler loop if we were strict.
 		// However, for embedded FS, we can just Open.
 		f, err := fsys.Open(strings.TrimPrefix(path, "/"))

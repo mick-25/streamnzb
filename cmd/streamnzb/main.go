@@ -69,14 +69,14 @@ func main() {
 	logger.Info("Session manager initialized", "ttl", sessionTTL)
 
 	// Initialize Triage Service
-	triageService := triage.NewService(4)
+	triageService := triage.NewService(200)
 
-	availNZBUrl := cfg.AvailNZBURL;
+	availNZBUrl := cfg.AvailNZBURL
 	if availNZBUrl == "" {
 		availNZBUrl = AvailNZBURL
 	}
 
-	availNZBAPIKey := cfg.AvailNZBAPIKey;
+	availNZBAPIKey := cfg.AvailNZBAPIKey
 	if availNZBAPIKey == "" {
 		availNZBAPIKey = AvailNZBAPIKey
 	}
@@ -93,15 +93,15 @@ func main() {
 	tmdbClient := tmdb.NewClient(tmdbKey)
 
 	// Initialize Stremio addon server
-	stremioServer, err := stremio.NewServer(cfg.AddonBaseURL, cfg.AddonPort, comp.Indexer, validator, 
+	stremioServer, err := stremio.NewServer(cfg.AddonBaseURL, cfg.AddonPort, comp.Indexer, validator,
 		sessionManager, triageService, availClient, tmdbClient, cfg.SecurityToken)
 	if err != nil {
 		initialization.WaitForInputAndExit(fmt.Errorf("Failed to initialize Stremio server: %v", err))
 	}
-	
+
 	// Initialize API Server
 	apiServer := api.NewServer(cfg, comp.ProviderPools, sessionManager, stremioServer)
-	
+
 	// Set embedded web handler
 	stremioServer.SetWebHandler(web.Handler())
 	stremioServer.SetAPIHandler(apiServer.Handler())
@@ -109,20 +109,20 @@ func main() {
 	// Setup HTTP routes
 	mux := http.NewServeMux()
 	stremioServer.SetupRoutes(mux)
-	
+
 	// Mount API routes (apiServer.Handler returns a mux with /api/...)
 	// Since both are muxes, we need to merge or mount carefully.
 	// StremioServer mounts "/" at the end.
 	// We should mount /api/ before /.
 	mux.Handle("/api/", apiServer.Handler())
-	
+
 	// Start NNTP proxy if enabled
 	if cfg.ProxyEnabled {
 		proxyServer, err := proxy.NewServer(cfg.ProxyHost, cfg.ProxyPort, comp.StreamingPools, cfg.ProxyAuthUser, cfg.ProxyAuthPass)
 		if err != nil {
 			initialization.WaitForInputAndExit(fmt.Errorf("Failed to initialize NNTP proxy: %v", err))
 		}
-		
+
 		apiServer.SetProxyServer(proxyServer)
 
 		go func() {

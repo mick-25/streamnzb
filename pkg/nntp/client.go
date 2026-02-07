@@ -19,9 +19,9 @@ type Client struct {
 	ssl     bool
 	user    string
 	pass    string
-	
+
 	LastUsed time.Time
-	pool    *ClientPool // Reference to parent pool for metrics
+	pool     *ClientPool // Reference to parent pool for metrics
 }
 
 func NewClient(address string, port int, ssl bool) (*Client, error) {
@@ -77,7 +77,7 @@ func (c *Client) Authenticate(user, pass string) error {
 	c.conn.StartResponse(id)
 	code, _, err := c.conn.ReadCodeLine(381) // 381 PASS required
 	c.conn.EndResponse(id)
-	
+
 	if err != nil {
 		// Sometimes servers respond 281 immediately if no pass needed?
 		// But mostly 381. If we got 281, good.
@@ -99,7 +99,7 @@ func (c *Client) Authenticate(user, pass string) error {
 
 func (c *Client) Group(group string) error {
 	const maxRetries = 2
-	
+
 	for i := 0; i <= maxRetries; i++ {
 		c.setDeadline()
 		id, err := c.conn.Cmd("GROUP %s", group)
@@ -111,15 +111,15 @@ func (c *Client) Group(group string) error {
 			}
 			return err
 		}
-		
+
 		c.conn.StartResponse(id)
 		code, _, err := c.conn.ReadCodeLine(211)
 		c.conn.EndResponse(id)
-		
+
 		if err == nil {
 			return nil
 		}
-		
+
 		if c.shouldRetry(code, err) {
 			if recErr := c.Reconnect(); recErr == nil {
 				continue
@@ -155,7 +155,7 @@ func (c *Client) Body(messageID string) (io.Reader, error) {
 			return nil, err
 		}
 
-	// 2. Read Response
+		// 2. Read Response
 		c.conn.StartResponse(id)
 		code, _, err := c.conn.ReadCodeLine(222)
 		c.conn.EndResponse(id)
@@ -164,7 +164,7 @@ func (c *Client) Body(messageID string) (io.Reader, error) {
 			// Wrap reader to track metrics
 			return &metricReader{r: c.conn.DotReader(), client: c}, nil
 		}
-		
+
 		lastErr = err
 
 		// 3. Handle Errors
@@ -218,7 +218,7 @@ func (c *Client) Reconnect() error {
 	if c.conn != nil {
 		c.conn.Close()
 	}
-	
+
 	fullAddr := net.JoinHostPort(c.host, strconv.Itoa(c.port))
 	var conn net.Conn
 	var err error
@@ -239,10 +239,10 @@ func (c *Client) Reconnect() error {
 		tp.Close()
 		return err
 	}
-	
+
 	c.conn = tp
 	c.netConn = conn
-	
+
 	// Re-authenticate
 	if c.user != "" {
 		return c.Authenticate(c.user, c.pass)
@@ -282,15 +282,15 @@ func (c *Client) GetArticle(messageID string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	
+
 	c.conn.StartResponse(id)
 	defer c.conn.EndResponse(id)
-	
+
 	_, _, err = c.conn.ReadCodeLine(220)
 	if err != nil {
 		return "", err
 	}
-	
+
 	var lines []string
 	for {
 		line, err := c.conn.ReadLine()
@@ -302,7 +302,7 @@ func (c *Client) GetArticle(messageID string) (string, error) {
 		}
 		lines = append(lines, line)
 	}
-	
+
 	// Success! Return article
 	result := strings.Join(lines, "\n")
 	if c.pool != nil {
@@ -318,15 +318,15 @@ func (c *Client) GetBody(messageID string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	
+
 	c.conn.StartResponse(id)
 	defer c.conn.EndResponse(id)
-	
+
 	_, _, err = c.conn.ReadCodeLine(222)
 	if err != nil {
 		return "", err
 	}
-	
+
 	var lines []string
 	for {
 		line, err := c.conn.ReadLine()
@@ -338,7 +338,7 @@ func (c *Client) GetBody(messageID string) (string, error) {
 		}
 		lines = append(lines, line)
 	}
-	
+
 	result := strings.Join(lines, "\n")
 	if c.pool != nil {
 		c.pool.TrackRead(len(result))
@@ -353,15 +353,15 @@ func (c *Client) GetHead(messageID string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	
+
 	c.conn.StartResponse(id)
 	defer c.conn.EndResponse(id)
-	
+
 	_, _, err = c.conn.ReadCodeLine(221)
 	if err != nil {
 		return "", err
 	}
-	
+
 	var lines []string
 	for {
 		line, err := c.conn.ReadLine()
@@ -373,7 +373,7 @@ func (c *Client) GetHead(messageID string) (string, error) {
 		}
 		lines = append(lines, line)
 	}
-	
+
 	result := strings.Join(lines, "\n")
 	if c.pool != nil {
 		c.pool.TrackRead(len(result))
@@ -388,10 +388,10 @@ func (c *Client) CheckArticle(messageID string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	
+
 	c.conn.StartResponse(id)
 	defer c.conn.EndResponse(id)
-	
+
 	code, _, err := c.conn.ReadCodeLine(223)
 	if err != nil {
 		if code == 430 {
@@ -399,6 +399,6 @@ func (c *Client) CheckArticle(messageID string) (bool, error) {
 		}
 		return false, err
 	}
-	
+
 	return true, nil
 }

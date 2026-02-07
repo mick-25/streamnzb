@@ -41,6 +41,30 @@ type ValidationResult struct {
 	Error           error
 }
 
+// GetAnyProvider returns the first available provider from the pool
+// Used when validation is skipped (trusted source)
+func (c *Checker) GetAnyProvider() (*nntp.ClientPool, string) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	for host, pool := range c.providers {
+		return pool, host
+	}
+	return nil, ""
+}
+
+// GetProviderHosts returns a list of all configured provider hostnames
+func (c *Checker) GetProviderHosts() []string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	
+	hosts := make([]string, 0, len(c.providers))
+	for host := range c.providers {
+		hosts = append(hosts, host)
+	}
+	return hosts
+}
+
 // ValidateNZB checks article availability for an NZB across all providers
 func (c *Checker) ValidateNZB(ctx context.Context, nzbData *nzb.NZB) map[string]*ValidationResult {
 	results := make(map[string]*ValidationResult)
@@ -145,18 +169,18 @@ func (c *Checker) getSampleArticles(nzbData *nzb.NZB) []string {
 	}
 
 	articles := make([]string, 0, sampleSize)
-	
+
 	// Prioritize Critical Segments (Start & End)
 	// Usually headers are at start, and important footers/recovery at end.
-	
+
 	// 1. Always check First Segment
 	articles = append(articles, segments[0].ID)
-	
+
 	// 2. Always check Last Segment (if distinct)
 	if len(segments) > 1 {
 		articles = append(articles, segments[len(segments)-1].ID)
 	}
-	
+
 	// 3. Fill the rest with distributed samples
 	remainingSlots := sampleSize - len(articles)
 	if remainingSlots > 0 {
@@ -166,7 +190,7 @@ func (c *Checker) getSampleArticles(nzbData *nzb.NZB) []string {
 		if startIdx < endIdx {
 			totalSpan := endIdx - startIdx
 			step := float64(totalSpan) / float64(remainingSlots)
-			
+
 			for i := 0; i < remainingSlots; i++ {
 				// Round to nearest integer index
 				idx := startIdx + int(float64(i)*step)
@@ -176,7 +200,7 @@ func (c *Checker) getSampleArticles(nzbData *nzb.NZB) []string {
 			}
 		}
 	}
-	
+
 	return articles
 }
 
@@ -191,8 +215,16 @@ func GetBestProvider(results map[string]*ValidationResult) *ValidationResult {
 		}
 
 		// Calculate completion percentage
-		score := float64(result.CheckedArticles-result.MissingArticles) / float64(result.CheckedArticles)
-		if score > bestScore {
+		var score float64
+		if result.CheckedArticles == 0 {
+			// Special case for skipped validation (trusted availability)
+			// If Available is true (checked above), treat as 100%
+			score = 1.0
+		} else {
+			score = float64(result.CheckedArticles-result.MissingArticles) / float64(result.CheckedArticles)
+		}
+		
+		if score >= bestScore { // Use >= to pick the first one even if score is 0 or equal
 			bestScore = score
 			bestResult = result
 		}
@@ -200,6 +232,7 @@ func GetBestProvider(results map[string]*ValidationResult) *ValidationResult {
 
 	return bestResult
 }
+
 // UpdatePools swaps the provider pools at runtime
 func (c *Checker) UpdatePools(providers map[string]*nntp.ClientPool) {
 	c.mu.Lock()

@@ -3,7 +3,7 @@ package nntp
 // StatArticle checks if an article exists without downloading it
 func (c *Client) StatArticle(messageID string) (bool, error) {
 	c.setShortDeadline()
-	
+
 	// Send STAT command
 	id, err := c.conn.Cmd("STAT <%s>", messageID)
 	if err != nil {

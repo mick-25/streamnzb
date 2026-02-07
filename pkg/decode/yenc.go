@@ -14,12 +14,12 @@ func Decode(r io.Reader, w io.Writer) (int64, string, error) {
 	if err != nil {
 		return 0, "", err
 	}
-	
+
 	n, err := io.Copy(w, bytes.NewReader(part.Body))
 	if err != nil {
 		return n, "", err
 	}
-	
+
 	return n, part.Name, nil
 }
 

@@ -18,7 +18,7 @@ type Server struct {
 	pools    []*nntp.ClientPool
 	authUser string
 	authPass string
-	
+
 	listener net.Listener
 	mu       sync.Mutex
 	sessions map[string]*Session
@@ -57,15 +57,15 @@ func (s *Server) Validate() error {
 // Start starts the NNTP proxy server
 func (s *Server) Start() error {
 	addr := fmt.Sprintf("%s:%d", s.host, s.port)
-	
+
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		return fmt.Errorf("failed to start NNTP proxy: %w", err)
 	}
-	
+
 	s.listener = listener
 	logger.Info("NNTP proxy listening", "addr", addr)
-	
+
 	// Accept connections
 	for {
 		conn, err := listener.Accept()
@@ -77,7 +77,7 @@ func (s *Server) Start() error {
 			logger.Error("NNTP proxy accept error", "err", err)
 			continue
 		}
-		
+
 		go s.handleConnection(conn)
 	}
 }
@@ -93,64 +93,64 @@ func (s *Server) Stop() error {
 // handleConnection handles a single NNTP client connection
 func (s *Server) handleConnection(conn net.Conn) {
 	defer conn.Close()
-	
+
 	// Create session
 	session := NewSession(conn, s.pools, s.authUser, s.authPass)
-	
+
 	// Store session
 	s.mu.Lock()
 	s.sessions[conn.RemoteAddr().String()] = session
 	s.mu.Unlock()
-	
+
 	// Remove session on exit
 	defer func() {
 		s.mu.Lock()
 		delete(s.sessions, conn.RemoteAddr().String())
 		s.mu.Unlock()
 	}()
-	
+
 	logger.Debug("NNTP proxy: New connection", "remote", conn.RemoteAddr())
-	
+
 	// Send welcome banner
 	session.WriteLine("200 StreamNZB NNTP Proxy ready (posting prohibited)")
-	
+
 	// Read and process commands
 	scanner := bufio.NewScanner(conn)
 	for scanner.Scan() {
 		line := scanner.Text()
 		line = strings.TrimSpace(line)
-		
+
 		if line == "" {
 			continue
 		}
-		
+
 		logger.Debug("NNTP proxy command", "remote", conn.RemoteAddr(), "cmd", line)
-		
+
 		// Parse command
 		parts := strings.Fields(line)
 		if len(parts) == 0 {
 			continue
 		}
-		
+
 		cmd := strings.ToUpper(parts[0])
 		args := parts[1:]
-		
+
 		// Handle command
 		if err := session.HandleCommand(cmd, args); err != nil {
 			logger.Error("NNTP proxy command error", "remote", conn.RemoteAddr(), "err", err)
 			session.WriteLine(fmt.Sprintf("500 %v", err))
 		}
-		
+
 		// Check if session should quit
 		if session.ShouldQuit() {
 			break
 		}
 	}
-	
+
 	if err := scanner.Err(); err != nil {
 		logger.Error("NNTP proxy scanner error", "remote", conn.RemoteAddr(), "err", err)
 	}
-	
+
 	logger.Debug("NNTP proxy: Connection closed", "remote", conn.RemoteAddr())
 }
 

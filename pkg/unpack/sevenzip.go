@@ -18,7 +18,7 @@ import (
 type SevenZipBlueprint struct {
 	MainFileName string
 	TotalSize    int64
-	FileOffset   int64 // Offset of the file data within the archive
+	FileOffset   int64          // Offset of the file data within the archive
 	Files        []*loader.File // All 7z volume files
 }
 
@@ -222,7 +222,7 @@ func Open7zStreamFromBlueprint(bp *SevenZipBlueprint) (ReadSeekCloser, string, i
 // mapOffsetToParts slices the physical volume list into VirtualParts for a specific file range
 func mapOffsetToParts(volumes []Part, startOffset, size int64) ([]virtualPart, error) {
 	var vParts []virtualPart
-	
+
 	currentVolOffset := startOffset
 	remainingSize := size
 	virtualPos := int64(0)
@@ -302,7 +302,7 @@ func (c *ConcatenatedReaderAt) ReadAt(p []byte, off int64) (n int, err error) {
 	// Find starting part
 	var currentPartIdx int
 	var currentPartOff int64 // Offset relative to the start of the *part* (0-based)
-	
+
 	remainingOff := off
 	for i, part := range c.parts {
 		if remainingOff < part.Size {
@@ -316,7 +316,7 @@ func (c *ConcatenatedReaderAt) ReadAt(p []byte, off int64) (n int, err error) {
 	totalRead := 0
 	for currentPartIdx < len(c.parts) && totalRead < len(p) {
 		part := c.parts[currentPartIdx]
-		
+
 		available := part.Size - currentPartOff
 		toRead := int64(len(p) - totalRead)
 		if toRead > available {
@@ -324,22 +324,22 @@ func (c *ConcatenatedReaderAt) ReadAt(p []byte, off int64) (n int, err error) {
 		}
 
 		// Read from underlying reader at (PartOffset + currentPartOff)
-		readN, readErr := part.Reader.ReadAt(p[totalRead:totalRead+int(toRead)], part.Offset + currentPartOff)
+		readN, readErr := part.Reader.ReadAt(p[totalRead:totalRead+int(toRead)], part.Offset+currentPartOff)
 		totalRead += readN
-		
+
 		if readErr != nil && readErr != io.EOF {
 			return totalRead, readErr
 		}
-		
+
 		// Move to next part
 		currentPartIdx++
 		currentPartOff = 0
-		
+
 		if totalRead == len(p) {
 			break
 		}
 	}
-	
+
 	if totalRead < len(p) {
 		return totalRead, io.EOF
 	}
