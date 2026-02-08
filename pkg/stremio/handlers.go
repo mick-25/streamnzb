@@ -313,24 +313,22 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string) 
 	}
 	maxAttempts := maxToValidate * 2 // Auto-calculate safety limit
 	
+
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	
 	var wg sync.WaitGroup
 	
 	for _, candidate := range candidates {
-		// Check if we should stop early
+		// Pre-check: stop launching new goroutines if we've already hit attempt limit
 		mu.Lock()
-		shouldStop := validated >= maxToValidate || attempted >= maxAttempts
-		if !shouldStop {
-			attempted++  // Count this attempt
-		}
-		mu.Unlock()
-		
-		if shouldStop {
-			logger.Debug("Early stop", "validated", validated, "attempted", attempted)
+		if attempted >= maxAttempts {
+			mu.Unlock()
+			logger.Debug("Hit attempt limit, stopping launch", "attempted", attempted, "maxAttempts", maxAttempts)
 			break
 		}
+		attempted++ // Count this attempt
+		mu.Unlock()
 		
 		wg.Add(1)
 		go func(cand triage.Candidate) {
@@ -344,12 +342,31 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string) 
 				return
 			}
 			
+			// Check if we've already hit the validated limit (after acquiring semaphore)
+			mu.Lock()
+			if validated >= maxToValidate {
+				mu.Unlock()
+				logger.Debug("Already hit validation limit, skipping", "validated", validated, "maxToValidate", maxToValidate)
+				cancel() // Cancel remaining goroutines
+				return
+			}
+			mu.Unlock()
+			
 			// Validate candidate
 			stream, err := s.validateCandidate(ctx, cand)
 			if err == nil {
-				resultChan <- stream
 				mu.Lock()
-				validated++  // Only count successful validations
+				// Double-check limit before adding (in case multiple goroutines validated simultaneously)
+				if validated < maxToValidate {
+					resultChan <- stream
+					validated++ // Only count successful validations
+					
+					// If we just hit the limit, cancel remaining work
+					if validated >= maxToValidate {
+						logger.Debug("Hit validation limit, canceling remaining", "validated", validated, "maxToValidate", maxToValidate)
+						cancel()
+					}
+				}
 				mu.Unlock()
 			}
 		}(candidate)
