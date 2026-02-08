@@ -401,11 +401,16 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string) 
 			// Check if we already know this NZB is good/bad based on previous reports
 			var indexerName string
 			if item.SourceIndexer != nil {
-				indexerName = item.SourceIndexer.Name()
-				// Prowlarr indexers are often named "Prowlarr: IndexerName"
-				// We want just "IndexerName" for AvailNZB
-				if strings.HasPrefix(indexerName, "Prowlarr:") {
-					indexerName = strings.TrimSpace(strings.TrimPrefix(indexerName, "Prowlarr:"))
+				// Prefer ActualIndexer from attributes (for meta-indexers like NZBHydra2)
+				if item.ActualIndexer != "" {
+					indexerName = item.ActualIndexer
+				} else {
+					indexerName = item.SourceIndexer.Name()
+					// Prowlarr indexers are often named "Prowlarr: IndexerName"
+					// We want just "IndexerName" for AvailNZB
+					if strings.HasPrefix(indexerName, "Prowlarr:") {
+						indexerName = strings.TrimSpace(strings.TrimPrefix(indexerName, "Prowlarr:"))
+					}
 				}
 			}
 
@@ -415,24 +420,21 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string) 
 			// Get configured providers
 			providerHosts := s.validator.GetProviderHosts()
 			
-			logger.Info("AvailNZB: Pre-check", "title", item.Title, "guid", item.GUID)
 			// If we have an indexer name and GUID, check crowdsourced availability
-			if indexerName != "" && item.GUID != "" && len(providerHosts) > 0 {
-				nzbID, isHealthy, lastUpdated, provider, err := s.availClient.CheckPreDownload(indexerName, item.GUID, providerHosts)
+			if indexerName != "" && len(providerHosts) > 0 {
+				// Use ActualGUID if available (from NZBHydra2 link parsing), otherwise use item.GUID
+				guidToCheck := item.GUID
+				if item.ActualGUID != "" {
+					guidToCheck = item.ActualGUID
+				}
+				
+				nzbID, isHealthy, lastUpdated, _, err := s.availClient.CheckPreDownload(indexerName, guidToCheck, providerHosts)
 				if err == nil && nzbID != "" {
 					if isHealthy {
-						logger.Info("AvailNZB: Pre-check PASSED (Crowdsourced)", "title", item.Title, "guid", item.GUID, "provider", provider)
-						// OPTIMIZATION: Skip validation entirely if healthy on one of OUR providers
-						// We proceed to session creation immediately, effectively trusting the crowdsourced data
 						skipValidation = true
 					} else {
-						// Logic: If unhealthy, check last_updated
 						if time.Since(lastUpdated) > 24*time.Hour {
-							logger.Info("AvailNZB: Pre-check FAILED but OLD (Retrying)", "title", item.Title, "guid", item.GUID, "age", time.Since(lastUpdated))
-							// Retry: Continue to standard validation (don't return)
 						} else {
-							logger.Warn("AvailNZB: Pre-check FAILED (Skipping)", "title", item.Title, "guid", item.GUID, "age", time.Since(lastUpdated))
-							// Skip this candidate
 							return
 						}
 						}

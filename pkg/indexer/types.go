@@ -47,6 +47,14 @@ type Item struct {
 	// SourceIndexer is the indexer that provided this item
 	// This is not part of the XML, but populated by the client
 	SourceIndexer Indexer `xml:"-"`
+
+	// ActualIndexer is the real indexer name when using meta-indexers like NZBHydra2
+	// This is populated from Newznab attributes and not part of the XML
+	ActualIndexer string `xml:"-"`
+	
+	// ActualGUID is the real indexer GUID when using meta-indexers like NZBHydra2
+	// This is extracted from the link field and not part of the XML
+	ActualGUID string `xml:"-"`
 }
 
 // Attribute represents Newznab attributes

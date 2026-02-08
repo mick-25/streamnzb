@@ -164,6 +164,28 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 	// Populate SourceIndexer for each item
 	for i := range result.Channel.Items {
 		result.Channel.Items[i].SourceIndexer = c
+		
+		// Extract actual indexer name from Newznab attributes
+		// NZBHydra2 includes the underlying indexer information in attributes
+		if indexerName := result.Channel.Items[i].GetAttribute("indexer"); indexerName != "" {
+			result.Channel.Items[i].ActualIndexer = indexerName
+		} else if indexerName := result.Channel.Items[i].GetAttribute("hydraIndexerName"); indexerName != "" {
+			result.Channel.Items[i].ActualIndexer = indexerName
+		}
+	}
+	
+	// Resolve all details_links in one batch call to internal API
+	detailsLinks, err := c.ResolveDetailsLinks(req)
+	if err != nil {
+		logger.Warn("Failed to resolve details_links from NZBHydra2 internal API", "err", err)
+		// Continue without details_links - we'll fall back to using the hash
+	} else {
+		// Populate ActualGUID for each item
+		for i := range result.Channel.Items {
+			if detailsLink, ok := detailsLinks[result.Channel.Items[i].GUID]; ok {
+				result.Channel.Items[i].ActualGUID = detailsLink
+			}
+		}
 	}
 
 	return &result, nil
