@@ -69,7 +69,7 @@ func main() {
 	logger.Info("Session manager initialized", "ttl", sessionTTL)
 
 	// Initialize Triage Service
-	triageService := triage.NewService(200)
+	triageService := triage.NewService(200, &cfg.Filters)
 
 	availNZBUrl := cfg.AvailNZBURL
 	if availNZBUrl == "" {

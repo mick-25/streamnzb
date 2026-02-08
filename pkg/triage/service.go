@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 
+	"streamnzb/pkg/config"
 	"streamnzb/pkg/indexer"
 	"streamnzb/pkg/parser"
 )
@@ -19,23 +20,42 @@ type Candidate struct {
 
 // Service implements smart triage logic
 type Service struct {
-	MaxPerGroup int
+	MaxPerGroup  int
+	FilterConfig *config.FilterConfig
 }
 
 // NewService creates a new triage service
-func NewService(maxPerGroup int) *Service {
+func NewService(maxPerGroup int, filterConfig *config.FilterConfig) *Service {
 	return &Service{
-		MaxPerGroup: maxPerGroup,
+		MaxPerGroup:  maxPerGroup,
+		FilterConfig: filterConfig,
 	}
 }
 
 // Filter processes search results and returns the best candidates
 func (s *Service) Filter(results []indexer.Item) []Candidate {
+	// Apply PTT-based filtering FIRST
+	var filtered []indexer.Item
+	
+	for _, res := range results {
+		// Parse title
+		parsed := parser.ParseReleaseTitle(res.Title)
+		
+		// Check if it passes filters
+		if s.FilterConfig != nil {
+			if !s.shouldInclude(res, parsed) {
+				continue // Skip this result
+			}
+		}
+		
+		filtered = append(filtered, res)
+	}
+	
 	// Group items
 	groups := make(map[string][]Candidate)
 
-	for _, res := range results {
-		// Parse title
+	for _, res := range filtered {
+		// Parse title again (we could optimize by caching parsed results)
 		parsed := parser.ParseReleaseTitle(res.Title)
 
 		// Determine group
@@ -43,6 +63,11 @@ func (s *Service) Filter(results []indexer.Item) []Candidate {
 
 		// Calculate score
 		score := calculateScore(res, parsed)
+		
+		// Apply score boost for preferred attributes
+		if s.FilterConfig != nil {
+			score += scoreBoost(s.FilterConfig, parsed)
+		}
 
 		candidate := Candidate{
 			Result:   res,
@@ -75,6 +100,58 @@ func (s *Service) Filter(results []indexer.Item) []Candidate {
 	}
 
 	return selected
+}
+
+// shouldInclude checks if a release passes all filter criteria
+func (s *Service) shouldInclude(res indexer.Item, parsed *parser.ParsedRelease) bool {
+	cfg := s.FilterConfig
+	
+	// Quality filters
+	if !checkQuality(cfg, parsed) {
+		return false
+	}
+	
+	// Resolution filters
+	if !checkResolution(cfg, parsed) {
+		return false
+	}
+	
+	// Codec filters
+	if !checkCodec(cfg, parsed) {
+		return false
+	}
+	
+	// Audio filters
+	if !checkAudio(cfg, parsed) {
+		return false
+	}
+	
+	// HDR filters
+	if !checkHDR(cfg, parsed) {
+		return false
+	}
+	
+	// Language filters
+	if !checkLanguages(cfg, parsed) {
+		return false
+	}
+	
+	// Other filters
+	if !checkOther(cfg, parsed) {
+		return false
+	}
+	
+	// Group filters
+	if !checkGroup(cfg, parsed) {
+		return false
+	}
+	
+	// Size filters
+	if !checkSize(cfg, res) {
+		return false
+	}
+	
+	return true
 }
 
 func determineGroup(p *parser.ParsedRelease) string {

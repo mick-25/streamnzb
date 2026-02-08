@@ -20,6 +20,52 @@ type Provider struct {
 	UseSSL      bool   `json:"use_ssl"`
 }
 
+// FilterConfig holds user filtering preferences for PTT-based release filtering
+type FilterConfig struct {
+	// Quality filters
+	AllowedQualities []string `json:"allowed_qualities"` // e.g., ["BluRay", "WEB-DL", "HDTV"]
+	BlockedQualities []string `json:"blocked_qualities"` // e.g., ["CAM", "TeleSync"]
+	
+	// Resolution filters
+	MinResolution string `json:"min_resolution"` // e.g., "720p"
+	MaxResolution string `json:"max_resolution"` // e.g., "2160p"
+	
+	// Codec filters
+	AllowedCodecs []string `json:"allowed_codecs"` // e.g., ["HEVC", "AVC"]
+	BlockedCodecs []string `json:"blocked_codecs"` // e.g., ["MPEG-2"]
+	
+	// Audio filters
+	RequiredAudio []string `json:"required_audio"` // e.g., ["Atmos", "TrueHD"]
+	AllowedAudio  []string `json:"allowed_audio"`  // e.g., ["DTS", "DD", "AAC"]
+	MinChannels   string   `json:"min_channels"`   // e.g., "5.1"
+	
+	// HDR filters
+	RequireHDR bool     `json:"require_hdr"` // Require any HDR
+	AllowedHDR []string `json:"allowed_hdr"` // e.g., [" DV", "HDR10+"]
+	BlockedHDR []string `json:"blocked_hdr"` // e.g., ["DV"] to block Dolby Vision
+	BlockSDR   bool     `json:"block_sdr"`   // Block SDR releases
+	
+	// Language filters
+	RequiredLanguages []string `json:"required_languages"` // e.g., ["en"]
+	AllowedLanguages  []string `json:"allowed_languages"`  // e.g., ["en", "multi"]
+	BlockDubbed       bool     `json:"block_dubbed"`
+	
+	// Other filters
+	BlockCam       bool   `json:"block_cam"`        // Block CAM/TS/TC
+	RequireProper  bool   `json:"require_proper"`
+	AllowRepack    bool   `json:"allow_repack"`
+	BlockHardcoded bool   `json:"block_hardcoded"`
+	MinBitDepth    string `json:"min_bit_depth"` // e.g., "10bit"
+	
+	// Size filters
+	MinSizeGB float64 `json:"min_size_gb"`
+	MaxSizeGB float64 `json:"max_size_gb"`
+	
+	// Group filters
+	PreferredGroups []string `json:"preferred_groups"` // e.g., ["FLUX", "NTb"]
+	BlockedGroups   []string `json:"blocked_groups"`
+}
+
 // Config holds application configuration
 type Config struct {
 	// NZBHydra2 settings
@@ -59,6 +105,9 @@ type Config struct {
 
 	// TMDB Settings
 	TMDBAPIKey string `json:"-"`
+	
+	// Filtering
+	Filters FilterConfig `json:"filters"`
 
 	// Internal - where was this config loaded from?
 	LoadedPath string `json:"-"`

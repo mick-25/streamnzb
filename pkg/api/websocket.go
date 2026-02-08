@@ -217,7 +217,7 @@ func (s *Server) handleSaveConfigWS(conn *websocket.Conn, client *Client, payloa
 
 		// Build dependencies for Stremio Server reload
 		validator := validation.NewChecker(comp.ProviderPools, 24*time.Hour, 10, 5)
-		triageService := triage.NewService(5)
+		triageService := triage.NewService(5, &comp.Config.Filters)
 		availClient := availnzb.NewClient(comp.Config.AvailNZBURL, comp.Config.AvailNZBAPIKey)
 		tmdbClient := tmdb.NewClient(comp.Config.TMDBAPIKey)
 

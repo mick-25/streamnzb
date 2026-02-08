@@ -11,6 +11,7 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { Form, FormField, FormItem, FormLabel, FormControl, FormMessage } from "@/components/ui/form"
 import { PasswordInput } from "@/components/ui/password-input"
 import { Trash2, Plus, Loader2, RotateCcw } from "lucide-react"
+import { FiltersSection } from "@/components/FiltersSection"
 
 function Settings({ initialConfig, sendCommand, saveStatus, isSaving, onClose }) {
   const [loading, setLoading] = useState(!initialConfig)
@@ -33,7 +34,34 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, onClose })
       cache_ttl_seconds: 300,
       validation_sample_size: 5,
       max_concurrent_validations: 20,
-      providers: []
+      providers: [],
+      filters: {
+        allowed_qualities: [],
+        blocked_qualities: [],
+        min_resolution: '',
+        max_resolution: '',
+        allowed_codecs: [],
+        blocked_codecs: [],
+        required_audio: [],
+        allowed_audio: [],
+        min_channels: '',
+        require_hdr: false,
+        allowed_hdr: [],
+        blocked_hdr: [],
+        block_sdr: false,
+        required_languages: [],
+        allowed_languages: [],
+        block_dubbed: false,
+        block_cam: false,
+        require_proper: false,
+        allow_repack: true,
+        block_hardcoded: false,
+        min_bit_depth: '',
+        min_size_gb: 0,
+        max_size_gb: 0,
+        preferred_groups: [],
+        blocked_groups: []
+      }
     }
   })
 
@@ -494,6 +522,9 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, onClose })
                                 ))}
                             </div>
                         </div>
+
+                        {/* Filters Section */}
+                        <FiltersSection control={control} watch={form.watch} />
                     </form>
                 </Form>
             </div>
