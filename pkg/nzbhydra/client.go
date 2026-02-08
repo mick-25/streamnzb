@@ -193,7 +193,7 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 
 // DownloadNZB downloads an NZB file by URL
 func (c *Client) DownloadNZB(nzbURL string) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, "GET", nzbURL, nil)

@@ -61,9 +61,22 @@ type FilterConfig struct {
 	MinSizeGB float64 `json:"min_size_gb"`
 	MaxSizeGB float64 `json:"max_size_gb"`
 	
-	// Group filters
-	PreferredGroups []string `json:"preferred_groups"` // e.g., ["FLUX", "NTb"]
+	// Group filters (blocking only)
 	BlockedGroups   []string `json:"blocked_groups"`
+}
+
+// SortConfig holds weights for triage scoring
+type SortConfig struct {
+	ResolutionWeights map[string]int `json:"resolution_weights"`
+	CodecWeights      map[string]int `json:"codec_weights"`
+	AudioWeights      map[string]int `json:"audio_weights"`
+	QualityWeights    map[string]int `json:"quality_weights"`
+	GrabWeight        float64        `json:"grab_weight"`
+	AgeWeight         float64        `json:"age_weight"`
+	
+	// Preference boosts (prioritization, not filtering)
+	PreferredGroups    []string `json:"preferred_groups"`    // e.g., ["FLUX", "NTb"]
+	PreferredLanguages []string `json:"preferred_languages"` // e.g., ["en", "multi"]
 }
 
 // Config holds application configuration
@@ -82,9 +95,9 @@ type Config struct {
 	LogLevel     string `json:"log_level"`
 
 	// Validation settings
-	CacheTTLSeconds          int `json:"cache_ttl_seconds"`
-	ValidationSampleSize     int `json:"validation_sample_size"`
-	MaxConcurrentValidations int `json:"max_concurrent_validations"`
+	CacheTTLSeconds      int `json:"cache_ttl_seconds"`
+	ValidationSampleSize int `json:"validation_sample_size"`
+	MaxStreams           int `json:"max_streams"` // Max successful streams to return per search
 
 	// NNTP Providers
 	Providers []Provider `json:"providers"`
@@ -109,64 +122,170 @@ type Config struct {
 	// Filtering
 	Filters FilterConfig `json:"filters"`
 
+	// Sorting
+	Sorting SortConfig `json:"sorting"`
+
 	// Internal - where was this config loaded from?
 	LoadedPath string `json:"-"`
 }
 
-// Load loads configuration from environment variables AND config.json if present
+// Load loads configuration from config.json, overrides with env vars, and saves
+// Priority: Environment variables (if not empty) > config.json > defaults
 func Load() (*Config, error) {
-	// 1. Initialize with Env Vars (Defaults)
-	cfg := &Config{
-		NZBHydra2URL:             getEnv("NZBHYDRA2_URL", "http://localhost:5076"),
-		NZBHydra2APIKey:          getEnv("NZBHYDRA2_API_KEY", ""),
-		ProwlarrURL:              getEnv("PROWLARR_URL", ""),
-		ProwlarrAPIKey:           getEnv("PROWLARR_API_KEY", ""),
-		AddonPort:                getEnvInt("ADDON_PORT", 7000),
-		AddonBaseURL:             getEnv("ADDON_BASE_URL", "http://localhost:7000"),
-		LogLevel:                 getEnv("LOG_LEVEL", "INFO"),
-		CacheTTLSeconds:          getEnvInt("CACHE_TTL_SECONDS", 3600),
-		ValidationSampleSize:     getEnvInt("VALIDATION_SAMPLE_SIZE", 5),
-		MaxConcurrentValidations: getEnvInt("MAX_CONCURRENT_VALIDATIONS", 20),
-		SecurityToken:            getEnv("SECURITY_TOKEN", ""),
-		AvailNZBURL:              getEnv("AVAILNZB_URL", ""),
-		AvailNZBAPIKey:           getEnv("AVAILNZB_API_KEY", ""),
-		TMDBAPIKey:               getEnv("TMDB_API_KEY", ""),
-	}
-
-	cfg.Providers = loadProviders()
-
-	cfg.ProxyEnabled = getEnvBool("NNTP_PROXY_ENABLED", false)
-	cfg.ProxyPort = getEnvInt("NNTP_PROXY_PORT", 119)
-	cfg.ProxyHost = getEnv("NNTP_PROXY_HOST", "0.0.0.0")
-	cfg.ProxyAuthUser = getEnv("NNTP_PROXY_AUTH_USER", "")
-	cfg.ProxyAuthPass = getEnv("NNTP_PROXY_AUTH_PASS", "")
-
-	// 2. Override with config.json if it exists
-	// Priority: /app/data/config.json (Docker volume) > ./config.json (Local)
+	// 1. Determine config path
+	// If running in Docker (/.dockerenv exists), use /app/data/config.json
+	// Otherwise use ./config.json (local development)
 	configPath := "config.json"
-	if _, err := os.Stat("/app/data/config.json"); err == nil {
+	if _, err := os.Stat("/.dockerenv"); err == nil {
+		// Running in Docker container
 		configPath = "/app/data/config.json"
-		logger.Info("Loading configuration", "path", "/app/data/config.json")
-	} else if _, err := os.Stat("config.json"); err == nil {
-		logger.Info("Loading configuration", "path", "./config.json")
-	} else {
-		// No config file found.
-		// If /app/data directory exists (Docker volume), default to saving there.
-		if info, err := os.Stat("/app/data"); err == nil && info.IsDir() {
-			configPath = "/app/data/config.json"
-			logger.Info("No config found. Will save new configuration", "path", "/app/data/config.json")
+		// Ensure /app/data directory exists
+		if err := os.MkdirAll("/app/data", 0755); err != nil {
+			logger.Warn("Failed to create /app/data directory", "err", err)
 		}
 	}
 
-	// Set the loaded path so we know where to save back to
-	cfg.LoadedPath = configPath
-
-	if err := cfg.LoadFile(configPath); err != nil && !os.IsNotExist(err) {
-		logger.Warn("Failed to load config", "path", configPath, "err", err)
+	// 2. Load config.json (or create with defaults if it doesn't exist)
+	cfg := &Config{
+		// Set defaults
+		NZBHydra2URL:             "",
+		AddonPort:                7000,
+		AddonBaseURL:             "http://localhost:7000",
+		LogLevel:                 "INFO",
+		CacheTTLSeconds:          300,
+		ValidationSampleSize:     5,
+		MaxStreams:               6,
+		ProxyPort:                119,
+		ProxyHost:                "0.0.0.0",
+		Sorting: SortConfig{
+			ResolutionWeights: map[string]int{
+				"4k":    4000000,
+				"1080p": 3000000,
+				"720p":  2000000,
+				"sd":    1000000,
+			},
+			CodecWeights: map[string]int{
+				"HEVC": 1000,
+				"x265": 1000,
+				"x264": 500,
+				"AVC":  500,
+			},
+			AudioWeights: map[string]int{
+				"Atmos":   1500,
+				"TrueHD":  1200,
+				"DTS-HD":  1000,
+				"DTS-X":   1000,
+				"DTS":     500,
+				"DD+":     400,
+				"DD":      300,
+				"AC3":     200,
+				"5.1":     500,
+				"7.1":     1000,
+			},
+			QualityWeights: map[string]int{
+				"BluRay":  2000,
+				"WEB-DL":  1500,
+				"WEBRip":  1200,
+				"HDTV":    1000,
+				"Blu-ray": 2000,
+			},
+			GrabWeight: 0.5,
+			AgeWeight:  1.0,
+		},
+		LoadedPath: configPath,
 	}
 
-	// Note: We no longer enforce at least one provider during Load to allow
-	// the application to start "empty" and be configured via the web UI.
+	// Try to load existing config
+	if err := cfg.LoadFile(configPath); err != nil {
+		if os.IsNotExist(err) {
+			logger.Info("No config found, creating new one", "path", configPath)
+		} else {
+			logger.Warn("Failed to load config, using defaults", "path", configPath, "err", err)
+		}
+	} else {
+		logger.Info("Loaded configuration", "path", configPath)
+	}
+
+	// 3. Override with environment variables (if not empty)
+	if val := os.Getenv("NZBHYDRA2_URL"); val != "" {
+		cfg.NZBHydra2URL = val
+	}
+	if val := os.Getenv("NZBHYDRA2_API_KEY"); val != "" {
+		cfg.NZBHydra2APIKey = val
+	}
+	if val := os.Getenv("PROWLARR_URL"); val != "" {
+		cfg.ProwlarrURL = val
+	}
+	if val := os.Getenv("PROWLARR_API_KEY"); val != "" {
+		cfg.ProwlarrAPIKey = val
+	}
+	if val := os.Getenv("ADDON_PORT"); val != "" {
+		if port, err := strconv.Atoi(val); err == nil {
+			cfg.AddonPort = port
+		}
+	}
+	if val := os.Getenv("ADDON_BASE_URL"); val != "" {
+		cfg.AddonBaseURL = val
+	}
+	if val := os.Getenv("LOG_LEVEL"); val != "" {
+		cfg.LogLevel = val
+	}
+	if val := os.Getenv("CACHE_TTL_SECONDS"); val != "" {
+		if ttl, err := strconv.Atoi(val); err == nil {
+			cfg.CacheTTLSeconds = ttl
+		}
+	}
+	if val := os.Getenv("VALIDATION_SAMPLE_SIZE"); val != "" {
+		if size, err := strconv.Atoi(val); err == nil {
+			cfg.ValidationSampleSize = size
+		}
+	}
+	if val := os.Getenv("SECURITY_TOKEN"); val != "" {
+		cfg.SecurityToken = val
+	}
+	if val := os.Getenv("AVAILNZB_URL"); val != "" {
+		cfg.AvailNZBURL = val
+	}
+	if val := os.Getenv("AVAILNZB_API_KEY"); val != "" {
+		cfg.AvailNZBAPIKey = val
+	}
+	if val := os.Getenv("TMDB_API_KEY"); val != "" {
+		cfg.TMDBAPIKey = val
+	}
+
+	// Proxy settings
+	if val := os.Getenv("NNTP_PROXY_ENABLED"); val != "" {
+		cfg.ProxyEnabled = val == "true" || val == "1"
+	}
+	if val := os.Getenv("NNTP_PROXY_PORT"); val != "" {
+		if port, err := strconv.Atoi(val); err == nil {
+			cfg.ProxyPort = port
+		}
+	}
+	if val := os.Getenv("NNTP_PROXY_HOST"); val != "" {
+		cfg.ProxyHost = val
+	}
+	if val := os.Getenv("NNTP_PROXY_AUTH_USER"); val != "" {
+		cfg.ProxyAuthUser = val
+	}
+	if val := os.Getenv("NNTP_PROXY_AUTH_PASS"); val != "" {
+		cfg.ProxyAuthPass = val
+	}
+
+	// Load providers from env vars (if any)
+	envProviders := loadProviders()
+	if len(envProviders) > 0 {
+		cfg.Providers = envProviders
+	}
+
+	// 4. Save the merged configuration
+	if err := cfg.Save(); err != nil {
+		logger.Warn("Failed to save config on startup", "err", err)
+	} else {
+		logger.Info("Saved merged configuration", "path", configPath)
+	}
+
+	// Warn if no providers configured
 	if len(cfg.Providers) == 0 {
 		logger.Warn("No NNTP providers configured. Add some via the web UI")
 	}

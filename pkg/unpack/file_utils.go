@@ -13,6 +13,13 @@ const (
 	ExtMkv  = ".mkv"
 	ExtMp4  = ".mp4"
 	ExtAvi  = ".avi"
+	ExtM2ts = ".m2ts"  // Blu-ray MPEG-2 Transport Stream
+	ExtTs   = ".ts"    // MPEG Transport Stream
+	ExtVob  = ".vob"   // DVD Video Object
+	ExtWmv  = ".wmv"   // Windows Media Video
+	ExtFlv  = ".flv"   // Flash Video
+	ExtWebm = ".webm"  // WebM
+	ExtMov  = ".mov"   // QuickTime
 	ExtPar2 = ".par2"
 	ExtNfo  = ".nfo"
 	ExtNzb  = ".nzb"
@@ -54,7 +61,14 @@ func IsVideoFile(name string) bool {
 	lower := strings.ToLower(name)
 	return strings.HasSuffix(lower, ExtMkv) ||
 		strings.HasSuffix(lower, ExtMp4) ||
-		strings.HasSuffix(lower, ExtAvi)
+		strings.HasSuffix(lower, ExtAvi) ||
+		strings.HasSuffix(lower, ExtM2ts) ||
+		strings.HasSuffix(lower, ExtTs) ||
+		strings.HasSuffix(lower, ExtVob) ||
+		strings.HasSuffix(lower, ExtWmv) ||
+		strings.HasSuffix(lower, ExtFlv) ||
+		strings.HasSuffix(lower, ExtWebm) ||
+		strings.HasSuffix(lower, ExtMov)
 }
 
 // IsArchiveFile checks if the filename involves an archive (RAR, Zip, 7z, ISO).

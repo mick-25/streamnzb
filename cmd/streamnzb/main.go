@@ -60,7 +60,7 @@ func main() {
 		comp.ProviderPools,
 		cacheTTL,
 		cfg.ValidationSampleSize,
-		cfg.MaxConcurrentValidations,
+		6, // Hardcoded concurrency limit (not configurable)
 	)
 
 	// Initialize session manager
@@ -69,7 +69,10 @@ func main() {
 	logger.Info("Session manager initialized", "ttl", sessionTTL)
 
 	// Initialize Triage Service
-	triageService := triage.NewService(200, &cfg.Filters)
+	triageService := triage.NewService(
+		&cfg.Filters,
+		cfg.Sorting,
+	)
 
 	availNZBUrl := cfg.AvailNZBURL
 	if availNZBUrl == "" {
@@ -93,7 +96,7 @@ func main() {
 	tmdbClient := tmdb.NewClient(tmdbKey)
 
 	// Initialize Stremio addon server
-	stremioServer, err := stremio.NewServer(cfg.AddonBaseURL, cfg.AddonPort, comp.Indexer, validator,
+	stremioServer, err := stremio.NewServer(cfg, cfg.AddonBaseURL, cfg.AddonPort, comp.Indexer, validator,
 		sessionManager, triageService, availClient, tmdbClient, cfg.SecurityToken)
 	if err != nil {
 		initialization.WaitForInputAndExit(fmt.Errorf("Failed to initialize Stremio server: %v", err))

@@ -8,13 +8,11 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogD
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Separator } from "@/components/ui/separator"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { Form, FormField, FormItem, FormLabel, FormControl, FormMessage, FormDescription } from "@/components/ui/form"
+import { Form, FormField, FormItem, FormLabel, FormControl, FormMessage } from "@/components/ui/form"
 import { PasswordInput } from "@/components/ui/password-input"
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
-import { Trash2, Plus, Loader2, RotateCcw, Info } from "lucide-react"
+import { Trash2, Plus, Loader2, RotateCcw } from "lucide-react"
 import { FiltersSection } from "@/components/FiltersSection"
 import { SortingSection } from "@/components/SortingSection"
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 
 function Settings({ initialConfig, sendCommand, saveStatus, isSaving, onClose }) {
   const [loading, setLoading] = useState(!initialConfig)
@@ -36,7 +34,7 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, onClose })
       proxy_auth_pass: '',
       cache_ttl_seconds: 300,
       validation_sample_size: 5,
-      max_streams: 6,
+      max_concurrent_validations: 20,
       providers: [],
       filters: {
         allowed_qualities: [],
@@ -62,6 +60,7 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, onClose })
         min_bit_depth: '',
         min_size_gb: 0,
         max_size_gb: 0,
+        preferred_groups: [],
         blocked_groups: []
       },
       sorting: {
@@ -97,9 +96,7 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, onClose })
           'Blu-ray': 2000
         },
         grab_weight: 0.5,
-        age_weight: 1.0,
-        preferred_groups: [],
-        preferred_languages: []
+        age_weight: 1.0
       }
     }
   })
@@ -159,17 +156,8 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, onClose })
         <ScrollArea className="flex-1 min-h-0 w-full">
             <div className="p-6">
                 <Form {...form}>
-                    <form onSubmit={handleSubmit(onSubmit)}>
-                        <Tabs defaultValue="general" className="w-full">
-                            <TabsList className="grid w-full grid-cols-5 mb-6">
-                                <TabsTrigger value="general">General</TabsTrigger>
-                                <TabsTrigger value="providers">Providers</TabsTrigger>
-                                <TabsTrigger value="filters">Filters</TabsTrigger>
-                                <TabsTrigger value="sorting">Sorting</TabsTrigger>
-                                <TabsTrigger value="advanced">Advanced</TabsTrigger>
-                            </TabsList>
-
-                            <TabsContent value="general" className="space-y-6">
+                    <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
+                        
                         {/* Indexers Section */}
                         <Card>
                             <CardHeader>
@@ -287,11 +275,15 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, onClose })
                             </CardContent>
                         </Card>
 
-                        {/* NNTP Proxy Server */}
+                        {/* NNTP Proxy Settings */}
+                        {/* ... (no changes here) ... */}
+                        
+                        {/* ... (rest of form) ... */}
+                        
                         <Card>
                             <CardHeader>
                                 <CardTitle className="text-lg">NNTP Proxy Server</CardTitle>
-                                <CardDescription>Allow other apps (SABnzbd, NZBGet) to use StreamNZB as a localized news server.</CardDescription>
+                                <CardDescription>Allow other apps (SABnzbd, NBZGet) to use StreamNZB as a localized news server.</CardDescription>
                             </CardHeader>
                             <CardContent className="grid gap-4">
                                 <FormField
@@ -358,7 +350,7 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, onClose })
                                             <FormField
                                                 control={control}
                                                 name="proxy_auth_pass"
-                                                render={({ field}) => (
+                                                render={({ field }) => (
                                                     <FormItem>
                                                         <FormLabel>Proxy Password</FormLabel>
                                                         <FormControl>
@@ -373,10 +365,6 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, onClose })
                                 )}
                             </CardContent>
                         </Card>
-                            </TabsContent>
-
-                            <TabsContent value="advanced" className="space-y-6">
-                        {/* Advanced Settings */}
                         <Card>
                             <CardHeader>
                                 <CardTitle className="text-lg">Advanced Settings</CardTitle>
@@ -409,25 +397,10 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, onClose })
                                         name="cache_ttl_seconds"
                                         render={({ field }) => (
                                             <FormItem>
-                                                <FormLabel className="flex items-center gap-2">
-                                                    Cache TTL (seconds)
-                                                    <TooltipProvider>
-                                                        <Tooltip>
-                                                            <TooltipTrigger asChild>
-                                                                <Info className="h-4 w-4 text-muted-foreground cursor-help" />
-                                                            </TooltipTrigger>
-                                                            <TooltipContent className="max-w-xs">
-                                                                <p>How long to cache validation results. Cached results avoid re-checking the same NZB files repeatedly, improving performance.</p>
-                                                            </TooltipContent>
-                                                        </Tooltip>
-                                                    </TooltipProvider>
-                                                </FormLabel>
+                                                <FormLabel>Validation Cache TTL (Seconds)</FormLabel>
                                                 <FormControl>
-                                                    <Input type="number" min="60" max="3600" {...field} onChange={e => field.onChange(e.target.valueAsNumber)} />
+                                                    <Input type="number" {...field} onChange={e => field.onChange(e.target.valueAsNumber)} />
                                                 </FormControl>
-                                                <FormDescription>
-                                                    Cache duration in seconds (default: 300)
-                                                </FormDescription>
                                                 <FormMessage />
                                             </FormItem>
                                         )}
@@ -439,54 +412,23 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, onClose })
                                         name="validation_sample_size"
                                         render={({ field }) => (
                                             <FormItem>
-                                                <FormLabel className="flex items-center gap-2">
-                                                    Validation Sample Size
-                                                    <TooltipProvider>
-                                                        <Tooltip>
-                                                            <TooltipTrigger asChild>
-                                                                <Info className="h-4 w-4 text-muted-foreground cursor-help" />
-                                                            </TooltipTrigger>
-                                                            <TooltipContent className="max-w-xs">
-                                                                <p>Number of segments to check from each NZB file. Samples first, last, and evenly distributed segments. Higher values = more accurate validation but slower.</p>
-                                                            </TooltipContent>
-                                                        </Tooltip>
-                                                    </TooltipProvider>
-                                                </FormLabel>
+                                                <FormLabel>Validation Sample Size</FormLabel>
                                                 <FormControl>
-                                                    <Input type="number" min="1" max="20" {...field} onChange={e => field.onChange(e.target.valueAsNumber)} />
+                                                    <Input type="number" {...field} onChange={e => field.onChange(e.target.valueAsNumber)} />
                                                 </FormControl>
-                                                <FormDescription>
-                                                    Segments to check per NZB (default: 5)
-                                                </FormDescription>
                                                 <FormMessage />
                                             </FormItem>
                                         )}
                                     />
-
                                     <FormField
                                         control={control}
-                                        name="max_streams"
+                                        name="max_concurrent_validations"
                                         render={({ field }) => (
                                             <FormItem>
-                                                <FormLabel className="flex items-center gap-2">
-                                                    Max Streams
-                                                    <TooltipProvider>
-                                                        <Tooltip>
-                                                            <TooltipTrigger asChild>
-                                                                <Info className="h-4 w-4 text-muted-foreground cursor-help" />
-                                                            </TooltipTrigger>
-                                                            <TooltipContent className="max-w-xs">
-                                                                <p>Maximum number of successful streams to return per search. The system will validate up to 2x this number of releases to find healthy ones. Higher values provide more options but take longer.</p>
-                                                            </TooltipContent>
-                                                        </Tooltip>
-                                                    </TooltipProvider>
-                                                </FormLabel>
+                                                <FormLabel>Max Concurrent Validations</FormLabel>
                                                 <FormControl>
-                                                    <Input type="number" min="1" max="20" {...field} onChange={e => field.onChange(e.target.valueAsNumber)} />
+                                                    <Input type="number" {...field} onChange={e => field.onChange(e.target.valueAsNumber)} />
                                                 </FormControl>
-                                                <FormDescription>
-                                                    Number of streams to return (default: 6)
-                                                </FormDescription>
                                                 <FormMessage />
                                             </FormItem>
                                         )}
@@ -494,9 +436,7 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, onClose })
                                 </div>
                             </CardContent>
                         </Card>
-                            </TabsContent>
 
-                            <TabsContent value="providers" className="space-y-6">
                         {/* Providers Section */}
                        
                         <div>
@@ -618,17 +558,12 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, onClose })
                                 ))}
                             </div>
                         </div>
-                            </TabsContent>
 
-                            <TabsContent value="filters" className="space-y-6">
+                        {/* Filters Section */}
                         <FiltersSection control={control} watch={form.watch} />
-                            </TabsContent>
 
-                            <TabsContent value="sorting" className="space-y-6">
+                        {/* Sorting Section */}
                         <SortingSection control={control} watch={form.watch} />
-                            </TabsContent>
-                        </Tabs>
-
                     </form>
                 </Form>
             </div>

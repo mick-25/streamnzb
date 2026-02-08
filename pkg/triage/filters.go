@@ -364,18 +364,21 @@ func checkSize(cfg *config.FilterConfig, res indexer.Item) bool {
 }
 
 // scoreBoost calculates score boost based on preferred attributes
-func scoreBoost(cfg *config.FilterConfig, p *parser.ParsedRelease) int {
+func scoreBoost(sortCfg config.SortConfig, p *parser.ParsedRelease) int {
 	boost := 0
 	
 	// Boost for preferred groups
 	if p.Group != "" {
-		for _, preferred := range cfg.PreferredGroups {
+		for _, preferred := range sortCfg.PreferredGroups {
 			if strings.EqualFold(p.Group, preferred) {
 				boost += 1000 // Significant boost for preferred groups
 				break
 			}
 		}
 	}
+	
+	// Note: Language boost would require parser to extract language info
+	// For now, preferred_languages is available in config for future use
 	
 	return boost
 }

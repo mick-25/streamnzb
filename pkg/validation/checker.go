@@ -77,7 +77,7 @@ func (c *Checker) ValidateNZB(ctx context.Context, nzbData *nzb.NZB) map[string]
 		logger.Debug("Using cached validation results for NZB")
 		return cached
 	}
-
+	
 	// Validate across all providers in parallel
 	c.mu.RLock()
 	providers := c.providers
@@ -102,6 +102,11 @@ func (c *Checker) ValidateNZB(ctx context.Context, nzbData *nzb.NZB) map[string]
 	c.cache.Set(cacheKey, results)
 
 	return results
+}
+
+// InvalidateCache removes validation results for an NZB from the cache
+func (c *Checker) InvalidateCache(hash string) {
+	c.cache.Remove(hash)
 }
 
 // validateProvider checks article availability for a single provider

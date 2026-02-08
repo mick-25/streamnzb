@@ -409,25 +409,6 @@ export function FiltersSection({ control, watch }) {
               <h4 className="font-medium">Release Groups</h4>
               <FormField
                 control={control}
-                name="filters.preferred_groups"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Preferred Groups</FormLabel>
-                    <FormControl>
-                      <MultiSelectBadges
-                        value={field.value || []}
-                        onChange={field.onChange}
-                        options={[]}
-                        placeholder="Add group name..."
-                      />
-                    </FormControl>
-                    <FormDescription>Boost score for these groups</FormDescription>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={control}
                 name="filters.blocked_groups"
                 render={({ field }) => (
                   <FormItem>

@@ -4,6 +4,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"streamnzb/pkg/config"
 	"streamnzb/pkg/indexer"
@@ -20,22 +21,21 @@ type Candidate struct {
 
 // Service implements smart triage logic
 type Service struct {
-	MaxPerGroup  int
 	FilterConfig *config.FilterConfig
+	SortConfig   config.SortConfig
 }
 
 // NewService creates a new triage service
-func NewService(maxPerGroup int, filterConfig *config.FilterConfig) *Service {
+func NewService(filterConfig *config.FilterConfig, sortConfig config.SortConfig) *Service {
 	return &Service{
-		MaxPerGroup:  maxPerGroup,
 		FilterConfig: filterConfig,
+		SortConfig:   sortConfig,
 	}
 }
 
-// Filter processes search results and returns the best candidates
+// Filter processes search results and returns candidates sorted by score
 func (s *Service) Filter(results []indexer.Item) []Candidate {
-	// Apply PTT-based filtering FIRST
-	var filtered []indexer.Item
+	var candidates []Candidate
 	
 	for _, res := range results {
 		// Parse title
@@ -48,58 +48,32 @@ func (s *Service) Filter(results []indexer.Item) []Candidate {
 			}
 		}
 		
-		filtered = append(filtered, res)
-	}
-	
-	// Group items
-	groups := make(map[string][]Candidate)
-
-	for _, res := range filtered {
-		// Parse title again (we could optimize by caching parsed results)
-		parsed := parser.ParseReleaseTitle(res.Title)
-
-		// Determine group
+		// Determine group (preserved for metadata but no longer used for selection)
 		group := determineGroup(parsed)
 
 		// Calculate score
-		score := calculateScore(res, parsed)
+		score := s.calculateScore(res, parsed)
 		
 		// Apply score boost for preferred attributes
-		if s.FilterConfig != nil {
-			score += scoreBoost(s.FilterConfig, parsed)
-		}
+		score += scoreBoost(s.SortConfig, parsed)
 
-		candidate := Candidate{
+		candidates = append(candidates, Candidate{
 			Result:   res,
 			Metadata: parsed,
 			Group:    group,
 			Score:    score,
-		}
-
-		groups[group] = append(groups[group], candidate)
+		})
 	}
+	
+	// Deduplicate releases (keep highest scored version of each unique release)
+	candidates = s.deduplicateReleases(candidates)
+	
+	// Sort candidates by Score (descending)
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].Score > candidates[j].Score
+	})
 
-	// Select best candidates
-	var selected []Candidate
-
-	// Processing order (priority)
-	priorities := []string{"4k", "1080p", "720p"}
-
-	for _, groupName := range priorities {
-		candidates, ok := groups[groupName]
-		if !ok || len(candidates) == 0 {
-			continue
-		}
-
-		// Use Round-Robin selection to ensure indexer diversity
-		// This prevents one indexer (with high grab counts) from dominating the quota
-		count := s.MaxPerGroup
-		balanced := roundRobinSelect(candidates, count)
-
-		selected = append(selected, balanced...)
-	}
-
-	return selected
+	return candidates
 }
 
 // shouldInclude checks if a release passes all filter criteria
@@ -170,85 +144,139 @@ func determineGroup(p *parser.ParsedRelease) string {
 	return "sd"
 }
 
-func calculateScore(res indexer.Item, p *parser.ParsedRelease) int {
-	// Base score is download count (popularity)
-	score := 0
-	grabsStr := res.GetAttribute("grabs")
-	if grabsStr != "" {
-		if val, err := strconv.Atoi(grabsStr); err == nil {
-			score = val
+func (s *Service) calculateScore(res indexer.Item, p *parser.ParsedRelease) int {
+	// 1. Resolution Priority (Primary Sort)
+	resolutionScore := 0
+	group := determineGroup(p)
+	if weight, ok := s.SortConfig.ResolutionWeights[group]; ok {
+		resolutionScore = weight
+	} else if weight, ok := s.SortConfig.ResolutionWeights["sd"]; ok && (resolutionScore == 0) {
+		resolutionScore = weight
+	}
+
+	// 2. Attribute Boosts (Secondary Sort)
+	attributeBoost := 0
+
+	// Codec boost
+	if p.Codec != "" {
+		for name, weight := range s.SortConfig.CodecWeights {
+			if strings.Contains(strings.ToLower(p.Codec), strings.ToLower(name)) {
+				attributeBoost += weight
+				break
+			}
 		}
 	}
 
-	// Penalize strictly bad quality (CAM/TS)
-	// We want these at the absolute bottom, even if popular
-	if strings.Contains(strings.ToLower(p.Quality), "cam") ||
-		strings.Contains(strings.ToLower(p.Quality), "telesync") ||
-		strings.Contains(strings.ToLower(p.Quality), "ts") {
-		score -= 1000000
+	// Audio boost
+	for _, audio := range p.Audio {
+		for name, weight := range s.SortConfig.AudioWeights {
+			if strings.Contains(strings.ToLower(audio), strings.ToLower(name)) {
+				attributeBoost += weight
+				// Note: We don't break here to allow multiple audio boosts (e.g., "Atmos" + "5.1")
+			}
+		}
+	}
+
+	// Quality boost
+	if p.Quality != "" {
+		for name, weight := range s.SortConfig.QualityWeights {
+			if strings.Contains(strings.ToLower(p.Quality), strings.ToLower(name)) {
+				attributeBoost += weight
+				break
+			}
+		}
+	}
+
+	// 3. Age Score
+	ageScore := 0.0
+	if res.PubDate != "" {
+		pubTime, err := time.Parse(time.RFC1123Z, res.PubDate)
+		if err != nil {
+			pubTime, err = time.Parse(time.RFC1123, res.PubDate)
+		}
+		
+		if err == nil {
+			ageHours := time.Since(pubTime).Hours()
+			// Invert so newer = higher score
+			ageScore = (100000.0 - ageHours) * s.SortConfig.AgeWeight
+		}
+	}
+
+	score := resolutionScore + attributeBoost + int(ageScore)
+
+	// 4. Popularity (Grabs)
+	if grabsStr := res.GetAttribute("grabs"); grabsStr != "" {
+		if grabs, err := strconv.Atoi(grabsStr); err == nil {
+			score += int(float64(grabs) * s.SortConfig.GrabWeight)
+		}
 	}
 
 	return score
 }
 
-// roundRobinSelect picks top candidates ensuring indexer diversity
-func roundRobinSelect(candidates []Candidate, n int) []Candidate {
-	if n <= 0 {
-		return nil
-	}
-
-	// Group by Indexer
-	byIndexer := make(map[string][]Candidate)
-	var indexerNames []string
-
-	for _, c := range candidates {
-		name := "unknown"
-		if c.Result.SourceIndexer != nil {
-			name = c.Result.SourceIndexer.Name()
+// deduplicateReleases removes duplicate releases based on normalized name
+// Keeps the release with the highest score (best indexer, most grabs, etc.)
+func (s *Service) deduplicateReleases(candidates []Candidate) []Candidate {
+	seen := make(map[string]*Candidate)
+	
+	for i := range candidates {
+		candidate := &candidates[i]
+		
+		// Normalize release name for comparison
+		normalized := normalizeReleaseName(candidate.Metadata)
+		
+		existing, exists := seen[normalized]
+		if !exists {
+			seen[normalized] = candidate
+			continue
 		}
-
-		if _, exists := byIndexer[name]; !exists {
-			indexerNames = append(indexerNames, name)
-		}
-		byIndexer[name] = append(byIndexer[name], c)
-	}
-
-	// Sort candidates within each indexer by score (desc)
-	for name := range byIndexer {
-		list := byIndexer[name]
-		sort.Slice(list, func(i, j int) bool {
-			return list[i].Score > list[j].Score
-		})
-		byIndexer[name] = list
-	}
-
-	// Sort indexer names for deterministic iteration
-	sort.Strings(indexerNames)
-
-	// Round Robin selection
-	var selected []Candidate
-
-	for len(selected) < n {
-		addedAnything := false
-
-		for _, name := range indexerNames {
-			if len(selected) >= n {
-				break
-			}
-
-			list := byIndexer[name]
-			if len(list) > 0 {
-				// Pop best from this indexer
-				selected = append(selected, list[0])
-				byIndexer[name] = list[1:]
-				addedAnything = true
-			}
-		}
-
-		if !addedAnything {
-			break // Run out of candidates
+		
+		// Keep the better release (higher score)
+		if candidate.Score > existing.Score {
+			seen[normalized] = candidate
 		}
 	}
-
-	return selected
+	
+	// Convert map back to slice
+	result := make([]Candidate, 0, len(seen))
+	for _, candidate := range seen {
+		result = append(result, *candidate)
+	}
+	
+	return result
 }
+
+// normalizeReleaseName creates a normalized key for deduplication
+func normalizeReleaseName(p *parser.ParsedRelease) string {
+	// Build normalized key from core attributes
+	parts := []string{}
+	
+	if p.Title != "" {
+		parts = append(parts, strings.ToLower(p.Title))
+	}
+	if p.Year != 0 {
+		parts = append(parts, strconv.Itoa(p.Year))
+	}
+	if p.Season != 0 {
+		parts = append(parts, "s"+strconv.Itoa(p.Season))
+	}
+	if p.Episode != 0 {
+		parts = append(parts, "e"+strconv.Itoa(p.Episode))
+	}
+	if p.Resolution != "" {
+		parts = append(parts, strings.ToLower(p.Resolution))
+	}
+	if p.Quality != "" {
+		parts = append(parts, strings.ToLower(p.Quality))
+	}
+	if p.Codec != "" {
+		parts = append(parts, strings.ToLower(p.Codec))
+	}
+	if p.Group != "" {
+		parts = append(parts, strings.ToLower(p.Group))
+	}
+	
+	return strings.Join(parts, "|")
+}
+
+

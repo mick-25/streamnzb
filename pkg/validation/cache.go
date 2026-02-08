@@ -58,6 +58,13 @@ func (c *Cache) Set(key string, results map[string]*ValidationResult) {
 	}
 }
 
+// Remove deletes an entry from the cache
+func (c *Cache) Remove(key string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.data, key)
+}
+
 // cleanup removes expired entries periodically
 func (c *Cache) cleanup() {
 	ticker := time.NewTicker(5 * time.Minute)
