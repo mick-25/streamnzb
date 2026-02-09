@@ -143,7 +143,11 @@ func buildDetailedDescription(meta *parser.ParsedRelease, sizeGB float64, filena
 
 	// Line 4: Size + Release Group
 	line4 := []string{}
-	line4 = append(line4, fmt.Sprintf("💾 %.2f GB", sizeGB))
+	if sizeGB > 0 {
+		line4 = append(line4, fmt.Sprintf("💾 %.2f GB", sizeGB))
+	} else {
+		line4 = append(line4, "💾 Size Unknown")
+	}
 	if meta.Group != "" {
 		line4 = append(line4, fmt.Sprintf("👥 %s", meta.Group))
 	}

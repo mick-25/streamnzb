@@ -305,7 +305,7 @@ function App() {
             variant="default" 
             size="sm" 
             className="gap-2 bg-[#5865F2] hover:bg-[#4752C4] text-white"
-            onClick={() => window.open('https://discord.gg/rivenmedia', '_blank')}
+            onClick={() => window.open('https://snzb.stream/discord', '_blank')}
           >
             <DiscordIcon className="h-4 w-4" />
           </Button>

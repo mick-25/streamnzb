@@ -38,7 +38,12 @@ func checkQuality(cfg *config.FilterConfig, p *parser.ParsedRelease) bool {
 // checkResolution validates resolution filters
 func checkResolution(cfg *config.FilterConfig, p *parser.ParsedRelease) bool {
 	if p.Resolution == "" {
-		return true // No resolution info, allow it
+		// If resolution is unknown and we have min/max filters, reject it
+		// This prevents SD/unknown content from bypassing resolution filters
+		if cfg.MinResolution != "" || cfg.MaxResolution != "" {
+			return false
+		}
+		return true // Only allow if no resolution filters configured
 	}
 	
 	res := strings.ToLower(p.Resolution)
@@ -94,7 +99,12 @@ func checkResolution(cfg *config.FilterConfig, p *parser.ParsedRelease) bool {
 // checkCodec validates codec filters
 func checkCodec(cfg *config.FilterConfig, p *parser.ParsedRelease) bool {
 	if p.Codec == "" {
-		return true
+		// If codec is unknown and we have codec filters, reject it
+		// This prevents AV1/unknown codecs from bypassing allowed codec filters
+		if len(cfg.AllowedCodecs) > 0 || len(cfg.BlockedCodecs) > 0 {
+			return false
+		}
+		return true // Only allow if no codec filters configured
 	}
 	
 	codec := strings.ToLower(p.Codec)
@@ -344,8 +354,9 @@ func checkGroup(cfg *config.FilterConfig, p *parser.ParsedRelease) bool {
 
 // checkSize validates size filters
 func checkSize(cfg *config.FilterConfig, res indexer.Item) bool {
-	if res.Size == 0 {
-		return true // No size info, allow it
+	// Always reject 0-byte or negative sizes (corrupt/invalid releases)
+	if res.Size <= 0 {
+		return false
 	}
 	
 	sizeGB := float64(res.Size) / (1024 * 1024 * 1024)

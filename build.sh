@@ -1,6 +1,9 @@
 #!/bin/bash
 set -e
 
+echo "Running tests..."
+go test ./pkg/... -v
+
 echo "Building Frontend..."
 cd frontend
 npm run build

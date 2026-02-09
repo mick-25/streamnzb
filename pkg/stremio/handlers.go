@@ -442,6 +442,10 @@ func (s *Server) validateCandidate(ctx context.Context, cand triage.Candidate) (
 		sessionID = fmt.Sprintf("%x", md5.Sum([]byte(item.GUID)))
 		streamSize = item.Size
 		
+		if streamSize == 0 {
+			logger.Warn("Indexer did not provide file size", "title", item.Title, "indexer", indexerName)
+		}
+		
 		logger.Info("Deferring NZB download (Lazy)", "title", item.Title, "session_id", sessionID)
 		
 		_, err := s.sessionManager.CreateDeferredSession(
