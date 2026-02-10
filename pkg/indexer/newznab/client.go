@@ -22,7 +22,7 @@ type Client struct {
 	apiKey  string
 	name    string
 	client  *http.Client
-	
+
 	// Usage tracking
 	apiLimit          int
 	apiUsed           int
@@ -91,13 +91,17 @@ func NewClient(cfg config.IndexerConfig, um *indexer.UsageManager) *Client {
 		usage := um.GetIndexerUsage(cfg.Name)
 		c.apiUsed = usage.APIHitsUsed
 		c.downloadUsed = usage.DownloadsUsed
-		
+
 		c.apiRemaining = cfg.APIHitsDay - usage.APIHitsUsed
 		c.downloadRemaining = cfg.DownloadsDay - usage.DownloadsUsed
-		
+
 		// Ensure remaining isn't negative if limits were lowered
-		if c.apiRemaining < 0 && cfg.APIHitsDay > 0 { c.apiRemaining = 0 }
-		if c.downloadRemaining < 0 && cfg.DownloadsDay > 0 { c.downloadRemaining = 0 }
+		if c.apiRemaining < 0 && cfg.APIHitsDay > 0 {
+			c.apiRemaining = 0
+		}
+		if c.downloadRemaining < 0 && cfg.DownloadsDay > 0 {
+			c.downloadRemaining = 0
+		}
 	}
 
 	return c
@@ -139,7 +143,7 @@ func (c *Client) updateUsageFromHeaders(h http.Header) {
 			c.apiRemaining = remaining
 		}
 	}
-	
+
 	// Grab limits (Downloads)
 	if val := h.Get("X-DNZBLimit-Daily-Limit"); val != "" {
 		if limit, err := strconv.Atoi(val); err == nil {
@@ -177,7 +181,7 @@ func (c *Client) updateUsageFromHeaders(h http.Header) {
 		if c.downloadLimit > 0 {
 			c.downloadUsed = c.downloadLimit - c.downloadRemaining
 		}
-		
+
 		c.usageManager.UpdateUsage(c.name, c.apiUsed, c.downloadUsed)
 	}
 }
@@ -225,7 +229,7 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 		params.Set("apikey", c.apiKey)
 		params.Set("o", "xml")
 		params.Set("offset", fmt.Sprintf("%d", offset))
-		
+
 		// Map categories to Newznab search types
 		if req.Cat == "2000" {
 			params.Set("t", "movie")
@@ -251,7 +255,7 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 		if req.Cat != "" {
 			params.Set("cat", req.Cat)
 		}
-		
+
 		params.Set("limit", fmt.Sprintf("%d", pageSize))
 
 		if req.Season != "" {
@@ -273,7 +277,7 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 			return nil, fmt.Errorf("failed to query %s: %w", c.Name(), err)
 		}
 		defer resp.Body.Close()
-		
+
 		// Local increment as fallback
 		c.mu.Lock()
 		c.apiUsed++
@@ -283,7 +287,7 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 		c.mu.Unlock()
 
 		c.updateUsageFromHeaders(resp.Header)
-		
+
 		// If headers didn't update remaining, we should at least increment our local usage
 		// but updateUsageFromHeaders is more accurate if headers are present.
 		// Actually, let's manually decrement if it's a success and no headers were found?
@@ -329,7 +333,7 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 		}
 
 		allItems = append(allItems, newItems...)
-		
+
 		// Check if we have more results to fetch
 		if totalResults != -1 && len(allItems) >= totalResults {
 			break
@@ -356,9 +360,9 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 	}, nil
 }
 
-// DownloadNZB (updated with checks)
 func (c *Client) DownloadNZB(nzbURL string) ([]byte, error) {
 	if err := c.checkDownloadLimit(); err != nil {
+		logger.Warn("Download limit reached for %s", "indexer", c.Name())
 		return nil, err
 	}
 
@@ -367,7 +371,7 @@ func (c *Client) DownloadNZB(nzbURL string) ([]byte, error) {
 		return nil, fmt.Errorf("failed to download NZB from %s: %w", c.Name(), err)
 	}
 	defer resp.Body.Close()
-	
+
 	// Local increment as fallback
 	c.mu.Lock()
 	c.apiUsed++ // Download also counts as API hit usually
@@ -393,4 +397,3 @@ func (c *Client) DownloadNZB(nzbURL string) ([]byte, error) {
 
 	return data, nil
 }
-

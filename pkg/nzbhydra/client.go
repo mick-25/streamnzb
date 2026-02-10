@@ -34,6 +34,28 @@ type Client struct {
 	mu                sync.RWMutex
 }
 
+// checkAPILimit returns error if API limit is reached
+func (c *Client) checkAPILimit() error {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	if c.apiLimit > 0 && c.apiRemaining <= 0 {
+		return fmt.Errorf("API limit reached for %s", c.Name())
+	}
+	return nil
+}
+
+// checkDownloadLimit returns error if download limit is reached
+func (c *Client) checkDownloadLimit() error {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	if c.downloadLimit > 0 && c.downloadRemaining <= 0 {
+		return fmt.Errorf("download limit reached for %s", c.Name())
+	}
+	return nil
+}
+
 // APIError represents a Newznab API error
 type APIError struct {
 	XMLName     xml.Name `xml:"error"`
@@ -127,6 +149,10 @@ func (c *Client) GetUsage() indexer.Usage {
 
 // Search queries NZBHydra2 for content
 func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, error) {
+	if err := c.checkAPILimit(); err != nil {
+		return nil, err
+	}
+
 	// Build Newznab API URL
 	params := url.Values{}
 	params.Set("apikey", c.apiKey)
@@ -210,7 +236,7 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 	// Populate SourceIndexer for each item
 	for i := range result.Channel.Items {
 		result.Channel.Items[i].SourceIndexer = c
-		
+
 		// Extract actual indexer name from Newznab attributes
 		// NZBHydra2 includes the underlying indexer information in attributes
 		if indexerName := result.Channel.Items[i].GetAttribute("indexer"); indexerName != "" {
@@ -219,7 +245,7 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 			result.Channel.Items[i].ActualIndexer = indexerName
 		}
 	}
-	
+
 	// Resolve all details_links in one batch call to internal API
 	detailsLinks, err := c.ResolveDetailsLinks(req)
 	if err != nil {
@@ -239,6 +265,11 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 
 // DownloadNZB downloads an NZB file by URL
 func (c *Client) DownloadNZB(nzbURL string) ([]byte, error) {
+	if err := c.checkDownloadLimit(); err != nil {
+		logger.Warn("Download limit reached for %s", "indexer", c.Name())
+		return nil, err
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 

@@ -34,6 +34,28 @@ type Client struct {
 	mu                sync.RWMutex
 }
 
+// checkAPILimit returns error if API limit is reached
+func (c *Client) checkAPILimit() error {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	if c.apiLimit > 0 && c.apiRemaining <= 0 {
+		return fmt.Errorf("API limit reached for %s", c.Name())
+	}
+	return nil
+}
+
+// checkDownloadLimit returns error if download limit is reached
+func (c *Client) checkDownloadLimit() error {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	if c.downloadLimit > 0 && c.downloadRemaining <= 0 {
+		return fmt.Errorf("download limit reached for %s", c.Name())
+	}
+	return nil
+}
+
 // Name returns the name of this indexer
 func (c *Client) Name() string {
 	if c.name != "" {
@@ -100,13 +122,13 @@ func (c *Client) Ping() error {
 	// We'll check the Newznab API capability endpoint
 	base := strings.TrimRight(c.baseURL, "/")
 	apiURL := fmt.Sprintf("%s/api?t=caps&apikey=%s", base, c.apiKey)
-	
+
 	req, err := http.NewRequest("GET", apiURL, nil)
 	if err != nil {
 		return err
 	}
 	req.Header.Set("X-Api-Key", c.apiKey)
-	
+
 	logger.Debug("Prowlarr Ping URL", "url", apiURL)
 	resp, err := c.client.Do(req)
 	if err != nil {
@@ -122,6 +144,10 @@ func (c *Client) Ping() error {
 
 // Search queries Prowlarr for content
 func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, error) {
+	if err := c.checkAPILimit(); err != nil {
+		return nil, err
+	}
+
 	// Build Newznab API URL
 	params := url.Values{}
 	params.Set("apikey", c.apiKey)
@@ -222,6 +248,11 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 
 // DownloadNZB downloads an NZB file by URL
 func (c *Client) DownloadNZB(nzbURL string) ([]byte, error) {
+	if err := c.checkDownloadLimit(); err != nil {
+		logger.Warn("Download limit reached for %s", "indexer", c.Name())
+		return nil, err
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
