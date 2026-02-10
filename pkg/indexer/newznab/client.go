@@ -19,6 +19,7 @@ import (
 // Client represents a Newznab API client for a single indexer
 type Client struct {
 	baseURL string
+	apiPath string // API path (e.g., "/api" or "/api/v1")
 	apiKey  string
 	name    string
 	client  *http.Client
@@ -69,9 +70,20 @@ func NewClient(cfg config.IndexerConfig, um *indexer.UsageManager) *Client {
 		IdleConnTimeout:     90 * time.Second,
 	}
 
+	// Default API path to "/api" if not specified
+	apiPath := cfg.APIPath
+	if apiPath == "" {
+		apiPath = "/api"
+	}
+	// Ensure it starts with "/"
+	if !strings.HasPrefix(apiPath, "/") {
+		apiPath = "/" + apiPath
+	}
+
 	c := &Client{
 		name:    cfg.Name,
-		baseURL: cfg.URL,
+		baseURL: strings.TrimRight(cfg.URL, "/"),
+		apiPath: apiPath,
 		apiKey:  cfg.APIKey,
 		client: &http.Client{
 			Timeout:   30 * time.Second,
@@ -188,7 +200,7 @@ func (c *Client) updateUsageFromHeaders(h http.Header) {
 
 // Ping checks if the indexer is reachable
 func (c *Client) Ping() error {
-	apiURL := fmt.Sprintf("%s/api?t=caps&apikey=%s", c.baseURL, c.apiKey)
+	apiURL := fmt.Sprintf("%s%s?t=caps&apikey=%s", c.baseURL, c.apiPath, c.apiKey)
 	resp, err := c.client.Get(apiURL)
 	if err != nil {
 		return err
@@ -265,7 +277,7 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 			params.Set("ep", req.Episode)
 		}
 
-		apiURL := fmt.Sprintf("%s/api?%s", c.baseURL, params.Encode())
+		apiURL := fmt.Sprintf("%s%s?%s", c.baseURL, c.apiPath, params.Encode())
 		logger.Debug("Newznab search request", "indexer", c.Name(), "url", apiURL, "offset", offset)
 
 		resp, err := c.client.Get(apiURL)

@@ -84,9 +84,13 @@ type IndexerConfig struct {
 	Name         string `json:"name"`
 	URL          string `json:"url"`
 	APIKey       string `json:"api_key"`
-	Type         string `json:"type"` // "newznab", "prowlarr", "nzbhydra"
+	APIPath      string `json:"api_path"` // API path (default: "/api"), e.g., "/api" or "/api/v1"
+	Type         string `json:"type"`      // "newznab", "prowlarr", "nzbhydra", "easynews"
 	APIHitsDay   int    `json:"api_hits_day"`
 	DownloadsDay int    `json:"downloads_day"`
+	// Easynews-specific fields
+	Username   string `json:"username"`    // Easynews username
+	Password   string `json:"password"`    // Easynews password
 }
 
 // Config holds application configuration

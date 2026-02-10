@@ -60,13 +60,6 @@ function App() {
   const MAX_HISTORY = 60
   const MAX_LOGS = 200
 
-  // Auto-scroll logs
-  useEffect(() => {
-    if (logsEndRef.current) {
-        logsEndRef.current.scrollIntoView({ behavior: "smooth" });
-    }
-  }, [logs]);
-
   useEffect(() => {
     const root = window.document.documentElement;
     root.classList.remove("light", "dark");
@@ -126,11 +119,6 @@ function App() {
           case 'log_history': {
              // Replace logs with history
              setLogs(msg.payload.slice(-MAX_LOGS));
-             setTimeout(() => {
-                 if (logsEndRef.current) {
-                     logsEndRef.current.scrollIntoView({ behavior: "auto" });
-                 }
-             }, 100);
              break;
           }
           case 'save_status': {

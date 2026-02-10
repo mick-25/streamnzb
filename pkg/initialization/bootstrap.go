@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"streamnzb/pkg/config"
 	"streamnzb/pkg/indexer"
+	"streamnzb/pkg/indexer/easynews"
 	"streamnzb/pkg/indexer/newznab"
 	"streamnzb/pkg/logger"
 	"streamnzb/pkg/nntp"
@@ -73,12 +74,32 @@ func BuildComponents(cfg *config.Config) (*InitializedComponents, error) {
 
 		switch indexerType {
 		case "nzbhydra":
-			hydraClient, err := nzbhydra.NewClient(idxCfg.URL, idxCfg.APIKey, idxCfg.Name, usageMgr)
+			// Try to discover individual indexers first
+			discovered, err := nzbhydra.GetConfiguredIndexers(idxCfg.URL, idxCfg.APIKey, usageMgr)
 			if err != nil {
-				logger.Error("Failed to initialize NZBHydra2 from indexer list", "name", idxCfg.Name, "err", err)
+				// Fall back to single aggregated client if discovery fails
+				logger.Debug("NZBHydra2 indexer discovery failed, using aggregated client", "err", err)
+				hydraClient, err := nzbhydra.NewClient(idxCfg.URL, idxCfg.APIKey, idxCfg.Name, usageMgr)
+				if err != nil {
+					logger.Error("Failed to initialize NZBHydra2 from indexer list", "name", idxCfg.Name, "err", err)
+				} else {
+					indexers = append(indexers, hydraClient)
+					logger.Info("Initialized NZBHydra2 aggregated client", "name", idxCfg.Name)
+				}
 			} else {
-				indexers = append(indexers, hydraClient)
-				logger.Info("Initialized NZBHydra2 from indexer list", "name", idxCfg.Name)
+				if len(discovered) > 0 {
+					indexers = append(indexers, discovered...)
+					logger.Info("Initialized NZBHydra2 indexers from discovery", "name", idxCfg.Name, "count", len(discovered))
+				} else {
+					// Fall back to aggregated client if no indexers discovered
+					hydraClient, err := nzbhydra.NewClient(idxCfg.URL, idxCfg.APIKey, idxCfg.Name, usageMgr)
+					if err != nil {
+						logger.Error("Failed to initialize NZBHydra2 from indexer list", "name", idxCfg.Name, "err", err)
+					} else {
+						indexers = append(indexers, hydraClient)
+						logger.Info("Initialized NZBHydra2 aggregated client (no indexers discovered)", "name", idxCfg.Name)
+					}
+				}
 			}
 		case "prowlarr":
 			discovered, err := prowlarr.GetConfiguredIndexers(idxCfg.URL, idxCfg.APIKey, usageMgr)
@@ -89,6 +110,28 @@ func BuildComponents(cfg *config.Config) (*InitializedComponents, error) {
 					indexers = append(indexers, discovered...)
 					logger.Info("Initialized Prowlarr from indexer list", "name", idxCfg.Name, "count", len(discovered))
 				}
+			}
+		case "easynews":
+			// Determine download base URL (for proxying NZB downloads)
+			downloadBase := cfg.AddonBaseURL
+			if downloadBase == "" {
+				downloadBase = "http://127.0.0.1:7000"
+			}
+			// Remove trailing slash
+			if len(downloadBase) > 0 && downloadBase[len(downloadBase)-1] == '/' {
+				downloadBase = downloadBase[:len(downloadBase)-1]
+			}
+			// Add security token if present
+			if cfg.SecurityToken != "" {
+				downloadBase = fmt.Sprintf("%s/%s", downloadBase, cfg.SecurityToken)
+			}
+
+			easynewsClient, err := easynews.NewClient(idxCfg.Username, idxCfg.Password, idxCfg.Name, downloadBase, idxCfg.APIHitsDay, idxCfg.DownloadsDay, usageMgr)
+			if err != nil {
+				logger.Error("Failed to initialize Easynews from indexer list", "name", idxCfg.Name, "err", err)
+			} else {
+				indexers = append(indexers, easynewsClient)
+				logger.Info("Initialized Easynews indexer", "name", idxCfg.Name)
 			}
 		default: // newznab
 			client := newznab.NewClient(idxCfg, usageMgr)

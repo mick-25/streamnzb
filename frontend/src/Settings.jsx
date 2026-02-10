@@ -140,8 +140,11 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, onClose })
         })) || [],
         indexers: initialConfig.indexers?.map(idx => ({
           ...idx,
+          api_path: idx.api_path || '/api',
           api_hits_day: Number(idx.api_hits_day || 0),
-          downloads_day: Number(idx.downloads_day || 0)
+          downloads_day: Number(idx.downloads_day || 0),
+          username: idx.username || '',
+          password: idx.password || ''
         })) || []
       }
       reset(formattedData)

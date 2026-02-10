@@ -8,27 +8,30 @@ import { PasswordInput } from "@/components/ui/password-input"
 import { Trash2, Plus } from "lucide-react"
 
 const INDEXER_PRESETS = [
-    { name: 'Custom Newznab', url: '', type: 'newznab' },
-    { name: 'Prowlarr', url: '', type: 'prowlarr' },
-    { name: 'NZBHydra2', url: '', type: 'nzbhydra' },
-    { name: 'abNZB', url: 'https://abnzb.com', type: 'newznab' },
-    { name: 'altHUB', url: 'https://api.althub.co.za', type: 'newznab' },
-    { name: 'AnimeTosho (Usenet)', url: 'https://feed.animetosho.org', type: 'newznab' },
-    { name: 'DOGnzb', url: 'https://api.dognzb.cr', type: 'newznab' },
-    { name: 'DrunkenSlug', url: 'https://drunkenslug.com', type: 'newznab' },
-    { name: 'GingaDADDY', url: 'https://www.gingadaddy.com', type: 'newznab' },
-    { name: 'Miatrix', url: 'https://www.miatrix.com', type: 'newznab' },
-    { name: 'Newz69', url: 'https://newz69.keagaming.com', type: 'newznab' },
-    { name: 'NinjaCentral', url: 'https://ninjacentral.co.za', type: 'newznab' },
-    { name: 'Nzb.life', url: 'https://api.nzb.life', type: 'newznab' },
-    { name: 'NZBCat', url: 'https://nzb.cat', type: 'newznab' },
-    { name: 'NZBFinder', url: 'https://nzbfinder.ws', type: 'newznab' },
-    { name: 'NZBgeek', url: 'https://api.nzbgeek.info', type: 'newznab' },
-    { name: 'NzbNoob', url: 'https://www.nzbnoob.com', type: 'newznab' },
-    { name: 'NZBNDX', url: 'https://www.nzbndx.com', type: 'newznab' },
-    { name: 'NzbPlanet', url: 'https://api.nzbplanet.net', type: 'newznab' },
-    { name: 'NZBStars', url: 'https://nzbstars.com', type: 'newznab' },
-    { name: 'Tabula Rasa', url: 'https://www.tabula-rasa.pw/api/v1/api', type: 'newznab' }
+    { name: 'Custom Newznab', url: '', api_path: '/api', type: 'newznab' },
+    { name: 'Prowlarr', url: '', api_path: '/api', type: 'prowlarr' },
+    { name: 'NZBHydra2', url: '', api_path: '/api', type: 'nzbhydra' },
+    { name: 'Easynews (Experimental)', url: '', api_path: '/api', type: 'easynews' },
+    { name: 'abNZB', url: 'https://abnzb.com', api_path: '/api', type: 'newznab' },
+    { name: 'altHUB', url: 'https://api.althub.co.za', api_path: '/api', type: 'newznab' },
+    { name: 'AnimeTosho (Usenet)', url: 'https://feed.animetosho.org', api_path: '/api', type: 'newznab' },
+    { name: 'DOGnzb', url: 'https://api.dognzb.cr', api_path: '/api', type: 'newznab' },
+    { name: 'DrunkenSlug', url: 'https://drunkenslug.com', api_path: '/api', type: 'newznab' },
+    { name: 'GingaDADDY', url: 'https://www.gingadaddy.com', api_path: '/api', type: 'newznab' },
+    { name: 'Miatrix', url: 'https://www.miatrix.com', api_path: '/api', type: 'newznab' },
+    { name: 'Newz69', url: 'https://newz69.keagaming.com', api_path: '/api', type: 'newznab' },
+    { name: 'NinjaCentral', url: 'https://ninjacentral.co.za', api_path: '/api', type: 'newznab' },
+    { name: 'Nzb.life', url: 'https://api.nzb.life', api_path: '/api', type: 'newznab' },
+    { name: 'NZBCat', url: 'https://nzb.cat', api_path: '/api', type: 'newznab' },
+    { name: 'NZBFinder', url: 'https://nzbfinder.ws', api_path: '/api', type: 'newznab' },
+    { name: 'NZBgeek', url: 'https://api.nzbgeek.info', api_path: '/api', type: 'newznab' },
+    { name: 'NzbNoob', url: 'https://www.nzbnoob.com', api_path: '/api', type: 'newznab' },
+    { name: 'NZBNDX', url: 'https://www.nzbndx.com', api_path: '/api', type: 'newznab' },
+    { name: 'NzbPlanet', url: 'https://api.nzbplanet.net', api_path: '/api', type: 'newznab' },
+    { name: 'NZBStars', url: 'https://nzbstars.com', api_path: '/api', type: 'newznab' },
+    { name: 'SceneNZBs', url: 'https://scenenzbs.com', api_path: '/api', type: 'newznab' },
+    { name: 'Tabula Rasa', url: 'https://www.tabula-rasa.pw', api_path: '/api/v1', type: 'newznab' },
+    { name: 'Usenet Crawler', url: 'https://www.usenet-crawler.com', api_path: '/api', type: 'newznab' }
 ]
 
 export function IndexerSettings({ control, indexerFields, appendIndexer, removeIndexer, watch, setValue }) {
@@ -38,6 +41,7 @@ export function IndexerSettings({ control, indexerFields, appendIndexer, removeI
             {indexerFields.map((field, index) => {
                 const currentType = watch(`indexers.${index}.type`) || 'newznab';
                 const isMeta = currentType === 'prowlarr' || currentType === 'nzbhydra';
+                const isEasynews = currentType === 'easynews';
 
                 return (
                     <Card key={field.id} className="relative flex flex-col h-full">
@@ -65,6 +69,7 @@ export function IndexerSettings({ control, indexerFields, appendIndexer, removeI
                                         if (preset) {
                                             setValue(`indexers.${index}.name`, preset.name);
                                             setValue(`indexers.${index}.url`, preset.url);
+                                            setValue(`indexers.${index}.api_path`, preset.api_path || '/api');
                                             setValue(`indexers.${index}.type`, preset.type);
                                         }
                                     }}
@@ -76,35 +81,85 @@ export function IndexerSettings({ control, indexerFields, appendIndexer, removeI
                                 </select>
                             </div>
                             
-                            <FormField
-                                control={control}
-                                name={`indexers.${index}.url`}
-                                render={({ field }) => (
-                                    <FormItem>
-                                        <FormLabel>URL</FormLabel>
-                                        <FormControl>
-                                            <Input placeholder="https://api.nzbgeek.info" className="h-8 text-xs" {...field} />
-                                        </FormControl>
-                                        <FormMessage />
-                                    </FormItem>
-                                )}
-                            />
+                            {!isEasynews && (
+                                <FormField
+                                    control={control}
+                                    name={`indexers.${index}.url`}
+                                    render={({ field }) => (
+                                        <FormItem>
+                                            <FormLabel>URL</FormLabel>
+                                            <FormControl>
+                                                <Input placeholder="https://api.nzbgeek.info" className="h-8 text-xs" {...field} />
+                                            </FormControl>
+                                            <FormMessage />
+                                        </FormItem>
+                                    )}
+                                />
+                            )}
                             
-                            <FormField
-                                control={control}
-                                name={`indexers.${index}.api_key`}
-                                render={({ field }) => (
-                                    <FormItem>
-                                        <FormLabel>API Key</FormLabel>
-                                        <FormControl>
-                                            <PasswordInput className="h-8 text-xs" {...field} />
-                                        </FormControl>
-                                        <FormMessage />
-                                    </FormItem>
-                                )}
-                            />
+                            {!isMeta && !isEasynews && (
+                                <FormField
+                                    control={control}
+                                    name={`indexers.${index}.api_path`}
+                                    render={({ field }) => (
+                                        <FormItem>
+                                            <FormLabel>API Path</FormLabel>
+                                            <FormControl>
+                                                <Input placeholder="/api" className="h-8 text-xs" {...field} />
+                                            </FormControl>
+                                            <FormDescription className="text-[10px]">API endpoint path (default: /api, Tabula Rasa: /api/v1)</FormDescription>
+                                            <FormMessage />
+                                        </FormItem>
+                                    )}
+                                />
+                            )}
+                            
+                            {!isEasynews ? (
+                                <FormField
+                                    control={control}
+                                    name={`indexers.${index}.api_key`}
+                                    render={({ field }) => (
+                                        <FormItem>
+                                            <FormLabel>API Key</FormLabel>
+                                            <FormControl>
+                                                <PasswordInput className="h-8 text-xs" {...field} />
+                                            </FormControl>
+                                            <FormMessage />
+                                        </FormItem>
+                                    )}
+                                />
+                            ) : (
+                                <>
+                                    <FormField
+                                        control={control}
+                                        name={`indexers.${index}.username`}
+                                        render={({ field }) => (
+                                            <FormItem>
+                                                <FormLabel>Username</FormLabel>
+                                                <FormControl>
+                                                    <Input className="h-8 text-xs" {...field} />
+                                                </FormControl>
+                                                <FormMessage />
+                                            </FormItem>
+                                        )}
+                                    />
+                                    <FormField
+                                        control={control}
+                                        name={`indexers.${index}.password`}
+                                        render={({ field }) => (
+                                            <FormItem>
+                                                <FormLabel>Password</FormLabel>
+                                                <FormControl>
+                                                    <PasswordInput className="h-8 text-xs" {...field} />
+                                                </FormControl>
+                                                <FormMessage />
+                                            </FormItem>
+                                        )}
+                                    />
+                                </>
+                            )}
 
-                            {!isMeta && (
+                            {!isMeta && !isEasynews && (
                                 <div className="grid grid-cols-2 gap-2 mt-2">
                                     <FormField
                                         control={control}
@@ -142,7 +197,7 @@ export function IndexerSettings({ control, indexerFields, appendIndexer, removeI
             {/* Skeleton Add Card */}
             <button
                 type="button"
-                onClick={() => appendIndexer({ name: '', url: '', api_key: '', type: 'newznab', api_hits_day: 0, downloads_day: 0 })}
+                onClick={() => appendIndexer({ name: '', url: '', api_path: '/api', api_key: '', type: 'newznab', api_hits_day: 0, downloads_day: 0, username: '', password: '' })}
                 className="flex flex-col items-center justify-center p-6 border-2 border-dashed rounded-lg border-muted-foreground/25 hover:border-muted-foreground/50 hover:bg-accent/50 transition-all min-h-[250px] group"
             >
                 <div className="flex items-center justify-center w-12 h-12 rounded-full bg-primary/10 group-hover:bg-primary/20 transition-colors mb-4">

@@ -18,10 +18,11 @@ import (
 
 // Client represents an NZBHydra2 API client
 type Client struct {
-	baseURL string
-	apiKey  string
-	name    string
-	client  *http.Client
+	baseURL     string
+	apiKey      string
+	name        string
+	indexerName string // Specific indexer name to query (empty = query all)
+	client      *http.Client
 
 	// Usage tracking
 	apiLimit          int
@@ -91,7 +92,14 @@ func (c *Client) Ping() error {
 }
 
 // NewClient creates a new NZBHydra2 client and verifies connectivity
+// This creates an aggregated client that queries all indexers
 func NewClient(baseURL, apiKey, name string, um *indexer.UsageManager) (*Client, error) {
+	return NewClientWithIndexer(baseURL, apiKey, name, "", um)
+}
+
+// NewClientWithIndexer creates a new NZBHydra2 client for a specific indexer
+// If indexerName is empty, it queries all indexers (aggregated mode)
+func NewClientWithIndexer(baseURL, apiKey, name, indexerName string, um *indexer.UsageManager) (*Client, error) {
 	// Create HTTP client with TLS skip verify for self-signed certs
 	transport := &http.Transport{
 		TLSClientConfig: &tls.Config{
@@ -104,9 +112,10 @@ func NewClient(baseURL, apiKey, name string, um *indexer.UsageManager) (*Client,
 	}
 
 	c := &Client{
-		baseURL:      baseURL,
-		apiKey:       apiKey,
-		name:         name,
+		baseURL:     baseURL,
+		apiKey:      apiKey,
+		name:        name,
+		indexerName: indexerName,
 		usageManager: um,
 		client: &http.Client{
 			Timeout:   30 * time.Second,
@@ -130,6 +139,9 @@ func NewClient(baseURL, apiKey, name string, um *indexer.UsageManager) (*Client,
 
 // Name returns the name of this indexer
 func (c *Client) Name() string {
+	if c.name != "" {
+		return c.name
+	}
 	return "NZBHydra2"
 }
 
@@ -199,6 +211,12 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 	}
 	if req.Episode != "" {
 		params.Set("ep", req.Episode)
+	}
+
+	// If this client is for a specific indexer, add the indexers parameter
+	// This allows querying individual indexers through NZBHydra2
+	if c.indexerName != "" {
+		params.Set("indexers", c.indexerName)
 	}
 
 	apiURL := fmt.Sprintf("%s/api?%s", c.baseURL, params.Encode())
