@@ -41,13 +41,12 @@ func GetConfiguredIndexers(baseURL, apiKey string, um *indexer.UsageManager) ([]
 	var indexers []indexer.Indexer
 	for _, def := range definitions {
 		if def.Enable && def.Protocol == "usenet" {
-			// Construct Newznab URL for this specific indexer
-			// Prowlarr Generic Newznab URL format: http://host:port/api/v1/proxy/{id}/api
+			// Use base Prowlarr URL and indexer ID
+			// The client will construct paths as /api/v1/indexer/{id}/newznab/api
 			base := strings.TrimRight(baseURL, "/")
-			indexerURL := fmt.Sprintf("%s/newznab/v1/proxy/%d", base, def.ID)
 
 			name := fmt.Sprintf("Prowlarr:%s", def.Name)
-			idx, err := NewClient(indexerURL, apiKey, name, um)
+			idx, err := NewClient(base, def.ID, apiKey, name, um)
 			if err != nil {
 				logger.Error("Failed to init Prowlarr indexer", "name", def.Name, "err", err)
 				continue

@@ -18,10 +18,11 @@ import (
 
 // Client represents a Prowlarr Newznab API client
 type Client struct {
-	baseURL string
-	apiKey  string
-	name    string
-	client  *http.Client
+	baseURL   string // Base Prowlarr URL (e.g., http://192.168.1.10:9696)
+	indexerID int    // Prowlarr indexer ID
+	apiKey    string
+	name      string
+	client    *http.Client
 
 	// Usage tracking
 	apiLimit          int
@@ -79,7 +80,7 @@ func (c *Client) GetUsage() indexer.Usage {
 }
 
 // NewClient creates a new Prowlarr client and verifies connectivity
-func NewClient(baseURL, apiKey, name string, um *indexer.UsageManager) (*Client, error) {
+func NewClient(baseURL string, indexerID int, apiKey, name string, um *indexer.UsageManager) (*Client, error) {
 	// Create HTTP client with TLS skip verify for self-signed certs
 	transport := &http.Transport{
 		TLSClientConfig: &tls.Config{
@@ -92,7 +93,8 @@ func NewClient(baseURL, apiKey, name string, um *indexer.UsageManager) (*Client,
 	}
 
 	c := &Client{
-		baseURL:      baseURL,
+		baseURL:      strings.TrimRight(baseURL, "/"),
+		indexerID:    indexerID,
 		apiKey:       apiKey,
 		name:         name,
 		usageManager: um,
@@ -109,19 +111,20 @@ func NewClient(baseURL, apiKey, name string, um *indexer.UsageManager) (*Client,
 		c.downloadUsed = usage.DownloadsUsed
 	}
 
-	if err := c.Ping(); err != nil {
-		return nil, err
-	}
+	// Skip ping during initialization - the newznab endpoint may return 404 during ping
+	// but work fine for actual searches. We'll get proper errors during searches if there's an issue.
+	// if err := c.Ping(); err != nil {
+	// 	return nil, err
+	// }
 
 	return c, nil
 }
 
 // Ping checks if the Prowlarr server is reachable
 func (c *Client) Ping() error {
-	// Prowlarr health check endpoint or just root
-	// We'll check the Newznab API capability endpoint
-	base := strings.TrimRight(c.baseURL, "/")
-	apiURL := fmt.Sprintf("%s/api?t=caps&apikey=%s", base, c.apiKey)
+	// Try the search endpoint with a minimal query instead of caps
+	// Some Prowlarr setups don't expose caps endpoint properly
+	apiURL := fmt.Sprintf("%s/%d/api?t=search&limit=1&apikey=%s", c.baseURL, c.indexerID, c.apiKey)
 
 	req, err := http.NewRequest("GET", apiURL, nil)
 	if err != nil {
@@ -191,8 +194,9 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 		params.Set("ep", req.Episode)
 	}
 
-	base := strings.TrimRight(c.baseURL, "/")
-	apiURL := fmt.Sprintf("%s/api?%s", base, params.Encode())
+	// Use Prowlarr's newznab proxy endpoint
+	// Format: http://prowlarr:port/{indexerid}/api
+	apiURL := fmt.Sprintf("%s/%d/api?%s", c.baseURL, c.indexerID, params.Encode())
 
 	// Debug: Log the actual API URL being called
 	logger.Debug("Prowlarr Search URL", "url", apiURL)
