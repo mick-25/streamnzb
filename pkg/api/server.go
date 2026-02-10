@@ -169,6 +169,7 @@ func (s *Server) Reload(cfg *config.Config, pools map[string]*nntp.ClientPool, i
 
 	// 6. Cleanup Orphaned Usage Data
 	s.cleanupIndexerUsage()
+	s.cleanupProviderUsage()
 }
 
 func (s *Server) cleanupIndexerUsage() {
@@ -184,6 +185,20 @@ func (s *Server) cleanupIndexerUsage() {
 		}
 	} else if s.indexer != nil {
 		activeNames = append(activeNames, s.indexer.Name())
+	}
+
+	usageMgr.SyncUsage(activeNames)
+}
+
+func (s *Server) cleanupProviderUsage() {
+	usageMgr, err := nntp.GetProviderUsageManager(nil)
+	if err != nil || usageMgr == nil {
+		return
+	}
+
+	var activeNames []string
+	for name := range s.providerPools {
+		activeNames = append(activeNames, name)
 	}
 
 	usageMgr.SyncUsage(activeNames)

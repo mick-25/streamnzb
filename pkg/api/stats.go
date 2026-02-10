@@ -17,6 +17,7 @@ type SystemStats struct {
 	ActiveStreams     int                         `json:"active_streams"`
 	TotalConnections  int                         `json:"total_connections"`
 	ActiveConnections int                         `json:"active_connections"`
+	TotalDownloadedMB float64                     `json:"total_downloaded_mb"` // Sum of all providers
 	Providers         []ProviderStats             `json:"providers"`
 	Indexers          []IndexerStats              `json:"indexers"`
 	ActiveSessions    []session.ActiveSessionInfo `json:"active_sessions"`
@@ -35,12 +36,14 @@ type IndexerStats struct {
 
 // ProviderStats represents statistics for a single NNTP provider
 type ProviderStats struct {
-	Name         string  `json:"name"`
-	Host         string  `json:"host"`
-	ActiveConns  int     `json:"active_conns"`
-	IdleConns    int     `json:"idle_conns"`
-	MaxConns     int     `json:"max_conns"`
-	CurrentSpeed float64 `json:"current_speed_mbps"` // Mbps
+	Name          string  `json:"name"`
+	Host          string  `json:"host"`
+	ActiveConns   int     `json:"active_conns"`
+	IdleConns     int     `json:"idle_conns"`
+	MaxConns      int     `json:"max_conns"`
+	CurrentSpeed  float64 `json:"current_speed_mbps"` // Mbps (instantaneous)
+	DownloadedMB  float64 `json:"downloaded_mb"`      // Lifetime MB for this provider
+	UsagePercent  float64 `json:"usage_percent"`      // Share of total downloaded MB
 }
 
 // collectStats gathers metrics from all sources
@@ -51,8 +54,14 @@ func (s *Server) collectStats() SystemStats {
 	}
 
 	var totalActive, totalMax int
+	var totalDownloadedMB float64
 
 	for name, pool := range s.providerPools {
+		// Sync usage to persistent storage periodically
+		pool.SyncUsage()
+
+		downloadedMB := pool.TotalMegabytes()
+
 		pStats := ProviderStats{
 			Name:         name,
 			Host:         pool.Host(),
@@ -60,13 +69,23 @@ func (s *Server) collectStats() SystemStats {
 			IdleConns:    pool.IdleConnections(),
 			MaxConns:     pool.MaxConn(),
 			CurrentSpeed: pool.GetSpeed(),
+			DownloadedMB: downloadedMB,
 		}
 
 		totalActive += pStats.ActiveConns
 		totalMax += pStats.MaxConns
 		stats.TotalSpeed += pStats.CurrentSpeed
+		totalDownloadedMB += downloadedMB
 
 		stats.Providers = append(stats.Providers, pStats)
+	}
+
+	// Compute usage share per provider
+	if totalDownloadedMB > 0 {
+		for i := range stats.Providers {
+			stats.Providers[i].UsagePercent = (stats.Providers[i].DownloadedMB / totalDownloadedMB) * 100
+		}
+		stats.TotalDownloadedMB = totalDownloadedMB
 	}
 
 	// Sort providers by name

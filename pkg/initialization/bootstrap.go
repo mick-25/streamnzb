@@ -107,6 +107,16 @@ func BuildComponents(cfg *config.Config) (*InitializedComponents, error) {
 	providerPools := make(map[string]*nntp.ClientPool)
 	var streamingPools []*nntp.ClientPool
 
+	// Initialize provider usage manager (may be nil if stateMgr failed)
+	var providerUsageMgr *nntp.ProviderUsageManager
+	if stateMgr != nil {
+		if mgr, err := nntp.GetProviderUsageManager(stateMgr); err != nil {
+			logger.Error("Failed to initialize provider usage manager", "err", err)
+		} else {
+			providerUsageMgr = mgr
+		}
+	}
+
 	for _, provider := range cfg.Providers {
 		logger.Info("Initializing NNTP pool", "provider", provider.Name, "host", provider.Host, "conns", provider.Connections)
 
@@ -129,6 +139,14 @@ func BuildComponents(cfg *config.Config) (*InitializedComponents, error) {
 		poolName := provider.Name
 		if poolName == "" {
 			poolName = provider.Host
+		}
+
+		// Restore persisted usage if available and configure persistence
+		if providerUsageMgr != nil {
+			if usage := providerUsageMgr.GetUsage(poolName); usage != nil {
+				pool.RestoreTotalBytes(usage.TotalBytes)
+			}
+			pool.SetUsageManager(poolName, providerUsageMgr)
 		}
 
 		providerPools[poolName] = pool

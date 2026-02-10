@@ -17,9 +17,16 @@ type ClientPool struct {
 	idleClients chan *Client
 	slots       chan struct{} // Semaphore tokens for creating new connections
 	// Metrics
-	bytesRead int64
-	lastSpeed float64 // Mbps
-	lastCheck time.Time
+	bytesRead       int64   // bytes since last speed sample
+	totalBytesRead  int64   // cumulative bytes read (lifetime)
+	lastSpeed       float64 // Mbps
+	lastCheck       time.Time
+
+	// Persistence
+	providerName   string
+	usageManager   *ProviderUsageManager
+	lastSyncBytes  int64 // Last synced totalBytesRead value
+	lastSyncTime   time.Time
 
 	mu     sync.Mutex
 	closed bool
@@ -49,10 +56,56 @@ func NewClientPool(host string, port int, ssl bool, user, pass string, maxConn i
 	return p
 }
 
+// SetUsageManager configures the pool to persist usage data
+func (p *ClientPool) SetUsageManager(name string, mgr *ProviderUsageManager) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.providerName = name
+	p.usageManager = mgr
+}
+
+// RestoreTotalBytes allows persisted counters to be injected on startup
+func (p *ClientPool) RestoreTotalBytes(total int64) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.totalBytesRead = total
+	p.lastSyncBytes = total
+	p.lastSyncTime = time.Now() // Initialize to avoid immediate sync
+}
+
+// SyncUsage persists the current totalBytesRead if it has changed significantly
+// This should be called periodically (e.g., every 30 seconds or when collecting stats)
+func (p *ClientPool) SyncUsage() {
+	p.mu.Lock()
+	currentTotal := p.totalBytesRead
+	lastSynced := p.lastSyncBytes
+	lastSyncTime := p.lastSyncTime
+	providerName := p.providerName
+	usageMgr := p.usageManager
+	p.mu.Unlock()
+
+	if usageMgr == nil || providerName == "" {
+		return
+	}
+
+	// Only sync if there's a meaningful change (at least 1MB difference) or it's been >30s
+	delta := currentTotal - lastSynced
+	if delta >= 1024*1024 || time.Since(lastSyncTime) > 30*time.Second {
+		if delta > 0 {
+			usageMgr.IncrementBytes(providerName, delta)
+			p.mu.Lock()
+			p.lastSyncBytes = currentTotal
+			p.lastSyncTime = time.Now()
+			p.mu.Unlock()
+		}
+	}
+}
+
 // TrackRead updates the total bytes read
 func (p *ClientPool) TrackRead(n int) {
 	p.mu.Lock()
 	p.bytesRead += int64(n)
+	p.totalBytesRead += int64(n)
 	p.mu.Unlock()
 }
 
@@ -76,6 +129,14 @@ func (p *ClientPool) GetSpeed() float64 {
 	}
 
 	return p.lastSpeed
+}
+
+// TotalMegabytes returns the cumulative downloaded data in megabytes (lifetime)
+func (p *ClientPool) TotalMegabytes() float64 {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	return float64(p.totalBytesRead) / (1024 * 1024)
 }
 
 func (p *ClientPool) Get(ctx context.Context) (*Client, error) {

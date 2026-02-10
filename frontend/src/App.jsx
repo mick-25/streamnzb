@@ -11,7 +11,7 @@ import {
 import { Area, AreaChart, ResponsiveContainer, XAxis, YAxis } from "recharts"
 import { 
   Activity, Server, Zap, Globe, Settings as SettingsIcon, AlertCircle, 
-  Sun, Moon, Monitor, X, Loader2, Tv, Clipboard, Check, ChevronDown, MonitorPlay
+  Sun, Moon, Monitor, X, Loader2, Tv, Clipboard, Check, ChevronDown, MonitorPlay, Menu
 } from "lucide-react"
 import {
   DropdownMenu,
@@ -52,6 +52,7 @@ function App() {
   const [wsStatus, setWsStatus] = useState('connecting')
   const [ws, setWs] = useState(null)
   const [theme, setTheme] = useState(localStorage.getItem('theme') || 'system')
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   
   const [logs, setLogs] = useState([])
   const logsEndRef = useRef(null)
@@ -226,91 +227,222 @@ function App() {
 
   return (
     <div className="min-h-screen bg-background text-foreground p-4 md:p-8">
-      <header className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-8">
-        <div className="flex items-center gap-3">
-            <div className="bg-primary p-2 rounded-lg">
-                <Zap className="h-6 w-6 text-primary-foreground" />
-            </div>
-            <div>
-                <h1 className="text-3xl font-bold tracking-tight">StreamNZB</h1>
-                <p className="text-sm text-muted-foreground">High-performance Usenet Streaming</p>
-            </div>
-        </div>
-        <div className="flex items-center gap-2">
+      <header className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-4">
+        <div className="flex items-center gap-3 w-full md:w-auto">
+          {/* Mobile hamburger - next to title */}
+          <Button
+            variant="ghost"
+            size="icon"
+            className="md:hidden h-9 w-9"
+            onClick={() => setMobileMenuOpen((open) => !open)}
+            title="Menu"
+          >
+            <Menu className="h-5 w-5" />
+          </Button>
           
-
-          <div className="flex items-center bg-secondary rounded-lg p-1 mr-2">
-            <Button 
-                variant={theme === 'light' ? 'default' : 'ghost'} 
-                size="icon" 
-                className="h-8 w-8" 
-                onClick={() => setTheme('light')}
-            >
-                <Sun className="h-4 w-4" />
-            </Button>
-            <Button 
-                variant={theme === 'dark' ? 'default' : 'ghost'} 
-                size="icon" 
-                className="h-8 w-8" 
-                onClick={() => setTheme('dark')}
-            >
-                <Moon className="h-4 w-4" />
-            </Button>
-            <Button 
-                variant={theme === 'system' ? 'default' : 'ghost'} 
-                size="icon" 
-                className="h-8 w-8" 
-                onClick={() => setTheme('system')}
-            >
-                <Monitor className="h-4 w-4" />
-            </Button>
+          <div className="bg-primary p-2 rounded-lg">
+            <Zap className="h-6 w-6 text-primary-foreground" />
           </div>
-          
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-                <Button 
-                    variant="outline" 
-                    size="sm" 
-                    className="gap-2" 
-                    disabled={!config}
-                    title="Install options"
+          <div>
+            <h1 className="text-3xl font-bold tracking-tight">StreamNZB</h1>
+            <p className="text-sm text-muted-foreground">High-performance Usenet Streaming</p>
+          </div>
+        </div>
+        
+        {/* Desktop toolbar */}
+        <div className="hidden md:flex items-center">
+          <div className="flex items-center gap-1.5 bg-secondary/60 border border-border/60 rounded-xl px-1.5 py-1">
+            {/* Theme selector */}
+            <div className="flex items-center bg-background/70 rounded-lg p-0.5 gap-0.5">
+              <Button
+                variant={theme === 'light' ? 'default' : 'ghost'}
+                size="icon"
+                className="h-8 w-8"
+                onClick={() => setTheme('light')}
+              >
+                <Sun className="h-4 w-4" />
+              </Button>
+              <Button
+                variant={theme === 'dark' ? 'default' : 'ghost'}
+                size="icon"
+                className="h-8 w-8"
+                onClick={() => setTheme('dark')}
+              >
+                <Moon className="h-4 w-4" />
+              </Button>
+              <Button
+                variant={theme === 'system' ? 'default' : 'ghost'}
+                size="icon"
+                className="h-8 w-8"
+                onClick={() => setTheme('system')}
+              >
+                <Monitor className="h-4 w-4" />
+              </Button>
+            </div>
+
+            {/* Install */}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="icon"
+                  className="h-8 w-8 md:w-auto md:px-3 gap-2"
+                  disabled={!config}
+                  title="Install options"
                 >
-                    <Tv className="h-4 w-4" />
-                    <span className="hidden sm:inline">Install</span>
-                    <ChevronDown className="h-4 w-4 opacity-50" />
+                  <Tv className="h-4 w-4" />
+                  <span className="hidden md:inline">Install</span>
+                  <ChevronDown className="hidden md:inline h-4 w-4 opacity-50" />
                 </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
                 {/* <DropdownMenuItem onClick={() => handleInstallClick('client')}>
                     <MonitorPlay className="mr-2 h-4 w-4" />
                     <span>Stremio Client</span>
                 </DropdownMenuItem> */}
                 <DropdownMenuItem onClick={() => handleInstallClick('web')}>
-                    <Globe className="mr-2 h-4 w-4" />
-                    <span>Stremio Web</span>
+                  <Globe className="mr-2 h-4 w-4" />
+                  <span>Stremio Web</span>
                 </DropdownMenuItem>
                 <DropdownMenuItem onClick={() => handleInstallClick('copy')}>
-                    {copied ? <Check className="mr-2 h-4 w-4" /> : <Clipboard className="mr-2 h-4 w-4" />}
-                    <span>{copied ? 'Copied!' : 'Copy Link'}</span>
+                  {copied ? <Check className="mr-2 h-4 w-4" /> : <Clipboard className="mr-2 h-4 w-4" />}
+                  <span>{copied ? 'Copied!' : 'Copy Link'}</span>
                 </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+              </DropdownMenuContent>
+            </DropdownMenu>
 
-          <Button variant="outline" size="sm" onClick={() => setShowSettings(true)} className="gap-2">
-            <SettingsIcon className="h-4 w-4" />
-            Settings
-          </Button>
+            {/* Settings */}
+            <Button
+              variant="outline"
+              size="icon"
+              onClick={() => setShowSettings(true)}
+              className="h-8 w-8 md:w-auto md:px-3 gap-2"
+            >
+              <SettingsIcon className="h-4 w-4" />
+              <span className="hidden md:inline">Settings</span>
+            </Button>
 
-          <Button 
-            variant="default" 
-            size="sm" 
-            className="gap-2 bg-[#5865F2] hover:bg-[#4752C4] text-white"
-            onClick={() => window.open('https://snzb.stream/discord', '_blank')}
-          >
-            <DiscordIcon className="h-4 w-4" />
-          </Button>
+            {/* Discord */}
+            <Button
+              variant="default"
+              size="icon"
+              className="h-8 w-8 md:w-auto md:px-3 gap-2 bg-[#5865F2] hover:bg-[#4752C4] text-white"
+              onClick={() => window.open('https://snzb.stream/discord', '_blank')}
+            >
+              <DiscordIcon className="h-4 w-4" />
+              <span className="hidden md:inline">Discord</span>
+            </Button>
+          </div>
         </div>
       </header>
+
+      {/* Mobile full-page menu overlay */}
+      {mobileMenuOpen && (
+        <div className="md:hidden fixed inset-0 z-50 bg-background">
+          <div className="flex flex-col h-full">
+            {/* Header with close button */}
+            <div className="flex items-center justify-between p-4 border-b">
+              <h2 className="text-xl font-semibold">Menu</h2>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => setMobileMenuOpen(false)}
+                className="h-9 w-9"
+              >
+                <X className="h-5 w-5" />
+              </Button>
+            </div>
+
+            {/* Menu content */}
+            <div className="flex-1 overflow-y-auto p-4">
+              <div className="flex flex-col gap-4 max-w-md mx-auto">
+                {/* Theme selector */}
+                <div>
+                  <h3 className="text-sm font-medium text-muted-foreground mb-3">Theme</h3>
+                  <div className="flex items-center justify-center bg-secondary/70 rounded-lg p-1 gap-1">
+                    <Button
+                      variant={theme === 'light' ? 'default' : 'ghost'}
+                      size="icon"
+                      className="h-10 w-10"
+                      onClick={() => setTheme('light')}
+                    >
+                      <Sun className="h-5 w-5" />
+                    </Button>
+                    <Button
+                      variant={theme === 'dark' ? 'default' : 'ghost'}
+                      size="icon"
+                      className="h-10 w-10"
+                      onClick={() => setTheme('dark')}
+                    >
+                      <Moon className="h-5 w-5" />
+                    </Button>
+                    <Button
+                      variant={theme === 'system' ? 'default' : 'ghost'}
+                      size="icon"
+                      className="h-10 w-10"
+                      onClick={() => setTheme('system')}
+                    >
+                      <Monitor className="h-5 w-5" />
+                    </Button>
+                  </div>
+                </div>
+
+                {/* Install */}
+                <div>
+                  <h3 className="text-sm font-medium text-muted-foreground mb-3">Install</h3>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        variant="outline"
+                        className="w-full justify-start gap-3 h-12"
+                        disabled={!config}
+                      >
+                        <Tv className="h-5 w-5" />
+                        <span>Install Addon</span>
+                        <ChevronDown className="h-4 w-4 opacity-50 ml-auto" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="start" className="w-[calc(100vw-4rem)]">
+                      <DropdownMenuItem onClick={() => handleInstallClick('web')}>
+                        <Globe className="mr-2 h-4 w-4" />
+                        <span>Stremio Web</span>
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => handleInstallClick('copy')}>
+                        {copied ? <Check className="mr-2 h-4 w-4" /> : <Clipboard className="mr-2 h-4 w-4" />}
+                        <span>{copied ? 'Copied!' : 'Copy Link'}</span>
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </div>
+
+                {/* Settings & Discord */}
+                <div className="flex flex-col gap-3 pt-4 border-t">
+                  <Button
+                    variant="outline"
+                    className="w-full justify-start gap-3 h-12"
+                    onClick={() => {
+                      setShowSettings(true)
+                      setMobileMenuOpen(false)
+                    }}
+                  >
+                    <SettingsIcon className="h-5 w-5" />
+                    <span>Settings</span>
+                  </Button>
+
+                  <Button
+                    variant="default"
+                    className="w-full justify-start gap-3 h-12 bg-[#5865F2] hover:bg-[#4752C4] text-white"
+                    onClick={() => window.open('https://snzb.stream/discord', '_blank')}
+                  >
+                    <DiscordIcon className="h-5 w-5" />
+                    <span>Discord</span>
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
       
       {showSettings && (
         <Settings 
@@ -456,6 +588,22 @@ function App() {
                         className="bg-primary h-full transition-all duration-500" 
                         style={{ width: `${(p.active_conns / (p.max_conns || 1)) * 100}%` }} 
                      />
+                  </div>
+                  <div className="mt-3 flex items-center justify-between text-[10px] text-muted-foreground">
+                    <span>
+                      Downloaded:&nbsp;
+                      <span className="font-semibold text-foreground">
+                        {p.downloaded_mb?.toFixed ? p.downloaded_mb.toFixed(1) : p.downloaded_mb.toFixed(1)} MB
+                      </span>
+                    </span>
+                    {stats.total_downloaded_mb > 0 && (
+                      <span>
+                        Usage:&nbsp;
+                        <span className="font-semibold text-foreground">
+                          {p.usage_percent.toFixed(0)}%
+                        </span>
+                      </span>
+                    )}
                   </div>
                </CardContent>
             </Card>
