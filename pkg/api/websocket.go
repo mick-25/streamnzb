@@ -11,6 +11,7 @@ import (
 
 	"streamnzb/pkg/availnzb"
 	"streamnzb/pkg/config"
+	"streamnzb/pkg/indexer/newznab"
 	"streamnzb/pkg/initialization"
 	"streamnzb/pkg/logger"
 	"streamnzb/pkg/nntp"
@@ -263,7 +264,7 @@ func (s *Server) validateConfig(cfg *config.Config) map[string]string {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, err := nzbhydra.NewClient(cfg.NZBHydra2URL, cfg.NZBHydra2APIKey)
+			_, err := nzbhydra.NewClient(cfg.NZBHydra2URL, cfg.NZBHydra2APIKey, "Validation", nil)
 			if err != nil {
 				mu.Lock()
 				errStr := err.Error()
@@ -283,7 +284,7 @@ func (s *Server) validateConfig(cfg *config.Config) map[string]string {
 		go func() {
 			defer wg.Done()
 			// Fetch indexers to verify connectivity AND API Key
-			indexers, err := prowlarr.GetConfiguredIndexers(cfg.ProwlarrURL, cfg.ProwlarrAPIKey)
+			indexers, err := prowlarr.GetConfiguredIndexers(cfg.ProwlarrURL, cfg.ProwlarrAPIKey, nil)
 			if err != nil {
 				mu.Lock()
 				errStr := err.Error()
@@ -299,6 +300,27 @@ func (s *Server) validateConfig(cfg *config.Config) map[string]string {
 				mu.Unlock()
 			}
 		}()
+	}
+
+	// 4. Validate Internal Indexers
+	for i, idx := range cfg.Indexers {
+		wg.Add(1)
+		go func(index int, indexerCfg config.IndexerConfig) {
+			defer wg.Done()
+			if indexerCfg.URL == "" {
+				mu.Lock()
+				errors[fmt.Sprintf("indexers.%d.url", index)] = "URL is required"
+				mu.Unlock()
+				return
+			}
+			// Use our newznab client to ping
+			client := newznab.NewClient(indexerCfg, nil)
+			if err := client.Ping(); err != nil {
+				mu.Lock()
+				errors[fmt.Sprintf("indexers.%d.url", index)] = err.Error()
+				mu.Unlock()
+			}
+		}(i, idx)
 	}
 
 	wg.Wait()

@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -105,7 +106,7 @@ func (s *Session) handleArticle(args []string) error {
 
 	// Try each provider until we get the article
 	for _, pool := range s.pools {
-		client, err := pool.Get()
+		client, err := pool.Get(context.Background())
 		if err != nil {
 			continue
 		}
@@ -143,7 +144,7 @@ func (s *Session) handleBody(args []string) error {
 
 	// Try each provider
 	for _, pool := range s.pools {
-		client, err := pool.Get()
+		client, err := pool.Get(context.Background())
 		if err != nil {
 			continue
 		}
@@ -177,7 +178,7 @@ func (s *Session) handleHead(args []string) error {
 
 	// Try each provider
 	for _, pool := range s.pools {
-		client, err := pool.Get()
+		client, err := pool.Get(context.Background())
 		if err != nil {
 			continue
 		}
@@ -211,7 +212,7 @@ func (s *Session) handleStat(args []string) error {
 
 	// Try each provider
 	for _, pool := range s.pools {
-		client, err := pool.Get()
+		client, err := pool.Get(context.Background())
 		if err != nil {
 			continue
 		}

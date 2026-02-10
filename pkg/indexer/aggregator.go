@@ -18,6 +18,24 @@ func (a *Aggregator) Name() string {
 	return "Aggregator"
 }
 
+// GetIndexers returns the list of sub-indexers
+func (a *Aggregator) GetIndexers() []Indexer {
+	return a.Indexers
+}
+
+// GetUsage returns the aggregate usage stats
+func (a *Aggregator) GetUsage() Usage {
+	var usage Usage
+	for _, idx := range a.Indexers {
+		u := idx.GetUsage()
+		usage.APIHitsLimit += u.APIHitsLimit
+		usage.APIHitsRemaining += u.APIHitsRemaining
+		usage.DownloadsLimit += u.DownloadsLimit
+		usage.DownloadsRemaining += u.DownloadsRemaining
+	}
+	return usage
+}
+
 // NewAggregator creates a new indexer aggregator
 func NewAggregator(indexers ...Indexer) *Aggregator {
 	return &Aggregator{

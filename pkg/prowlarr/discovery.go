@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"streamnzb/pkg/indexer"
 	"streamnzb/pkg/logger"
+	"strings"
 	"time"
 )
 
@@ -18,7 +19,7 @@ type IndexerDefinition struct {
 }
 
 // GetConfiguredIndexers discovers and returns all active Usenet indexers from Prowlarr
-func GetConfiguredIndexers(baseURL, apiKey string) ([]indexer.Indexer, error) {
+func GetConfiguredIndexers(baseURL, apiKey string, um *indexer.UsageManager) ([]indexer.Indexer, error) {
 	apiURL := fmt.Sprintf("%s/api/v1/indexer?apikey=%s", baseURL, apiKey)
 
 	client := &http.Client{Timeout: 10 * time.Second}
@@ -41,22 +42,16 @@ func GetConfiguredIndexers(baseURL, apiKey string) ([]indexer.Indexer, error) {
 	for _, def := range definitions {
 		if def.Enable && def.Protocol == "usenet" {
 			// Construct Newznab URL for this specific indexer
-			// Prowlarr Generic Newznab URL format: http://host:port/{id}/api
-			indexerURL := fmt.Sprintf("%s/%d", baseURL, def.ID)
+			// Prowlarr Generic Newznab URL format: http://host:port/api/v1/proxy/{id}/api
+			base := strings.TrimRight(baseURL, "/")
+			indexerURL := fmt.Sprintf("%s/newznab/v1/proxy/%d", base, def.ID)
 
-			// Reuse the generic Client (Newznab compatible)
-			// Pass Prowlarr API key as it works for the proxied endpoints too
-			idx, err := NewClient(indexerURL, apiKey)
+			name := fmt.Sprintf("Prowlarr:%s", def.Name)
+			idx, err := NewClient(indexerURL, apiKey, name, um)
 			if err != nil {
 				logger.Error("Failed to init Prowlarr indexer", "name", def.Name, "err", err)
 				continue
 			}
-
-			// Wrap or modify to return specific name
-			// Since our Client.Name() returns "Prowlarr", we might want to customize it.
-			// But for now, let's just use it.
-			// Ideally we should update Client to accept a Name.
-			idx.name = fmt.Sprintf("Prowlarr:%s", def.Name)
 
 			indexers = append(indexers, idx)
 		}

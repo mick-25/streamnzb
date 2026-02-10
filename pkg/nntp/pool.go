@@ -1,6 +1,7 @@
 package nntp
 
 import (
+	"context"
 	"sync"
 	"time"
 )
@@ -77,9 +78,11 @@ func (p *ClientPool) GetSpeed() float64 {
 	return p.lastSpeed
 }
 
-func (p *ClientPool) Get() (*Client, error) {
+func (p *ClientPool) Get(ctx context.Context) (*Client, error) {
 	// 1. Prefer Idle Client
 	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	case c := <-p.idleClients:
 		return c, nil
 	default:
@@ -87,6 +90,8 @@ func (p *ClientPool) Get() (*Client, error) {
 
 	// 2. Try to create new connection (check slots)
 	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	case <-p.slots:
 		// Got permit, dial
 		c, err := NewClient(p.host, p.port, p.ssl)
@@ -106,6 +111,8 @@ func (p *ClientPool) Get() (*Client, error) {
 
 	// 3. Block and wait for resource
 	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	case c := <-p.idleClients:
 		return c, nil
 	case <-p.slots:
@@ -125,9 +132,11 @@ func (p *ClientPool) Get() (*Client, error) {
 }
 
 // TryGet attempts to get a client without blocking.
-func (p *ClientPool) TryGet() (*Client, bool) {
+func (p *ClientPool) TryGet(ctx context.Context) (*Client, bool) {
 	// 1. Check Idle
 	select {
+	case <-ctx.Done():
+		return nil, false
 	case c := <-p.idleClients:
 		return c, true
 	default:
@@ -135,6 +144,8 @@ func (p *ClientPool) TryGet() (*Client, bool) {
 
 	// 2. Check Slots
 	select {
+	case <-ctx.Done():
+		return nil, false
 	case <-p.slots:
 		c, err := NewClient(p.host, p.port, p.ssl)
 		if err != nil {
@@ -231,7 +242,7 @@ func (p *ClientPool) reaperLoop() {
 
 // Validate checks if the pool can successfully connect and authenticate.
 func (p *ClientPool) Validate() error {
-	c, err := p.Get()
+	c, err := p.Get(context.Background())
 	if err != nil {
 		return err
 	}

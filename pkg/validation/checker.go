@@ -122,7 +122,7 @@ func (c *Checker) validateProvider(ctx context.Context, nzbData *nzb.NZB, provid
 	result.CheckedArticles = len(articles)
 
 	// Check articles using STAT command (faster than ARTICLE)
-	client, err := pool.Get()
+	client, err := pool.Get(ctx)
 	if err != nil {
 		result.Error = fmt.Errorf("failed to get client: %w", err)
 		return result

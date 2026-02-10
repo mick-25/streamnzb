@@ -8,9 +8,11 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"streamnzb/pkg/indexer"
 	"streamnzb/pkg/logger"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -20,6 +22,16 @@ type Client struct {
 	apiKey  string
 	name    string
 	client  *http.Client
+
+	// Usage tracking
+	apiLimit          int
+	apiUsed           int
+	apiRemaining      int
+	downloadLimit     int
+	downloadUsed      int
+	downloadRemaining int
+	usageManager      *indexer.UsageManager
+	mu                sync.RWMutex
 }
 
 // Name returns the name of this indexer
@@ -30,8 +42,22 @@ func (c *Client) Name() string {
 	return "Prowlarr"
 }
 
+// GetUsage returns the current usage stats
+func (c *Client) GetUsage() indexer.Usage {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return indexer.Usage{
+		APIHitsLimit:       c.apiLimit,
+		APIHitsUsed:        c.apiUsed,
+		APIHitsRemaining:   c.apiRemaining,
+		DownloadsLimit:     c.downloadLimit,
+		DownloadsUsed:      c.downloadUsed,
+		DownloadsRemaining: c.downloadRemaining,
+	}
+}
+
 // NewClient creates a new Prowlarr client and verifies connectivity
-func NewClient(baseURL, apiKey string) (*Client, error) {
+func NewClient(baseURL, apiKey, name string, um *indexer.UsageManager) (*Client, error) {
 	// Create HTTP client with TLS skip verify for self-signed certs
 	transport := &http.Transport{
 		TLSClientConfig: &tls.Config{
@@ -44,12 +70,21 @@ func NewClient(baseURL, apiKey string) (*Client, error) {
 	}
 
 	c := &Client{
-		baseURL: baseURL,
-		apiKey:  apiKey,
+		baseURL:      baseURL,
+		apiKey:       apiKey,
+		name:         name,
+		usageManager: um,
 		client: &http.Client{
 			Timeout:   30 * time.Second,
 			Transport: transport,
 		},
+	}
+
+	// Load initial usage if manager is provided
+	if um != nil && name != "" {
+		usage := um.GetIndexerUsage(name)
+		c.apiUsed = usage.APIHitsUsed
+		c.downloadUsed = usage.DownloadsUsed
 	}
 
 	if err := c.Ping(); err != nil {
@@ -63,8 +98,17 @@ func NewClient(baseURL, apiKey string) (*Client, error) {
 func (c *Client) Ping() error {
 	// Prowlarr health check endpoint or just root
 	// We'll check the Newznab API capability endpoint
-	apiURL := fmt.Sprintf("%s/api?t=caps&apikey=%s", c.baseURL, c.apiKey)
-	resp, err := c.client.Get(apiURL)
+	base := strings.TrimRight(c.baseURL, "/")
+	apiURL := fmt.Sprintf("%s/api?t=caps&apikey=%s", base, c.apiKey)
+	
+	req, err := http.NewRequest("GET", apiURL, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("X-Api-Key", c.apiKey)
+	
+	logger.Debug("Prowlarr Ping URL", "url", apiURL)
+	resp, err := c.client.Do(req)
 	if err != nil {
 		return err
 	}
@@ -121,16 +165,33 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 		params.Set("ep", req.Episode)
 	}
 
-	apiURL := fmt.Sprintf("%s/api?%s", c.baseURL, params.Encode())
+	base := strings.TrimRight(c.baseURL, "/")
+	apiURL := fmt.Sprintf("%s/api?%s", base, params.Encode())
 
 	// Debug: Log the actual API URL being called
-	logger.Debug("Prowlarr API URL: %s\n", apiURL)
+	logger.Debug("Prowlarr Search URL", "url", apiURL)
 
-	resp, err := c.client.Get(apiURL)
+	reqBod, err := http.NewRequest("GET", apiURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	reqBod.Header.Set("X-Api-Key", c.apiKey)
+
+	resp, err := c.client.Do(reqBod)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query Prowlarr: %w", err)
 	}
 	defer resp.Body.Close()
+
+	// Local increment
+	c.mu.Lock()
+	c.apiUsed++
+	if c.apiRemaining > 0 {
+		c.apiRemaining--
+	}
+	c.mu.Unlock()
+
+	c.updateUsageFromHeaders(resp.Header)
 
 	// Read body first to debug
 	bodyBytes, err := io.ReadAll(resp.Body)
@@ -168,12 +229,28 @@ func (c *Client) DownloadNZB(nzbURL string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
+	req.Header.Set("X-Api-Key", c.apiKey)
 
+	logger.Debug("Prowlarr Download URL", "url", nzbURL)
 	resp, err := c.client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to download NZB: %w", err)
 	}
 	defer resp.Body.Close()
+
+	// Local increment
+	c.mu.Lock()
+	c.apiUsed++ // Download also counts as hit
+	c.downloadUsed++
+	if c.apiRemaining > 0 {
+		c.apiRemaining--
+	}
+	if c.downloadRemaining > 0 {
+		c.downloadRemaining--
+	}
+	c.mu.Unlock()
+
+	c.updateUsageFromHeaders(resp.Header)
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("NZB download returned status %d", resp.StatusCode)
@@ -185,4 +262,42 @@ func (c *Client) DownloadNZB(nzbURL string) ([]byte, error) {
 	}
 
 	return data, nil
+}
+
+func (c *Client) updateUsageFromHeaders(h http.Header) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// Newznab Standard Headers often proximal through Prowlarr
+	if val := h.Get("X-RateLimit-Daily-Limit"); val != "" {
+		if limit, err := strconv.Atoi(val); err == nil {
+			c.apiLimit = limit
+		}
+	}
+	if val := h.Get("X-RateLimit-Daily-Remaining"); val != "" {
+		if remaining, err := strconv.Atoi(val); err == nil {
+			c.apiRemaining = remaining
+		}
+	}
+	if val := h.Get("X-DNZBLimit-Daily-Limit"); val != "" {
+		if limit, err := strconv.Atoi(val); err == nil {
+			c.downloadLimit = limit
+		}
+	}
+	if val := h.Get("X-DNZBLimit-Daily-Remaining"); val != "" {
+		if remaining, err := strconv.Atoi(val); err == nil {
+			c.downloadRemaining = remaining
+		}
+	}
+
+	// Update persistent storage
+	if c.usageManager != nil {
+		if c.apiLimit > 0 {
+			c.apiUsed = c.apiLimit - c.apiRemaining
+		}
+		if c.downloadLimit > 0 {
+			c.downloadUsed = c.downloadLimit - c.downloadRemaining
+		}
+		c.usageManager.UpdateUsage(c.name, c.apiUsed, c.downloadUsed)
+	}
 }

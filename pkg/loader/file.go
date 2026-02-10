@@ -19,6 +19,7 @@ type File struct {
 	segments  []*Segment
 	totalSize int64
 	detected  bool
+	ctx       context.Context // Added context for lifecycle management
 	mu        sync.Mutex
 
 	// Single-segment cache to optimized scattered reads (e.g. header parsing)
@@ -32,7 +33,7 @@ type Segment struct {
 	EndOffset   int64
 }
 
-func NewFile(f *nzb.File, pools []*nntp.ClientPool, estimator *SegmentSizeEstimator) *File {
+func NewFile(ctx context.Context, f *nzb.File, pools []*nntp.ClientPool, estimator *SegmentSizeEstimator) *File {
 	segments := make([]*Segment, len(f.Segments))
 	var offset int64
 	// Initial estimation using NZB bytes
@@ -51,6 +52,7 @@ func NewFile(f *nzb.File, pools []*nntp.ClientPool, estimator *SegmentSizeEstima
 		estimator:    estimator,
 		segments:     segments,
 		totalSize:    offset,
+		ctx:          ctx,
 		lastSegIndex: -1,
 	}
 
@@ -93,7 +95,7 @@ func (f *File) detectSegmentSize() error {
 	}
 
 	// Download first segment (force download, bypass simple cache)
-	data, err := f.DownloadSegment(context.Background(), 0)
+	data, err := f.DownloadSegment(f.ctx, 0)
 	if err != nil {
 		return err
 	}
@@ -212,8 +214,7 @@ func (f *File) getSegmentData(index int) ([]byte, error) {
 	// Not in cache, fetch it
 	// We release lock during network IO to allow concurrency on other methods
 
-	// TODO: Propagate context from ReadAt if available? Default to Background for now.
-	data, err := f.DownloadSegment(context.Background(), index)
+	data, err := f.DownloadSegment(f.ctx, index)
 	if err != nil {
 		return nil, err
 	}
@@ -268,7 +269,7 @@ func (f *File) DownloadSegment(ctx context.Context, index int) ([]byte, error) {
 		// This enables "Spillover" (Speed) - if Priority 0 is busy, we grab Priority 1 immediately.
 		for i, p := range f.pools {
 			if !tried[i] {
-				if c, ok := p.TryGet(); ok {
+				if c, ok := p.TryGet(ctx); ok {
 					client = c
 					pool = p
 					poolIdx = i
@@ -282,11 +283,14 @@ func (f *File) DownloadSegment(ctx context.Context, index int) ([]byte, error) {
 			for i, p := range f.pools {
 				if !tried[i] {
 					var err error
-					client, err = p.Get() // Blocking wait
+					client, err = p.Get(ctx) // Blocking wait
 					if err != nil {
-						// This pool is broken (closed?)
+						// This pool is broken (closed?) or context canceled
 						tried[i] = true
 						lastErr = err
+						if errors.Is(err, context.Canceled) {
+							return nil, err
+						}
 						continue
 					}
 					pool = p

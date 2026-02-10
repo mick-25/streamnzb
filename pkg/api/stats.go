@@ -6,6 +6,7 @@ import (
 	"sort"
 	"time"
 
+	"streamnzb/pkg/indexer"
 	"streamnzb/pkg/session"
 )
 
@@ -17,7 +18,19 @@ type SystemStats struct {
 	TotalConnections  int                         `json:"total_connections"`
 	ActiveConnections int                         `json:"active_connections"`
 	Providers         []ProviderStats             `json:"providers"`
+	Indexers          []IndexerStats              `json:"indexers"`
 	ActiveSessions    []session.ActiveSessionInfo `json:"active_sessions"`
+}
+
+// IndexerStats represents statistics and usage for an indexer
+type IndexerStats struct {
+	Name               string `json:"name"`
+	APIHitsLimit       int    `json:"api_hits_limit"`
+	APIHitsUsed        int    `json:"api_hits_used"`
+	APIHitsRemaining   int    `json:"api_hits_remaining"`
+	DownloadsLimit     int    `json:"downloads_limit"`
+	DownloadsUsed      int    `json:"downloads_used"`
+	DownloadsRemaining int    `json:"downloads_remaining"`
 }
 
 // ProviderStats represents statistics for a single NNTP provider
@@ -60,6 +73,43 @@ func (s *Server) collectStats() SystemStats {
 	sort.Slice(stats.Providers, func(i, j int) bool {
 		return stats.Providers[i].Name < stats.Providers[j].Name
 	})
+
+	// Indexer Stats
+	if s.indexer != nil {
+		// If it's an aggregator, we want details for each internal indexer
+		// Actually, let's just use the aggregator's Indexers if it has them
+		// We'll use a type assertion or just call GetUsage.
+		// But for the dashboard we want a list of individual ones.
+		
+		// In Aggregator.go we have Indexers []Indexer.
+		// We can't directly access it if it's the Indexer interface.
+		// Wait, s.indexer is set during initialization.
+		
+		// Let's assume s.indexer might be an Aggregator
+		type indexerContainer interface {
+			GetIndexers() []indexer.Indexer
+		}
+		
+		var indexers []indexer.Indexer
+		if container, ok := s.indexer.(indexerContainer); ok {
+			indexers = container.GetIndexers()
+		} else {
+			indexers = []indexer.Indexer{s.indexer}
+		}
+
+		for _, idx := range indexers {
+			usage := idx.GetUsage()
+			stats.Indexers = append(stats.Indexers, IndexerStats{
+				Name:               idx.Name(),
+				APIHitsLimit:       usage.APIHitsLimit,
+				APIHitsUsed:        usage.APIHitsUsed,
+				APIHitsRemaining:   usage.APIHitsRemaining,
+				DownloadsLimit:     usage.DownloadsLimit,
+				DownloadsUsed:      usage.DownloadsUsed,
+				DownloadsRemaining: usage.DownloadsRemaining,
+			})
+		}
+	}
 
 	stats.ActiveConnections = totalActive
 	stats.TotalConnections = totalMax

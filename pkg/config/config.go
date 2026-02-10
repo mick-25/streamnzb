@@ -79,6 +79,16 @@ type SortConfig struct {
 	PreferredLanguages []string `json:"preferred_languages"` // e.g., ["en", "multi"]
 }
 
+// IndexerConfig represents an internal Newznab indexer configuration
+type IndexerConfig struct {
+	Name         string `json:"name"`
+	URL          string `json:"url"`
+	APIKey       string `json:"api_key"`
+	Type         string `json:"type"` // "newznab", "prowlarr", "nzbhydra"
+	APIHitsDay   int    `json:"api_hits_day"`
+	DownloadsDay int    `json:"downloads_day"`
+}
+
 // Config holds application configuration
 type Config struct {
 	// NZBHydra2 settings
@@ -88,6 +98,9 @@ type Config struct {
 	// Prowlarr settings
 	ProwlarrURL    string `json:"prowlarr_url"`
 	ProwlarrAPIKey string `json:"prowlarr_api_key"`
+
+	// Internal Indexers
+	Indexers []IndexerConfig `json:"indexers"`
 
 	// Addon settings
 	AddonPort    int    `json:"addon_port"`
@@ -278,7 +291,16 @@ func Load() (*Config, error) {
 		cfg.Providers = envProviders
 	}
 
-	// 4. Save the merged configuration
+	// Load internal indexers from env vars (if any)
+	envIndexers := loadIndexers()
+	if len(envIndexers) > 0 {
+		cfg.Indexers = envIndexers
+	}
+
+	// 4. Migrate legacy indexers
+	cfg.MigrateLegacyIndexers()
+
+	// 5. Save the merged configuration
 	if err := cfg.Save(); err != nil {
 		logger.Warn("Failed to save config on startup", "err", err)
 	} else {
@@ -305,6 +327,65 @@ func (c *Config) LoadFile(path string) error {
 		return err
 	}
 	return nil
+}
+
+// MigrateLegacyIndexers moves old Prowlarr/Hydra settings into the unified Indexers list
+func (c *Config) MigrateLegacyIndexers() {
+	migrated := false
+
+	// Migrate NZBHydra2
+	if c.NZBHydra2APIKey != "" {
+		migratedURL := strings.TrimRight(c.NZBHydra2URL, "/")
+		exists := false
+		for _, idx := range c.Indexers {
+			if idx.Type == "nzbhydra" && strings.TrimRight(idx.URL, "/") == migratedURL {
+				exists = true
+				break
+			}
+		}
+		if !exists && migratedURL != "" {
+			c.Indexers = append(c.Indexers, IndexerConfig{
+				Name:   "NZBHydra2 (Migrated)",
+				URL:    migratedURL,
+				APIKey: c.NZBHydra2APIKey,
+				Type:   "nzbhydra",
+			})
+			logger.Debug("Migrated NZBHydra2", "url", migratedURL)
+			migrated = true
+		}
+		c.NZBHydra2APIKey = "" // Clear legacy
+		c.NZBHydra2URL = ""
+
+	}
+
+	// Migrate Prowlarr
+	if c.ProwlarrAPIKey != "" {
+		migratedURL := strings.TrimRight(c.ProwlarrURL, "/")
+		exists := false
+		for _, idx := range c.Indexers {
+			if idx.Type == "prowlarr" && strings.TrimRight(idx.URL, "/") == migratedURL {
+				exists = true
+				break
+			}
+		}
+		if !exists && migratedURL != "" {
+			c.Indexers = append(c.Indexers, IndexerConfig{
+				Name:   "Prowlarr (Migrated)",
+				URL:    migratedURL,
+				APIKey: c.ProwlarrAPIKey,
+				Type:   "prowlarr",
+			})
+			logger.Debug("Migrated Prowlarr", "url", migratedURL)
+			migrated = true
+		}
+		c.ProwlarrAPIKey = "" // Clear legacy
+		c.ProwlarrURL = ""
+
+	}
+
+	if migrated {
+		logger.Info("Migrated legacy meta-indexers to unified Indexers list")
+	}
 }
 
 // Save saves the current configuration to the file it was loaded from
@@ -350,6 +431,25 @@ func loadProviders() []Provider {
 		providers = append(providers, provider)
 	}
 	return providers
+}
+
+// loadIndexers loads indexer configurations from environment
+func loadIndexers() []IndexerConfig {
+	var indexers []IndexerConfig
+	for i := 1; i <= 10; i++ {
+		prefix := fmt.Sprintf("INDEXER_%d_", i)
+		url := os.Getenv(prefix + "URL")
+		if url == "" {
+			continue
+		}
+		indexer := IndexerConfig{
+			Name:   getEnv(prefix+"NAME", fmt.Sprintf("Indexer %d", i)),
+			URL:    url,
+			APIKey: os.Getenv(prefix + "API_KEY"),
+		}
+		indexers = append(indexers, indexer)
+	}
+	return indexers
 }
 
 // Helper functions (Unchanged)

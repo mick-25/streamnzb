@@ -463,6 +463,67 @@ function App() {
         </div>
       </div>
 
+      <div className="space-y-4 mt-8">
+        <div className="flex items-center gap-2">
+            <MonitorPlay className="h-5 w-5 text-muted-foreground" />
+            <h2 className="text-xl font-semibold tracking-tight">Indexers</h2>
+        </div>
+        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+          {stats.indexers?.map((idx) => (
+            <Card key={idx.name} className="bg-card/50">
+               <CardHeader className="p-4 pb-2">
+                  <div className="flex justify-between items-start">
+                    <CardTitle className="text-sm font-bold truncate leading-tight" title={idx.name}>{idx.name}</CardTitle>
+                    <Badge variant="secondary" className="text-[10px] py-0 h-4">Indexer</Badge>
+                  </div>
+               </CardHeader>
+               <CardContent className="p-4 pt-0 space-y-3">
+                  {/* API Hits */}
+                  <div>
+                    <div className="flex items-center justify-between text-[10px] uppercase text-muted-foreground font-medium mb-1">
+                        <span>API Hits</span>
+                        <span>
+                          {idx.api_hits_used} / {idx.api_hits_limit > 0 ? idx.api_hits_limit : '∞'}
+                        </span>
+                    </div>
+                    {idx.api_hits_limit > 0 && (
+                        <div className="w-full bg-secondary h-1.5 rounded-full overflow-hidden">
+                            <div 
+                                className={`h-full transition-all duration-500 ${(idx.api_hits_remaining / idx.api_hits_limit) < 0.2 ? 'bg-destructive' : 'bg-primary'}`} 
+                                style={{ width: `${((idx.api_hits_limit - idx.api_hits_remaining) / idx.api_hits_limit) * 100}%` }} 
+                            />
+                        </div>
+                    )}
+                  </div>
+
+                  {/* Downloads */}
+                  <div>
+                    <div className="flex items-center justify-between text-[10px] uppercase text-muted-foreground font-medium mb-1">
+                        <span>Downloads</span>
+                        <span>
+                          {idx.downloads_used} / {idx.downloads_limit > 0 ? idx.downloads_limit : '∞'}
+                        </span>
+                    </div>
+                    {idx.downloads_limit > 0 && (
+                        <div className="w-full bg-secondary h-1.5 rounded-full overflow-hidden">
+                            <div 
+                                className={`h-full transition-all duration-500 ${(idx.downloads_remaining / idx.downloads_limit) < 0.2 ? 'bg-destructive' : 'bg-primary'}`} 
+                                style={{ width: `${((idx.downloads_limit - idx.downloads_remaining) / idx.downloads_limit) * 100}%` }} 
+                            />
+                        </div>
+                    )}
+                  </div>
+               </CardContent>
+            </Card>
+          ))}
+          {(!stats.indexers || stats.indexers.length === 0) && (
+              <div className="col-span-full py-8 text-center border border-dashed rounded-lg text-muted-foreground text-sm">
+                  No internal indexers configured.
+              </div>
+          )}
+        </div>
+      </div>
+
       <div className="mt-8">
         <Card className="flex flex-col h-[300px]">
             <CardHeader className="py-3 px-4 border-b bg-muted/20">

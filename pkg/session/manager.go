@@ -2,6 +2,7 @@ package session
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"strings"
 	"sync"
@@ -27,6 +28,10 @@ type Session struct {
 	ActivePlays int32
 	Clients     map[string]time.Time // IP -> Connected time
 	mu          sync.Mutex
+
+	// Lifecycle
+	ctx    context.Context
+	cancel context.CancelFunc
 
 	// Deferred download fields
 	NZBURL      string
@@ -86,10 +91,13 @@ func (m *Manager) CreateSession(sessionID string, nzbData *nzb.NZB, guid string)
 		return nil, fmt.Errorf("no content files found in NZB")
 	}
 
+	// Lifecycle context
+	ctx, cancel := context.WithCancel(context.Background())
+
 	// Create loader.File for each content file
 	var loaderFiles []*loader.File
 	for _, info := range contentFiles {
-		lf := loader.NewFile(info.File, m.pools, m.estimator)
+		lf := loader.NewFile(ctx, info.File, m.pools, m.estimator)
 		loaderFiles = append(loaderFiles, lf)
 	}
 
@@ -105,6 +113,8 @@ func (m *Manager) CreateSession(sessionID string, nzbData *nzb.NZB, guid string)
 		LastAccess: time.Now(),
 		Clients:    make(map[string]time.Time),
 		GUID:       guid,
+		ctx:        ctx,
+		cancel:     cancel,
 	}
 
 	m.sessions[sessionID] = session
@@ -124,6 +134,8 @@ func (m *Manager) CreateDeferredSession(sessionID, nzbURL, indexerName, itemTitl
 		return existing, nil
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
+
 	session := &Session{
 		ID:          sessionID,
 		NZB:         nil, // Deferred
@@ -136,6 +148,8 @@ func (m *Manager) CreateDeferredSession(sessionID, nzbURL, indexerName, itemTitl
 		ItemTitle:   itemTitle,
 		Indexer:     idx,
 		GUID:        guid,
+		ctx:         ctx,
+		cancel:      cancel,
 	}
 
 	m.sessions[sessionID] = session
@@ -181,7 +195,7 @@ func (s *Session) GetOrDownloadNZB(manager *Manager) (*nzb.NZB, error) {
 	// We passed manager as arg to avoid storing it in Session (circular ref or just clean design)
 	var loaderFiles []*loader.File
 	for _, info := range contentFiles {
-		lf := loader.NewFile(info.File, manager.pools, manager.estimator)
+		lf := loader.NewFile(s.ctx, info.File, manager.pools, manager.estimator)
 		loaderFiles = append(loaderFiles, lf)
 	}
 
@@ -215,7 +229,19 @@ func (m *Manager) DeleteSession(sessionID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	delete(m.sessions, sessionID)
+	if sess, ok := m.sessions[sessionID]; ok {
+		sess.Close()
+		delete(m.sessions, sessionID)
+	}
+}
+
+// Close explicitly stops all active streams and allows the session to be cleaned up
+func (s *Session) Close() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.cancel != nil {
+		s.cancel()
+	}
 }
 
 // cleanupLoop periodically removes expired sessions
@@ -237,6 +263,7 @@ func (m *Manager) cleanup() {
 	for id, session := range m.sessions {
 		session.mu.Lock()
 		if now.Sub(session.LastAccess) > m.ttl {
+			session.Close()
 			delete(m.sessions, id)
 		}
 		session.mu.Unlock()

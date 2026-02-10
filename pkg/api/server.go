@@ -30,6 +30,7 @@ type Server struct {
 	sessionMgr     *session.Manager
 	strmServer     *stremio.Server
 	proxyServer    *proxy.Server
+	indexer        indexer.Indexer
 
 	// WebSocket Client Registry
 	clients   map[*Client]bool
@@ -43,7 +44,7 @@ type Client struct {
 }
 
 // NewServer creates a new API server
-func NewServer(cfg *config.Config, pools map[string]*nntp.ClientPool, sessMgr *session.Manager, strmServer *stremio.Server) *Server {
+func NewServer(cfg *config.Config, pools map[string]*nntp.ClientPool, sessMgr *session.Manager, strmServer *stremio.Server, indexer indexer.Indexer) *Server {
 	// Build streaming pools list from map (initial)
 	var list []*nntp.ClientPool
 	for _, p := range pools {
@@ -56,6 +57,7 @@ func NewServer(cfg *config.Config, pools map[string]*nntp.ClientPool, sessMgr *s
 		streamingPools: list,
 		sessionMgr:     sessMgr,
 		strmServer:     strmServer,
+		indexer:        indexer,
 		clients:        make(map[*Client]bool),
 		logCh:          make(chan string, 100),
 	}
@@ -131,6 +133,7 @@ func (s *Server) Reload(cfg *config.Config, pools map[string]*nntp.ClientPool, i
 	// 3. Update State
 	s.config = cfg
 	s.providerPools = pools
+	s.indexer = indexers
 
 	// Rebuild streaming pools list
 	var newStreamingPools []*nntp.ClientPool
@@ -163,6 +166,27 @@ func (s *Server) Reload(cfg *config.Config, pools map[string]*nntp.ClientPool, i
 			}()
 		}
 	}
+
+	// 6. Cleanup Orphaned Usage Data
+	s.cleanupIndexerUsage()
+}
+
+func (s *Server) cleanupIndexerUsage() {
+	usageMgr, err := indexer.GetUsageManager(nil)
+	if err != nil || usageMgr == nil {
+		return
+	}
+
+	var activeNames []string
+	if agg, ok := s.indexer.(*indexer.Aggregator); ok {
+		for _, idx := range agg.GetIndexers() {
+			activeNames = append(activeNames, idx.Name())
+		}
+	} else if s.indexer != nil {
+		activeNames = append(activeNames, s.indexer.Name())
+	}
+
+	usageMgr.SyncUsage(activeNames)
 }
 
 func (s *Server) getPoolList() []*nntp.ClientPool {

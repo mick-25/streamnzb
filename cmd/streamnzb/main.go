@@ -103,7 +103,7 @@ func main() {
 	}
 
 	// Initialize API Server
-	apiServer := api.NewServer(cfg, comp.ProviderPools, sessionManager, stremioServer)
+	apiServer := api.NewServer(cfg, comp.ProviderPools, sessionManager, stremioServer, comp.Indexer)
 
 	// Set embedded web handler
 	stremioServer.SetWebHandler(web.Handler())

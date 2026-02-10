@@ -3,11 +3,14 @@ package initialization
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"streamnzb/pkg/config"
 	"streamnzb/pkg/indexer"
+	"streamnzb/pkg/indexer/newznab"
 	"streamnzb/pkg/logger"
 	"streamnzb/pkg/nntp"
 	"streamnzb/pkg/nzbhydra"
+	"streamnzb/pkg/persistence"
 	"streamnzb/pkg/prowlarr"
 )
 
@@ -44,34 +47,58 @@ func BuildComponents(cfg *config.Config) (*InitializedComponents, error) {
 	// 2. Initialize Indexers
 	var indexers []indexer.Indexer
 
-	// Initialize NZBHydra2
-	if cfg.NZBHydra2APIKey != "" {
-		hydraClient, err := nzbhydra.NewClient(cfg.NZBHydra2URL, cfg.NZBHydra2APIKey)
-		if err != nil {
-			logger.Error("Failed to initialize NZBHydra2", "err", err)
-		} else {
-			indexers = append(indexers, hydraClient)
-			logger.Info("Initialized NZBHydra2 client", "url", cfg.NZBHydra2URL)
-		}
+	// Initialize State Manager
+	dataDir := filepath.Dir(cfg.LoadedPath)
+	stateMgr, err := persistence.GetManager(dataDir)
+	if err != nil {
+		logger.Error("Failed to initialize state manager", "err", err)
 	}
 
-	// Initialize Prowlarr
-	if cfg.ProwlarrAPIKey != "" {
-		discovered, err := prowlarr.GetConfiguredIndexers(cfg.ProwlarrURL, cfg.ProwlarrAPIKey)
-		if err != nil {
-			logger.Error("Failed to initialize Prowlarr", "err", err)
-		} else {
-			if len(discovered) > 0 {
-				indexers = append(indexers, discovered...)
-				logger.Info("Initialized Prowlarr indexers", "count", len(discovered))
+	// Initialize Usage Manager
+	usageMgr, err := indexer.GetUsageManager(stateMgr)
+	if err != nil {
+		logger.Error("Failed to initialize usage manager", "err", err)
+	}
+
+	// Initialize Internal Indexers (unified list)
+	for _, idxCfg := range cfg.Indexers {
+		if idxCfg.URL == "" {
+			continue
+		}
+
+		indexerType := idxCfg.Type
+		if indexerType == "" {
+			indexerType = "newznab" // Default
+		}
+
+		switch indexerType {
+		case "nzbhydra":
+			hydraClient, err := nzbhydra.NewClient(idxCfg.URL, idxCfg.APIKey, idxCfg.Name, usageMgr)
+			if err != nil {
+				logger.Error("Failed to initialize NZBHydra2 from indexer list", "name", idxCfg.Name, "err", err)
 			} else {
-				logger.Warn("Connected to Prowlarr but found no active Usenet indexers")
+				indexers = append(indexers, hydraClient)
+				logger.Info("Initialized NZBHydra2 from indexer list", "name", idxCfg.Name)
 			}
+		case "prowlarr":
+			discovered, err := prowlarr.GetConfiguredIndexers(idxCfg.URL, idxCfg.APIKey, usageMgr)
+			if err != nil {
+				logger.Error("Failed to initialize Prowlarr from indexer list", "name", idxCfg.Name, "err", err)
+			} else {
+				if len(discovered) > 0 {
+					indexers = append(indexers, discovered...)
+					logger.Info("Initialized Prowlarr from indexer list", "name", idxCfg.Name, "count", len(discovered))
+				}
+			}
+		default: // newznab
+			client := newznab.NewClient(idxCfg, usageMgr)
+			indexers = append(indexers, client)
+			logger.Info("Initialized Newznab indexer", "name", idxCfg.Name, "url", idxCfg.URL)
 		}
 	}
 
 	if len(indexers) == 0 {
-		logger.Warn("!! No indexers (Hydra/Prowlarr) configured. Add some via the web UI !!")
+		logger.Warn("!! No indexers (Internal/Hydra/Prowlarr) configured. Add some via the web UI or config.json !!")
 	}
 
 	aggregator := indexer.NewAggregator(indexers...)

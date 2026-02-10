@@ -5,3 +5,4 @@ streamnzb.exe~
 dist/
 config.json
 pkg/web/static
+state.json

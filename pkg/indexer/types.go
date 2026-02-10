@@ -8,6 +8,17 @@ type Indexer interface {
 	DownloadNZB(nzbURL string) ([]byte, error)
 	Ping() error
 	Name() string
+	GetUsage() Usage
+}
+
+// Usage represents the current API and download usage for an indexer
+type Usage struct {
+	APIHitsLimit       int
+	APIHitsUsed        int
+	APIHitsRemaining   int
+	DownloadsLimit     int
+	DownloadsUsed      int
+	DownloadsRemaining int
 }
 
 // SearchRequest represents a search query
@@ -28,9 +39,16 @@ type SearchResponse struct {
 	Channel Channel  `xml:"channel"`
 }
 
+// NewznabResponse contains metadata about the results
+type NewznabResponse struct {
+	Offset int `xml:"offset,attr"`
+	Total  int `xml:"total,attr"`
+}
+
 // Channel contains the search results
 type Channel struct {
-	Items []Item `xml:"item"`
+	Response NewznabResponse `xml:"http://www.newznab.com/DTD/2010/feeds/attributes/ response"`
+	Items    []Item          `xml:"item"`
 }
 
 // Item represents a single NZB result
@@ -42,6 +60,7 @@ type Item struct {
 	Category    string      `xml:"category"`
 	Description string      `xml:"description"`
 	Size        int64       `xml:"size"`
+	Enclosure   Enclosure   `xml:"enclosure"`
 	Attributes  []Attribute `xml:"attr"`
 
 	// SourceIndexer is the indexer that provided this item
@@ -61,6 +80,13 @@ type Item struct {
 type Attribute struct {
 	Name  string `xml:"name,attr"`
 	Value string `xml:"value,attr"`
+}
+
+// Enclosure represents the enclosure tag (often contains size)
+type Enclosure struct {
+	URL    string `xml:"url,attr"`
+	Length int64  `xml:"length,attr"`
+	Type   string `xml:"type,attr"`
 }
 
 // GetAttribute retrieves a specific attribute from an item

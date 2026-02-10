@@ -15,16 +15,23 @@ import { Trash2, Plus, Loader2, RotateCcw, Info } from "lucide-react"
 import { FiltersSection } from "@/components/FiltersSection"
 import { SortingSection } from "@/components/SortingSection"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
+import { 
+  DropdownMenu, 
+  DropdownMenuContent, 
+  DropdownMenuItem, 
+  DropdownMenuTrigger 
+} from "@/components/ui/dropdown-menu"
+import { ChevronDown, Menu } from "lucide-react"
+import { IndexerSettings } from "@/components/IndexerSettings"
+import { ProviderSettings } from "@/components/ProviderSettings"
+
 
 function Settings({ initialConfig, sendCommand, saveStatus, isSaving, onClose }) {
   const [loading, setLoading] = useState(!initialConfig)
+  const [activeTab, setActiveTab] = useState("general")
 
   const form = useForm({
     defaultValues: {
-      nzbhydra_url: '',
-      nzbhydra_api_key: '',
-      prowlarr_url: '',
-      prowlarr_api_key: '',
       addon_port: 7000,
       addon_base_url: '',
       log_level: 'INFO',
@@ -38,6 +45,7 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, onClose })
       validation_sample_size: 5,
       max_streams: 6,
       providers: [],
+      indexers: [],
       filters: {
         allowed_qualities: [],
         blocked_qualities: [],
@@ -105,10 +113,15 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, onClose })
   })
 
   // Destructure for easy access
-  const { control, handleSubmit, reset, setError, formState } = form
+  const { control, handleSubmit, reset, setError, formState, setValue, watch } = form
   const { fields, append, remove } = useFieldArray({
     control,
     name: 'providers'
+  })
+  
+  const { fields: indexerFields, append: appendIndexer, remove: removeIndexer } = useFieldArray({
+    control,
+    name: 'indexers'
   })
 
   useEffect(() => {
@@ -124,6 +137,11 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, onClose })
           ...p,
           port: Number(p.port),
           connections: Number(p.connections)
+        })) || [],
+        indexers: initialConfig.indexers?.map(idx => ({
+          ...idx,
+          api_hits_day: Number(idx.api_hits_day || 0),
+          downloads_day: Number(idx.downloads_day || 0)
         })) || []
       }
       reset(formattedData)
@@ -141,7 +159,29 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, onClose })
   }, [saveStatus.errors, setError]);
 
   const onSubmit = async (data) => {
-    sendCommand('save_config', data)
+    // Recursive trim function
+    const trimData = (obj) => {
+      if (typeof obj !== 'object' || obj === null) return obj;
+      
+      if (Array.isArray(obj)) {
+        return obj.map(item => trimData(item));
+      }
+      
+      const newObj = {};
+      for (const key in obj) {
+        if (typeof obj[key] === 'string') {
+          newObj[key] = obj[key].trim();
+        } else if (typeof obj[key] === 'object') {
+          newObj[key] = trimData(obj[key]);
+        } else {
+          newObj[key] = obj[key];
+        }
+      }
+      return newObj;
+    };
+
+    const trimmedData = trimData(data);
+    sendCommand('save_config', trimmedData)
   }
 
   if (loading) return null
@@ -160,168 +200,62 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, onClose })
             <div className="p-6">
                 <Form {...form}>
                     <form onSubmit={handleSubmit(onSubmit)}>
-                        <Tabs defaultValue="general" className="w-full">
-                            <TabsList className="grid w-full grid-cols-5 mb-6">
-                                <TabsTrigger value="general">General</TabsTrigger>
-                                <TabsTrigger value="providers">Providers</TabsTrigger>
-                                <TabsTrigger value="filters">Filters</TabsTrigger>
-                                <TabsTrigger value="sorting">Sorting</TabsTrigger>
-                                <TabsTrigger value="advanced">Advanced</TabsTrigger>
-                            </TabsList>
+                        <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
+                            {/* Responsive Navigation */}
+                            <div className="mb-6">
+                                {/* Desktop Tabs */}
+                                <div className="hidden md:block">
+                                    <TabsList className="flex w-full bg-muted/50 p-1">
+                                        <TabsTrigger value="general" className="flex-1">General</TabsTrigger>
+                                        <TabsTrigger value="indexers" className="flex-1">Indexers</TabsTrigger>
+                                        <TabsTrigger value="providers" className="flex-1">Providers</TabsTrigger>
+                                        <TabsTrigger value="filters" className="flex-1">Filters</TabsTrigger>
+                                        <TabsTrigger value="sorting" className="flex-1">Sorting</TabsTrigger>
+                                        <TabsTrigger value="advanced" className="flex-1">Advanced</TabsTrigger>
+                                    </TabsList>
+                                </div>
+
+                                {/* Mobile Navigation Dropdown */}
+                                <div className="md:hidden">
+                                    <DropdownMenu>
+                                        <DropdownMenuTrigger asChild>
+                                            <Button variant="outline" className="w-full justify-between bg-muted/30">
+                                                <div className="flex items-center gap-2">
+                                                    <Menu className="h-4 w-4 text-muted-foreground" />
+                                                    <span className="capitalize">{activeTab}</span>
+                                                </div>
+                                                <ChevronDown className="h-4 w-4 opacity-50" />
+                                            </Button>
+                                        </DropdownMenuTrigger>
+                                        <DropdownMenuContent className="w-[calc(100vw-5rem)]">
+                                            <DropdownMenuItem onClick={() => setActiveTab("general")}>General</DropdownMenuItem>
+                                            <DropdownMenuItem onClick={() => setActiveTab("indexers")}>Indexers</DropdownMenuItem>
+                                            <DropdownMenuItem onClick={() => setActiveTab("providers")}>Providers</DropdownMenuItem>
+                                            <DropdownMenuItem onClick={() => setActiveTab("filters")}>Filters</DropdownMenuItem>
+                                            <DropdownMenuItem onClick={() => setActiveTab("sorting")}>Sorting</DropdownMenuItem>
+                                            <DropdownMenuItem onClick={() => setActiveTab("advanced")}>Advanced</DropdownMenuItem>
+                                        </DropdownMenuContent>
+                                    </DropdownMenu>
+                                </div>
+                            </div>
 
                             <TabsContent value="general" className="space-y-6">
-                        {/* Indexers Section */}
-                        <Card>
-                            <CardHeader>
-                                <CardTitle className="text-lg">Indexers</CardTitle>
-                                <CardDescription>Configure Prowlarr or NZBHydra2 connection details.</CardDescription>
-                            </CardHeader>
-                            <CardContent className="grid gap-4">
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                    <FormField
-                                        control={control}
-                                        name="nzbhydra_url"
-                                        render={({ field }) => (
-                                            <FormItem>
-                                                <FormLabel>NZBHydra2 URL</FormLabel>
-                                                <FormControl>
-                                                    <Input placeholder="http://localhost:5076" {...field} />
-                                                </FormControl>
-                                                <FormMessage />
-                                            </FormItem>
-                                        )}
-                                    />
-                                    <FormField
-                                        control={control}
-                                        name="nzbhydra_api_key"
-                                        render={({ field }) => (
-                                            <FormItem>
-                                                <FormLabel>NZBHydra2 API Key</FormLabel>
-                                                <FormControl>
-                                                    <PasswordInput {...field} />
-                                                </FormControl>
-                                                <FormMessage />
-                                            </FormItem>
-                                        )}
-                                    />
-                                </div>
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                    <FormField
-                                        control={control}
-                                        name="prowlarr_url"
-                                        render={({ field }) => (
-                                            <FormItem>
-                                                <FormLabel>Prowlarr URL</FormLabel>
-                                                <FormControl>
-                                                    <Input placeholder="http://localhost:9696" {...field} />
-                                                </FormControl>
-                                                <FormMessage />
-                                            </FormItem>
-                                        )}
-                                    />
-                                    <FormField
-                                        control={control}
-                                        name="prowlarr_api_key"
-                                        render={({ field }) => (
-                                            <FormItem>
-                                                <FormLabel>Prowlarr API Key</FormLabel>
-                                                <FormControl>
-                                                     <PasswordInput {...field} />
-                                                </FormControl>
-                                                <FormMessage />
-                                            </FormItem>
-                                        )}
-                                    />
-                                </div>
-                            </CardContent>
-                        </Card>
-
-                        {/* Addon Settings */}
-                        <Card>
-                            <CardHeader>
-                                <CardTitle className="text-lg">Addon Settings</CardTitle>
-                                <CardDescription>Configure how the Stremio addon listens and is accessed.</CardDescription>
-                            </CardHeader>
-                            <CardContent className="grid gap-4">
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                    <FormField
-                                        control={control}
-                                        name="addon_base_url"
-                                        render={({ field }) => (
-                                            <FormItem>
-                                                <FormLabel>Base URL</FormLabel>
-                                                <FormControl>
-                                                    <Input placeholder="http://localhost:7000" {...field} />
-                                                </FormControl>
-                                                <FormMessage />
-                                            </FormItem>
-                                        )}
-                                    />
-                                    <FormField
-                                        control={control}
-                                        name="addon_port"
-                                        render={({ field }) => (
-                                            <FormItem>
-                                                <FormLabel>Port (Requires Restart)</FormLabel>
-                                                <FormControl>
-                                                    <Input type="number" {...field} onChange={e => field.onChange(e.target.valueAsNumber)} />
-                                                </FormControl>
-                                                <FormMessage />
-                                            </FormItem>
-                                        )}
-                                    />
-                                </div>
-                                <FormField
-                                    control={control}
-                                    name="security_token"
-                                    render={({ field }) => (
-                                        <FormItem>
-                                            <FormLabel>Security Token (Requires Restart)</FormLabel>
-                                            <FormControl>
-                                                <PasswordInput placeholder="Secure secret path" {...field} />
-                                            </FormControl>
-                                            <FormMessage />
-                                        </FormItem>
-                                    )}
-                                />
-                            </CardContent>
-                        </Card>
-
-                        {/* NNTP Proxy Server */}
-                        <Card>
-                            <CardHeader>
-                                <CardTitle className="text-lg">NNTP Proxy Server</CardTitle>
-                                <CardDescription>Allow other apps (SABnzbd, NZBGet) to use StreamNZB as a localized news server.</CardDescription>
-                            </CardHeader>
-                            <CardContent className="grid gap-4">
-                                <FormField
-                                    control={control}
-                                    name="proxy_enabled"
-                                    render={({ field }) => (
-                                        <FormItem className="flex flex-row items-center justify-between rounded-lg border p-4">
-                                            <div className="space-y-0.5">
-                                                <FormLabel className="text-base">Enable Proxy</FormLabel>
-                                            </div>
-                                            <FormControl>
-                                                <Checkbox
-                                                    checked={field.value}
-                                                    onCheckedChange={field.onChange}
-                                                />
-                                            </FormControl>
-                                        </FormItem>
-                                    )}
-                                />
-                                {form.watch('proxy_enabled') && (
-                                    <>
+                                {/* Addon Settings */}
+                                <Card>
+                                    <CardHeader>
+                                        <CardTitle className="text-lg">Addon Settings</CardTitle>
+                                        <CardDescription>Configure how the Stremio addon listens and is accessed.</CardDescription>
+                                    </CardHeader>
+                                    <CardContent className="grid gap-4">
                                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                             <FormField
                                                 control={control}
-                                                name="proxy_host"
+                                                name="addon_base_url"
                                                 render={({ field }) => (
                                                     <FormItem>
-                                                        <FormLabel>Bind Host</FormLabel>
+                                                        <FormLabel>Base URL</FormLabel>
                                                         <FormControl>
-                                                            <Input placeholder="0.0.0.0" {...field} />
+                                                            <Input placeholder="http://localhost:7000" {...field} />
                                                         </FormControl>
                                                         <FormMessage />
                                                     </FormItem>
@@ -329,10 +263,10 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, onClose })
                                             />
                                             <FormField
                                                 control={control}
-                                                name="proxy_port"
+                                                name="addon_port"
                                                 render={({ field }) => (
                                                     <FormItem>
-                                                        <FormLabel>Port</FormLabel>
+                                                        <FormLabel>Port (Requires Restart)</FormLabel>
                                                         <FormControl>
                                                             <Input type="number" {...field} onChange={e => field.onChange(e.target.valueAsNumber)} />
                                                         </FormControl>
@@ -341,39 +275,121 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, onClose })
                                                 )}
                                             />
                                         </div>
-                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                            <FormField
-                                                control={control}
-                                                name="proxy_auth_user"
-                                                render={({ field }) => (
-                                                    <FormItem>
-                                                        <FormLabel>Proxy Username</FormLabel>
-                                                        <FormControl>
-                                                            <Input {...field} />
-                                                        </FormControl>
-                                                        <FormMessage />
-                                                    </FormItem>
-                                                )}
-                                            />
-                                            <FormField
-                                                control={control}
-                                                name="proxy_auth_pass"
-                                                render={({ field}) => (
-                                                    <FormItem>
-                                                        <FormLabel>Proxy Password</FormLabel>
-                                                        <FormControl>
-                                                            <PasswordInput {...field} />
-                                                        </FormControl>
-                                                        <FormMessage />
-                                                    </FormItem>
-                                                )}
-                                            />
-                                        </div>
-                                    </>
-                                )}
-                            </CardContent>
-                        </Card>
+                                        <FormField
+                                            control={control}
+                                            name="security_token"
+                                            render={({ field }) => (
+                                                <FormItem>
+                                                    <FormLabel>Security Token (Requires Restart)</FormLabel>
+                                                    <FormControl>
+                                                        <PasswordInput placeholder="Secure secret path" {...field} />
+                                                    </FormControl>
+                                                    <FormMessage />
+                                                </FormItem>
+                                            )}
+                                        />
+                                    </CardContent>
+                                </Card>
+
+                                {/* NNTP Proxy Server */}
+                                <Card>
+                                    <CardHeader>
+                                        <CardTitle className="text-lg">NNTP Proxy Server</CardTitle>
+                                        <CardDescription>Allow other apps (SABnzbd, NZBGet) to use StreamNZB as a localized news server.</CardDescription>
+                                    </CardHeader>
+                                    <CardContent className="grid gap-4">
+                                        <FormField
+                                            control={control}
+                                            name="proxy_enabled"
+                                            render={({ field }) => (
+                                                <FormItem className="flex flex-row items-center justify-between rounded-lg border p-4">
+                                                    <div className="space-y-0.5">
+                                                        <FormLabel className="text-base">Enable Proxy</FormLabel>
+                                                    </div>
+                                                    <FormControl>
+                                                        <Checkbox
+                                                            checked={field.value}
+                                                            onCheckedChange={field.onChange}
+                                                        />
+                                                    </FormControl>
+                                                </FormItem>
+                                            )}
+                                        />
+                                        {form.watch('proxy_enabled') && (
+                                            <>
+                                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                                    <FormField
+                                                        control={control}
+                                                        name="proxy_host"
+                                                        render={({ field }) => (
+                                                            <FormItem>
+                                                                <FormLabel>Bind Host</FormLabel>
+                                                                <FormControl>
+                                                                    <Input placeholder="0.0.0.0" {...field} />
+                                                                </FormControl>
+                                                                <FormMessage />
+                                                            </FormItem>
+                                                        )}
+                                                    />
+                                                    <FormField
+                                                        control={control}
+                                                        name="proxy_port"
+                                                        render={({ field }) => (
+                                                            <FormItem>
+                                                                <FormLabel>Port</FormLabel>
+                                                                <FormControl>
+                                                                    <Input type="number" {...field} onChange={e => field.onChange(e.target.valueAsNumber)} />
+                                                                </FormControl>
+                                                                <FormMessage />
+                                                            </FormItem>
+                                                        )}
+                                                    />
+                                                </div>
+                                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                                    <FormField
+                                                        control={control}
+                                                        name="proxy_auth_user"
+                                                        render={({ field }) => (
+                                                            <FormItem>
+                                                                <FormLabel>Proxy Username</FormLabel>
+                                                                <FormControl>
+                                                                    <Input {...field} />
+                                                                </FormControl>
+                                                                <FormMessage />
+                                                            </FormItem>
+                                                        )}
+                                                    />
+                                                    <FormField
+                                                        control={control}
+                                                        name="proxy_auth_pass"
+                                                        render={({ field}) => (
+                                                            <FormItem>
+                                                                <FormLabel>Proxy Password</FormLabel>
+                                                                <FormControl>
+                                                                    <PasswordInput {...field} />
+                                                                </FormControl>
+                                                                <FormMessage />
+                                                            </FormItem>
+                                                        )}
+                                                    />
+                                                </div>
+                                            </>
+                                        )}
+                                    </CardContent>
+                                </Card>
                             </TabsContent>
+
+                            <TabsContent value="indexers" className="space-y-6">
+                                <IndexerSettings
+                                    control={control}
+                                    indexerFields={indexerFields}
+                                    appendIndexer={appendIndexer}
+                                    removeIndexer={removeIndexer}
+                                    watch={watch}
+                                    setValue={setValue}
+                                />
+                            </TabsContent>
+
 
                             <TabsContent value="advanced" className="space-y-6">
                         {/* Advanced Settings */}
@@ -497,127 +513,13 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, onClose })
                             </TabsContent>
 
                             <TabsContent value="providers" className="space-y-6">
-                        {/* Providers Section */}
-                       
-                        <div>
-                            <div className="flex items-center justify-between mb-4">
-                                <h3 className="text-lg font-medium">Usenet Providers</h3>
-                                <Button type="button" variant="outline" size="sm" onClick={() => append({ host: '', port: 563, username: '', password: '', connections: 30, use_ssl: true })}>
-                                    <Plus className="w-4 h-4 mr-2" /> Add Provider
-                                </Button>
-                            </div>
-                            <div className="grid gap-4">
-                                {fields.map((field, index) => (
-                                    <Card key={field.id} className="relative">
-                                        <Button
-                                            type="button"
-                                            variant="ghost"
-                                            size="icon"
-                                            className="absolute right-2 top-2 h-8 w-8 text-destructive hover:text-destructive/90"
-                                            onClick={() => remove(index)}
-                                        >
-                                            <Trash2 className="h-4 w-4" />
-                                        </Button>
-                                        <CardHeader className="pb-3">
-                                            <CardTitle className="text-base">Provider {index + 1}</CardTitle>
-                                        </CardHeader>
-                                        <CardContent className="grid gap-4">
-                                            <FormField
-                                                control={control}
-                                                name={`providers.${index}.name`}
-                                                render={({ field }) => (
-                                                    <FormItem>
-                                                        <FormLabel>Provider Name (Optional)</FormLabel>
-                                                        <FormControl><Input placeholder="e.g. Newshosting, Eweka" {...field} /></FormControl>
-                                                        <FormMessage />
-                                                    </FormItem>
-                                                )}
-                                            />
-                                            <div className="grid grid-cols-2 gap-4">
-                                                <FormField
-                                                    control={control}
-                                                    name={`providers.${index}.host`}
-                                                    render={({ field }) => (
-                                                        <FormItem>
-                                                            <FormLabel>Host</FormLabel>
-                                                            <FormControl><Input placeholder="news.example.com" {...field} /></FormControl>
-                                                            <FormMessage />
-                                                        </FormItem>
-                                                    )}
-                                                />
-                                                <FormField
-                                                    control={control}
-                                                    name={`providers.${index}.port`}
-                                                    render={({ field }) => (
-                                                        <FormItem>
-                                                            <FormLabel>Port</FormLabel>
-                                                            <FormControl><Input type="number" {...field} onChange={e => field.onChange(e.target.valueAsNumber)} /></FormControl>
-                                                            <FormMessage />
-                                                        </FormItem>
-                                                    )}
-                                                />
-                                            </div>
-                                            <div className="grid grid-cols-2 gap-4">
-                                                <FormField
-                                                    control={control}
-                                                    name={`providers.${index}.username`}
-                                                    render={({ field }) => (
-                                                        <FormItem>
-                                                            <FormLabel>Username</FormLabel>
-                                                            <FormControl><Input {...field} /></FormControl>
-                                                            <FormMessage />
-                                                        </FormItem>
-                                                    )}
-                                                />
-                                                 <FormField
-                                                    control={control}
-                                                    name={`providers.${index}.password`}
-                                                    render={({ field }) => (
-                                                        <FormItem>
-                                                            <FormLabel>Password</FormLabel>
-                                                            <FormControl><PasswordInput {...field} /></FormControl>
-                                                            <FormMessage />
-                                                        </FormItem>
-                                                    )}
-                                                />
-                                            </div>
-                                            <div className="flex items-end gap-6">
-                                                 <FormField
-                                                    control={control}
-                                                    name={`providers.${index}.connections`}
-                                                    render={({ field }) => (
-                                                        <FormItem className="w-32">
-                                                            <FormLabel>Connections</FormLabel>
-                                                            <FormControl><Input type="number" {...field} onChange={e => field.onChange(e.target.valueAsNumber)} /></FormControl>
-                                                            <FormMessage />
-                                                        </FormItem>
-                                                    )}
-                                                />
-                                                 <FormField
-                                                    control={control}
-                                                    name={`providers.${index}.use_ssl`}
-                                                    render={({ field }) => (
-                                                        <FormItem className="flex flex-row items-start space-x-3 space-y-0 rounded-md border p-4 h-[42px] items-center">
-                                                            <FormControl>
-                                                                <Checkbox
-                                                                    checked={field.value}
-                                                                    onCheckedChange={field.onChange}
-                                                                />
-                                                            </FormControl>
-                                                            <div className="space-y-1 leading-none">
-                                                                <FormLabel>
-                                                                    Use SSL
-                                                                </FormLabel>
-                                                            </div>
-                                                        </FormItem>
-                                                    )}
-                                                />
-                                            </div>
-                                        </CardContent>
-                                    </Card>
-                                ))}
-                            </div>
-                        </div>
+                                <ProviderSettings
+                                    control={control}
+                                    fields={fields}
+                                    append={append}
+                                    remove={remove}
+                                    watch={watch}
+                                />
                             </TabsContent>
 
                             <TabsContent value="filters" className="space-y-6">
