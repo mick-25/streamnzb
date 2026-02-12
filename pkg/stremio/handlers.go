@@ -15,8 +15,8 @@ import (
 	"sync"
 	"time"
 
-	"streamnzb/pkg/availnzb"
 	"streamnzb/pkg/auth"
+	"streamnzb/pkg/availnzb"
 	"streamnzb/pkg/config"
 	"streamnzb/pkg/indexer"
 	"streamnzb/pkg/loader"
@@ -108,10 +108,10 @@ func (s *Server) SetupRoutes(mux *http.ServeMux) {
 
 		// Determine if this is a Stremio route that requires device token
 		isStremioRoute := path == "/manifest.json" || strings.HasPrefix(path, "/stream/") || strings.HasPrefix(path, "/play/") || strings.HasPrefix(path, "/debug/play")
-		
+
 		// Root path "/" and web UI routes are always accessible (no token required)
 		// Only Stremio routes require device tokens in the path
-		
+
 		// Check for device token in path (only if path has a token segment)
 		trimmedPath := strings.TrimPrefix(path, "/")
 		parts := strings.SplitN(trimmedPath, "/", 2)
@@ -149,7 +149,7 @@ func (s *Server) SetupRoutes(mux *http.ServeMux) {
 		}
 		// If no token in path and not a Stremio route, allow access (for web UI routes like /, /login, and API routes which use cookies/headers)
 
-			// Internal routing
+		// Internal routing
 		if path == "/manifest.json" {
 			s.handleManifest(w, r)
 		} else if strings.HasPrefix(path, "/stream/") {
@@ -368,23 +368,22 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string, 
 	// Single semaphore with 6 concurrent slots (API-friendly)
 	sem := make(chan struct{}, 6)
 	resultChan := make(chan Stream, len(candidates))
-	
+
 	// Track validation progress
 	var mu sync.Mutex
-	validated := 0  // Successful validations
-	attempted := 0  // Total validation attempts
+	validated := 0 // Successful validations
+	attempted := 0 // Total validation attempts
 	maxToValidate := s.config.MaxStreams
 	if maxToValidate <= 0 {
 		maxToValidate = 6 // Fallback default
 	}
 	maxAttempts := maxToValidate * 2 // Auto-calculate safety limit
-	
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	
+
 	var wg sync.WaitGroup
-	
+
 	for _, candidate := range candidates {
 		// Pre-check: stop launching new goroutines if we've already hit attempt limit
 		mu.Lock()
@@ -395,11 +394,11 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string, 
 		}
 		attempted++ // Count this attempt
 		mu.Unlock()
-		
+
 		wg.Add(1)
 		go func(cand triage.Candidate) {
 			defer wg.Done()
-			
+
 			// Acquire semaphore (respect context)
 			select {
 			case sem <- struct{}{}:
@@ -407,7 +406,7 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string, 
 			case <-ctx.Done():
 				return
 			}
-			
+
 			// Check if we've already hit the validated limit (after acquiring semaphore)
 			mu.Lock()
 			if validated >= maxToValidate {
@@ -417,16 +416,16 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string, 
 				return
 			}
 			mu.Unlock()
-			
-			// Validate candidate
-			stream, err := s.validateCandidate(ctx, cand)
+
+			// Validate candidate (pass device to include token in URL)
+			stream, err := s.validateCandidate(ctx, cand, device)
 			if err == nil {
 				mu.Lock()
 				// Double-check limit before adding (in case multiple goroutines validated simultaneously)
 				if validated < maxToValidate {
 					resultChan <- stream
 					validated++ // Only count successful validations
-					
+
 					// If we just hit the limit, cancel remaining work
 					if validated >= maxToValidate {
 						logger.Debug("Hit validation limit, canceling remaining", "validated", validated, "maxToValidate", maxToValidate)
@@ -437,12 +436,12 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string, 
 			}
 		}(candidate)
 	}
-	
+
 	// Close result channel when all goroutines finish (with timeout to prevent hanging)
 	done := make(chan struct{})
 	channelClosed := false
 	var channelMu sync.Mutex
-	
+
 	go func() {
 		wg.Wait()
 		channelMu.Lock()
@@ -453,11 +452,11 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string, 
 		channelMu.Unlock()
 		close(done)
 	}()
-	
+
 	// Collect all successful results with timeout
 	var streams []Stream
 	timeout := time.After(60 * time.Second)
-	
+
 	collecting := true
 	for collecting {
 		select {
@@ -493,7 +492,7 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string, 
 			collecting = false
 		}
 	}
-	
+
 	// Wait briefly for goroutines to finish (non-blocking)
 	select {
 	case <-done:
@@ -502,20 +501,20 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string, 
 		// Don't wait forever, just log warning
 		logger.Warn("Some validation goroutines may still be running")
 	}
-	
+
 	// Sort by quality score for display
 	sort.Slice(streams, func(i, j int) bool {
 		return getQualityScore(streams[i].Name) > getQualityScore(streams[j].Name)
 	})
-	
+
 	logger.Info("Returning validated streams", "count", len(streams))
 	return streams, nil
 }
 
 // validateCandidate validates a single candidate and returns a stream
-func (s *Server) validateCandidate(ctx context.Context, cand triage.Candidate) (Stream, error) {
+func (s *Server) validateCandidate(ctx context.Context, cand triage.Candidate, device *auth.Device) (Stream, error) {
 	item := cand.Result
-	
+
 	// Get indexer name for AvailNZB
 	var indexerName string
 	if item.SourceIndexer != nil {
@@ -529,17 +528,17 @@ func (s *Server) validateCandidate(ctx context.Context, cand triage.Candidate) (
 			}
 		}
 	}
-	
+
 	// Check AvailNZB for pre-download validation
 	skipValidation := false
 	providerHosts := s.validator.GetProviderHosts()
-	
+
 	if indexerName != "" && len(providerHosts) > 0 {
 		guidToCheck := item.GUID
 		if item.ActualGUID != "" {
 			guidToCheck = item.ActualGUID
 		}
-		
+
 		nzbID, isHealthy, lastUpdated, _, err := s.availClient.CheckPreDownload(indexerName, guidToCheck, providerHosts)
 		if err == nil && nzbID != "" {
 			if isHealthy {
@@ -552,21 +551,21 @@ func (s *Server) validateCandidate(ctx context.Context, cand triage.Candidate) (
 			}
 		}
 	}
-	
+
 	var sessionID string
 	var streamSize int64
-	
+
 	if skipValidation {
 		// DEFERRED (Lazy) - Trust AvailNZB
 		sessionID = fmt.Sprintf("%x", md5.Sum([]byte(item.GUID)))
 		streamSize = item.Size
-		
+
 		if streamSize == 0 {
 			logger.Warn("Indexer did not provide file size", "title", item.Title, "indexer", indexerName)
 		}
-		
+
 		logger.Info("Deferring NZB download (Lazy)", "title", item.Title, "session_id", sessionID)
-		
+
 		_, err := s.sessionManager.CreateDeferredSession(
 			sessionID,
 			item.Link,
@@ -581,41 +580,41 @@ func (s *Server) validateCandidate(ctx context.Context, cand triage.Candidate) (
 	} else {
 		// IMMEDIATE - Download and validate
 		logger.Info("Downloading NZB for validation", "title", item.Title)
-		
+
 		// Download NZB
 		var nzbData []byte
 		var err error
-		
+
 		if item.SourceIndexer != nil {
 			nzbData, err = item.SourceIndexer.DownloadNZB(item.Link)
 		} else {
 			nzbData, err = s.indexer.DownloadNZB(item.Link)
 		}
-		
+
 		if err != nil {
 			return Stream{}, fmt.Errorf("failed to download NZB: %w", err)
 		}
-		
+
 		// Parse NZB
 		nzbParsed, err := nzb.Parse(bytes.NewReader(nzbData))
 		if err != nil {
 			return Stream{}, fmt.Errorf("failed to parse NZB: %w", err)
 		}
-		
+
 		streamSize = nzbParsed.TotalSize()
 		sessionID = nzbParsed.Hash()
-		
+
 		// Validate availability
 		validationResults := s.validator.ValidateNZB(ctx, nzbParsed)
 		if len(validationResults) == 0 {
 			return Stream{}, fmt.Errorf("no valid providers")
 		}
-		
+
 		bestResult := validation.GetBestProvider(validationResults)
 		if bestResult == nil {
 			return Stream{}, fmt.Errorf("no best provider")
 		}
-		
+
 		// Async report to AvailNZB
 		go func() {
 			nzbID := nzbParsed.CalculateID()
@@ -623,25 +622,31 @@ func (s *Server) validateCandidate(ctx context.Context, cand triage.Candidate) (
 				_ = s.availClient.ReportAvailability(nzbID, bestResult.Host, true, indexerName, item.GUID)
 			}
 		}()
-		
+
 		// Store NZB in session manager
 		_, err = s.sessionManager.CreateSession(sessionID, nzbParsed, item.GUID)
 		if err != nil {
 			return Stream{}, fmt.Errorf("failed to create session: %w", err)
 		}
 	}
-	
-	// Create stream URL
-	streamURL := fmt.Sprintf("%s/play/%s", s.baseURL, sessionID)
+
+	// Create stream URL (always include device token if device is present)
+	// Admin and all devices need token in URL for proper routing
+	var streamURL string
+	token := ""
+	if device != nil {
+		token = device.Token
+		// Include device token in URL path: /{token}/play/{sessionID}
+		streamURL = fmt.Sprintf("%s/%s/play/%s", s.baseURL, token, sessionID)
+	}
 	sizeGB := float64(streamSize) / (1024 * 1024 * 1024)
-	
+
 	// Build stream metadata
 	stream := buildStreamMetadata(streamURL, item.Title, cand, sizeGB, streamSize)
-	
+
 	logger.Debug("Created stream", "name", stream.Name, "url", stream.URL)
 	return stream, nil
 }
-
 
 // extractFilenameFromSubject extracts filename from NZB subject line
 func extractFilenameFromSubject(subject string) string {
@@ -677,7 +682,7 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 		http.Error(w, "Session expired or not found", http.StatusNotFound)
 		return
 	}
-	
+
 	// Lazy Load NZB if needed
 	_, err = sess.GetOrDownloadNZB(s.sessionManager)
 	if err != nil {
@@ -722,7 +727,7 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 				if sess.NZB != nil {
 					nzbID = sess.NZB.CalculateID()
 				}
-				
+
 				if nzbID != "" && sess.GUID != "" {
 					_ = s.availClient.ReportAvailability(nzbID, "ALL", false, sess.IndexerName, sess.GUID)
 				}

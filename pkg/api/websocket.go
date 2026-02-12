@@ -111,7 +111,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		authInfo := map[string]interface{}{
-			"authenticated":       true,
+			"authenticated":        true,
 			"username":             client.device.Username,
 			"must_change_password": mustChangePassword,
 		}
