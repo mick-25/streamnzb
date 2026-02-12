@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"streamnzb/pkg/logger"
+	"streamnzb/pkg/paths"
 	"strings"
 )
 
@@ -127,9 +129,6 @@ type Config struct {
 	ProxyAuthUser string `json:"proxy_auth_user"`
 	ProxyAuthPass string `json:"proxy_auth_pass"`
 
-	// Security
-	SecurityToken string `json:"security_token"`
-
 	// AvailNZB (Internal/Community)
 	AvailNZBURL    string `json:"-"`
 	AvailNZBAPIKey string `json:"-"`
@@ -150,17 +149,12 @@ type Config struct {
 // Load loads configuration from config.json, overrides with env vars, and saves
 // Priority: Environment variables (if not empty) > config.json > defaults
 func Load() (*Config, error) {
-	// 1. Determine config path
-	// If running in Docker (/.dockerenv exists), use /app/data/config.json
-	// Otherwise use ./config.json (local development)
-	configPath := "config.json"
-	if _, err := os.Stat("/.dockerenv"); err == nil {
-		// Running in Docker container
-		configPath = "/app/data/config.json"
-		// Ensure /app/data directory exists
-		if err := os.MkdirAll("/app/data", 0755); err != nil {
-			logger.Warn("Failed to create /app/data directory", "err", err)
-		}
+	// 1. Determine config path using common data directory function
+	dataDir := paths.GetDataDir()
+	configPath := filepath.Join(dataDir, "config.json")
+	// Ensure data directory exists
+	if err := os.MkdirAll(dataDir, 0755); err != nil {
+		logger.Warn("Failed to create data directory", "dir", dataDir, "err", err)
 	}
 
 	// 2. Load config.json (or create with defaults if it doesn't exist)
@@ -263,9 +257,6 @@ func Load() (*Config, error) {
 		if size, err := strconv.Atoi(val); err == nil {
 			cfg.ValidationSampleSize = size
 		}
-	}
-	if val := os.Getenv("SECURITY_TOKEN"); val != "" {
-		cfg.SecurityToken = val
 	}
 	if val := os.Getenv("AVAILNZB_URL"); val != "" {
 		cfg.AvailNZBURL = val

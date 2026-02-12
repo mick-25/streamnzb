@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"streamnzb/pkg/availnzb"
+	"streamnzb/pkg/auth"
 	"streamnzb/pkg/config"
 	"streamnzb/pkg/indexer"
 	"streamnzb/pkg/loader"
@@ -40,7 +41,7 @@ type Server struct {
 	triageService  *triage.Service
 	availClient    *availnzb.Client
 	tmdbClient     *tmdb.Client
-	securityToken  string
+	deviceManager  *auth.DeviceManager
 	webHandler     http.Handler
 	apiHandler     http.Handler
 }
@@ -48,19 +49,11 @@ type Server struct {
 // NewServer creates a new Stremio addon server
 func NewServer(cfg *config.Config, baseURL string, port int, indexer indexer.Indexer, validator *validation.Checker,
 	sessionMgr *session.Manager, triageService *triage.Service, availClient *availnzb.Client,
-	tmdbClient *tmdb.Client, securityToken string) (*Server, error) {
-
-	actualBaseURL := baseURL
-	if securityToken != "" {
-		if !strings.HasSuffix(actualBaseURL, "/") {
-			actualBaseURL += "/"
-		}
-		actualBaseURL += securityToken
-	}
+	tmdbClient *tmdb.Client, deviceManager *auth.DeviceManager) (*Server, error) {
 
 	s := &Server{
 		manifest:       NewManifest(),
-		baseURL:        actualBaseURL,
+		baseURL:        baseURL,
 		config:         cfg,
 		indexer:        indexer,
 		validator:      validator,
@@ -68,7 +61,7 @@ func NewServer(cfg *config.Config, baseURL string, port int, indexer indexer.Ind
 		triageService:  triageService,
 		availClient:    availClient,
 		tmdbClient:     tmdbClient,
-		securityToken:  securityToken,
+		deviceManager:  deviceManager,
 	}
 
 	if err := s.CheckPort(port); err != nil {
@@ -105,49 +98,66 @@ func (s *Server) SetupRoutes(mux *http.ServeMux) {
 	// We use a custom handler to handle the optional token prefix
 	finalHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		s.mu.RLock()
-		securityToken := s.securityToken
+		deviceManager := s.deviceManager
 		webHandler := s.webHandler
 		apiHandler := s.apiHandler
 		s.mu.RUnlock()
 
 		path := r.URL.Path
+		var authenticatedDevice *auth.Device
 
-		if securityToken != "" {
-			// Path format: /{token}/manifest.json or /{token}/stream/...
-			trimmedPath := strings.TrimPrefix(path, "/")
-			parts := strings.SplitN(trimmedPath, "/", 2)
+		// Determine if this is a Stremio route that requires device token
+		isStremioRoute := path == "/manifest.json" || strings.HasPrefix(path, "/stream/") || strings.HasPrefix(path, "/play/") || strings.HasPrefix(path, "/debug/play")
+		
+		// Root path "/" and web UI routes are always accessible (no token required)
+		// Only Stremio routes require device tokens in the path
+		
+		// Check for device token in path (only if path has a token segment)
+		trimmedPath := strings.TrimPrefix(path, "/")
+		parts := strings.SplitN(trimmedPath, "/", 2)
 
-			if len(parts) < 1 || parts[0] != securityToken {
-				logger.Error("Unauthorized request", "path", path, "remote", r.RemoteAddr)
-				http.Error(w, "Unauthorized", http.StatusUnauthorized)
-				return
+		if len(parts) >= 1 && parts[0] != "" {
+			token := parts[0]
+
+			// Try to authenticate as a device token
+			if deviceManager != nil {
+				device, err := deviceManager.AuthenticateToken(token)
+				if err == nil && device != nil {
+					authenticatedDevice = device
+					// Strip token from path for internal routing
+					if len(parts) > 1 {
+						path = "/" + parts[1]
+					} else {
+						path = "/"
+					}
+					r.URL.Path = path
+					// Store device in context for handlers to use
+					r = r.WithContext(auth.ContextWithDevice(r.Context(), device))
+				} else if isStremioRoute {
+					// Token in path but doesn't match any device, and this is a Stremio route - unauthorized
+					logger.Error("Unauthorized request - invalid device token", "path", path, "remote", r.RemoteAddr)
+					http.Error(w, "Unauthorized", http.StatusUnauthorized)
+					return
+				}
+				// If token doesn't match but it's not a Stremio route, continue (might be web UI route like /login)
 			}
-
-			// Ensure trailing slash for root token path to support relative assets
-			if len(parts) == 1 && !strings.HasSuffix(path, "/") {
-				http.Redirect(w, r, path+"/", http.StatusTemporaryRedirect)
-				return
-			}
-
-			// Strip token from path for internal routing
-			if len(parts) > 1 {
-				path = "/" + parts[1]
-			} else {
-				path = "/"
-			}
-			// Update the request path so the internal mux works
-			r.URL.Path = path
+		} else if isStremioRoute {
+			// Stremio routes require device token in path
+			logger.Error("Unauthorized request - Stremio route requires device token", "path", path, "remote", r.RemoteAddr)
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
 		}
+		// If no token in path and not a Stremio route, allow access (for web UI routes like /, /login, and API routes which use cookies/headers)
 
-		// Internal routing
+			// Internal routing
 		if path == "/manifest.json" {
 			s.handleManifest(w, r)
 		} else if strings.HasPrefix(path, "/stream/") {
-			s.handleStream(w, r)
+			s.handleStream(w, r, authenticatedDevice)
 		} else if strings.HasPrefix(path, "/play/") {
-			s.handlePlay(w, r)
+			s.handlePlay(w, r, authenticatedDevice)
 		} else if strings.HasPrefix(path, "/debug/play") {
-			s.handleDebugPlay(w, r)
+			s.handleDebugPlay(w, r, authenticatedDevice)
 		} else if path == "/health" {
 			s.handleHealth(w, r)
 		} else if strings.HasPrefix(path, "/api/") {
@@ -192,7 +202,7 @@ func (s *Server) handleManifest(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleStream handles stream requests
-func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleStream(w http.ResponseWriter, r *http.Request, device *auth.Device) {
 	// Parse URL: /stream/{type}/{id}.json
 	path := strings.TrimPrefix(r.URL.Path, "/stream/")
 	path = strings.TrimSuffix(path, ".json")
@@ -206,13 +216,18 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	contentType := parts[0] // "movie" or "series"
 	id := parts[1]          // IMDb ID (tt1234567) or TMDB ID
 
-	logger.Info("Stream request", "type", contentType, "id", id)
+	logger.Info("Stream request", "type", contentType, "id", id, "device", func() string {
+		if device != nil {
+			return device.Username
+		}
+		return "legacy"
+	}())
 
 	// Search NZBHydra2
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 
-	streams, err := s.searchAndValidate(ctx, contentType, id)
+	streams, err := s.searchAndValidate(ctx, contentType, id, device)
 	if err != nil {
 		logger.Error("Error searching for streams", "err", err)
 		streams = []Stream{} // Return empty list on error
@@ -232,7 +247,7 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(response)
 }
 
-func (s *Server) searchAndValidate(ctx context.Context, contentType, id string) ([]Stream, error) {
+func (s *Server) searchAndValidate(ctx context.Context, contentType, id string, device *auth.Device) ([]Stream, error) {
 	// Determine search parameters based on ID type
 	req := indexer.SearchRequest{
 		Limit: 1000,
@@ -295,9 +310,60 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string) 
 
 	logger.Debug("Found NZB results", "count", len(searchResp.Channel.Items))
 
-	// Filter results using Triage Service
-	candidates := s.triageService.Filter(searchResp.Channel.Items)
-	logger.Debug("Selected candidates after triage", "count", len(candidates))
+	// Filter results using Triage Service with device-specific filters if available
+	var candidates []triage.Candidate
+	if device != nil && device.Username != "admin" {
+		// Check if device has custom filters/sorting
+		hasCustomFilters := len(device.Filters.AllowedQualities) > 0 ||
+			len(device.Filters.BlockedQualities) > 0 ||
+			device.Filters.MinResolution != "" ||
+			device.Filters.MaxResolution != "" ||
+			len(device.Filters.AllowedCodecs) > 0 ||
+			len(device.Filters.BlockedCodecs) > 0 ||
+			len(device.Filters.RequiredAudio) > 0 ||
+			len(device.Filters.AllowedAudio) > 0 ||
+			device.Filters.MinChannels != "" ||
+			device.Filters.RequireHDR ||
+			len(device.Filters.AllowedHDR) > 0 ||
+			len(device.Filters.BlockedHDR) > 0 ||
+			device.Filters.BlockSDR ||
+			len(device.Filters.RequiredLanguages) > 0 ||
+			len(device.Filters.AllowedLanguages) > 0 ||
+			device.Filters.BlockDubbed ||
+			device.Filters.BlockCam ||
+			device.Filters.RequireProper ||
+			!device.Filters.AllowRepack ||
+			device.Filters.BlockHardcoded ||
+			device.Filters.MinBitDepth != "" ||
+			device.Filters.MinSizeGB > 0 ||
+			device.Filters.MaxSizeGB > 0 ||
+			len(device.Filters.BlockedGroups) > 0
+
+		hasCustomSorting := len(device.Sorting.ResolutionWeights) > 0 ||
+			len(device.Sorting.CodecWeights) > 0 ||
+			len(device.Sorting.AudioWeights) > 0 ||
+			len(device.Sorting.QualityWeights) > 0 ||
+			len(device.Sorting.VisualTagWeights) > 0 ||
+			device.Sorting.GrabWeight != 0 ||
+			device.Sorting.AgeWeight != 0 ||
+			len(device.Sorting.PreferredGroups) > 0 ||
+			len(device.Sorting.PreferredLanguages) > 0
+
+		if hasCustomFilters || hasCustomSorting {
+			// Use device's custom filters/sorting
+			deviceTriageService := triage.NewService(&device.Filters, device.Sorting)
+			candidates = deviceTriageService.Filter(searchResp.Channel.Items)
+			logger.Debug("Selected candidates after device-specific triage", "count", len(candidates), "device", device.Username)
+		} else {
+			// Device has no custom config, use global defaults
+			candidates = s.triageService.Filter(searchResp.Channel.Items)
+			logger.Debug("Selected candidates after triage (using global config)", "count", len(candidates), "device", device.Username)
+		}
+	} else {
+		// Use default triage service (global config)
+		candidates = s.triageService.Filter(searchResp.Channel.Items)
+		logger.Debug("Selected candidates after triage", "count", len(candidates))
+	}
 
 	// Single semaphore with 6 concurrent slots (API-friendly)
 	sem := make(chan struct{}, 6)
@@ -546,7 +612,7 @@ func extractFilenameFromSubject(subject string) string {
 }
 
 // handlePlay handles playback requests - serves actual video content
-func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth.Device) {
 	sessionID := strings.TrimPrefix(r.URL.Path, "/play/")
 
 	logger.Info("Play request", "session", sessionID)
@@ -658,7 +724,7 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleDebugPlay allows playing directly from an NZB URL or local file for debugging
-func (s *Server) handleDebugPlay(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleDebugPlay(w http.ResponseWriter, r *http.Request, device *auth.Device) {
 	nzbPath := r.URL.Query().Get("nzb")
 	if nzbPath == "" {
 		http.Error(w, "Missing 'nzb' query parameter (URL or file path)", http.StatusBadRequest)
@@ -875,25 +941,17 @@ func forceDisconnect(w http.ResponseWriter) {
 
 // Reload updates the server components at runtime
 func (s *Server) Reload(baseURL string, indexer indexer.Indexer, validator *validation.Checker,
-	triage *triage.Service, avail *availnzb.Client, tmdbClient *tmdb.Client, securityToken string) {
+	triage *triage.Service, avail *availnzb.Client, tmdbClient *tmdb.Client, deviceManager *auth.DeviceManager) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	actualBaseURL := baseURL
-	if securityToken != "" {
-		if !strings.HasSuffix(actualBaseURL, "/") {
-			actualBaseURL += "/"
-		}
-		actualBaseURL += securityToken
-	}
-
-	s.baseURL = actualBaseURL
+	s.baseURL = baseURL
 	s.indexer = indexer
 	s.validator = validator
 	s.triageService = triage
 	s.availClient = avail
 	s.tmdbClient = tmdbClient
-	s.securityToken = securityToken
+	s.deviceManager = deviceManager
 	// Note: sessionManager pools are updated separately via sessionManager.UpdatePools
 }
 

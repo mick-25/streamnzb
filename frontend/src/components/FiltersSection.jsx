@@ -6,6 +6,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Badge } from "@/components/ui/badge"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { X, Info } from "lucide-react"
+import { useFormContext } from "react-hook-form"
 
 const QUALITY_OPTIONS = ['BluRay', 'BluRay REMUX', 'WEB-DL', 'WEBRip', 'HDTV', 'DVDRip', 'BRRip']
 const BLOCKED_QUALITY_OPTIONS = ['CAM', 'TeleSync', 'TeleCine', 'SCR']
@@ -127,7 +128,35 @@ function MultiSelectBadges({ value = [], onChange, options, placeholder }) {
   )
 }
 
-export function FiltersSection({ control, watch }) {
+export function FiltersSection({ control, watch, fieldPrefix = '' }) {
+  // Use form context if control/watch not provided (for nested forms)
+  let formContext = null
+  try {
+    formContext = useFormContext()
+  } catch (e) {
+    // Not in form context, use provided props
+  }
+  
+  const actualControl = control || formContext?.control
+  const actualWatch = watch || formContext?.watch
+  
+  const getFieldName = (field) => {
+    if (!fieldPrefix) return field
+    // Handle both "filters.field" and just "field" formats
+    if (field.startsWith('filters.')) {
+      // If fieldPrefix is already "filters", return the field as-is
+      // react-hook-form needs the full path "filters.max_resolution" to access nested values
+      if (fieldPrefix === 'filters') {
+        return field // Return "filters.max_resolution" as-is
+      }
+      return `${fieldPrefix}.${field}`
+    }
+    // If fieldPrefix is "filters" and field doesn't start with "filters.", prepend it
+    if (fieldPrefix === 'filters') {
+      return `filters.${field}`
+    }
+    return `${fieldPrefix}.filters.${field}`
+  }
   return (
     <TooltipProvider>
       <Card>
@@ -141,9 +170,9 @@ export function FiltersSection({ control, watch }) {
             {/* Quality Filters */}
             <div className="space-y-4">
               <h4 className="font-medium">Quality</h4>
-              <FormField
-                control={control}
-                name="filters.allowed_qualities"
+        <FormField
+          control={actualControl}
+          name={getFieldName("filters.allowed_qualities")}
                 render={({ field }) => (
                   <FormItem>
                     <LabelWithTooltip 
@@ -173,8 +202,8 @@ export function FiltersSection({ control, watch }) {
                 )}
               />
               <FormField
-                control={control}
-                name="filters.blocked_qualities"
+                control={actualControl}
+                name={getFieldName("filters.blocked_qualities")}
                 render={({ field }) => (
                   <FormItem>
                     <LabelWithTooltip 
@@ -203,8 +232,8 @@ export function FiltersSection({ control, watch }) {
                 )}
               />
               <FormField
-                control={control}
-                name="filters.block_cam"
+                control={actualControl}
+                name={getFieldName("filters.block_cam")}
                 render={({ field }) => (
                   <FormItem className="flex flex-row items-center space-x-3 space-y-0">
                     <FormControl>
@@ -226,8 +255,8 @@ export function FiltersSection({ control, watch }) {
               <h4 className="font-medium">Resolution</h4>
               <div className="grid grid-cols-2 gap-4">
                 <FormField
-                  control={control}
-                  name="filters.min_resolution"
+                  control={actualControl}
+                  name={getFieldName("filters.min_resolution")}
                   render={({ field }) => (
                     <FormItem>
                       <LabelWithTooltip 
@@ -255,8 +284,8 @@ export function FiltersSection({ control, watch }) {
                   )}
                 />
                 <FormField
-                  control={control}
-                  name="filters.max_resolution"
+                  control={actualControl}
+                  name={getFieldName("filters.max_resolution")}
                   render={({ field }) => (
                     <FormItem>
                       <LabelWithTooltip 
@@ -290,8 +319,8 @@ export function FiltersSection({ control, watch }) {
             <div className="space-y-4">
               <h4 className="font-medium">Codec</h4>
               <FormField
-                control={control}
-                name="filters.allowed_codecs"
+                control={actualControl}
+                name={getFieldName("filters.allowed_codecs")}
                 render={({ field }) => (
                   <FormItem>
                     <LabelWithTooltip 
@@ -321,8 +350,8 @@ export function FiltersSection({ control, watch }) {
                 )}
               />
               <FormField
-                control={control}
-                name="filters.blocked_codecs"
+                control={actualControl}
+                name={getFieldName("filters.blocked_codecs")}
                 render={({ field }) => (
                   <FormItem>
                     <LabelWithTooltip 
@@ -356,8 +385,8 @@ export function FiltersSection({ control, watch }) {
             <div className="space-y-4">
               <h4 className="font-medium">Audio</h4>
               <FormField
-                control={control}
-                name="filters.allowed_audio"
+                control={actualControl}
+                name={getFieldName("filters.allowed_audio")}
                 render={({ field }) => (
                   <FormItem>
                     <LabelWithTooltip 
@@ -383,8 +412,8 @@ export function FiltersSection({ control, watch }) {
                 )}
               />
               <FormField
-                control={control}
-                name="filters.min_channels"
+                control={actualControl}
+                name={getFieldName("filters.min_channels")}
                 render={({ field }) => (
                   <FormItem>
                     <LabelWithTooltip 
@@ -417,8 +446,8 @@ export function FiltersSection({ control, watch }) {
             <div className="space-y-4">
               <h4 className="font-medium">Visual Tags</h4>
               <FormField
-                control={control}
-                name="filters.require_hdr"
+                control={actualControl}
+                name={getFieldName("filters.require_hdr")}
                 render={({ field }) => (
                   <FormItem className="flex flex-row items-center space-x-3 space-y-0">
                     <FormControl>
@@ -434,8 +463,8 @@ export function FiltersSection({ control, watch }) {
                 )}
               />
               <FormField
-                control={control}
-                name="filters.allowed_hdr"
+                control={actualControl}
+                name={getFieldName("filters.allowed_hdr")}
                 render={({ field }) => (
                   <FormItem>
                     <LabelWithTooltip 
@@ -462,8 +491,8 @@ export function FiltersSection({ control, watch }) {
                 )}
               />
               <FormField
-                control={control}
-                name="filters.blocked_hdr"
+                control={actualControl}
+                name={getFieldName("filters.blocked_hdr")}
                 render={({ field }) => (
                   <FormItem>
                     <LabelWithTooltip 
@@ -490,8 +519,8 @@ export function FiltersSection({ control, watch }) {
                 )}
               />
               <FormField
-                control={control}
-                name="filters.block_sdr"
+                control={actualControl}
+                name={getFieldName("filters.block_sdr")}
                 render={({ field }) => (
                   <FormItem className="flex flex-row items-center space-x-3 space-y-0">
                     <FormControl>
@@ -512,8 +541,8 @@ export function FiltersSection({ control, watch }) {
             <div className="space-y-4">
               <h4 className="font-medium">Languages</h4>
               <FormField
-                control={control}
-                name="filters.allowed_languages"
+                control={actualControl}
+                name={getFieldName("filters.allowed_languages")}
                 render={({ field }) => (
                   <FormItem>
                     <LabelWithTooltip 
@@ -547,8 +576,8 @@ export function FiltersSection({ control, watch }) {
               <h4 className="font-medium">File Size</h4>
               <div className="grid grid-cols-2 gap-4">
                 <FormField
-                  control={control}
-                  name="filters.min_size_gb"
+                  control={actualControl}
+                  name={getFieldName("filters.min_size_gb")}
                   render={({ field }) => (
                     <FormItem>
                       <FormLabel>Minimum Size (GB)</FormLabel>
@@ -566,8 +595,8 @@ export function FiltersSection({ control, watch }) {
                   )}
                 />
                 <FormField
-                  control={control}
-                  name="filters.max_size_gb"
+                  control={actualControl}
+                  name={getFieldName("filters.max_size_gb")}
                   render={({ field }) => (
                     <FormItem>
                       <FormLabel>Maximum Size (GB)</FormLabel>
@@ -591,8 +620,8 @@ export function FiltersSection({ control, watch }) {
             <div className="space-y-4">
               <h4 className="font-medium">Release Groups</h4>
               <FormField
-                control={control}
-                name="filters.blocked_groups"
+                control={actualControl}
+                name={getFieldName("filters.blocked_groups")}
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>Blocked Groups</FormLabel>

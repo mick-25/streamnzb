@@ -3,7 +3,6 @@ package initialization
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"streamnzb/pkg/config"
 	"streamnzb/pkg/indexer"
 	"streamnzb/pkg/indexer/easynews"
@@ -11,6 +10,7 @@ import (
 	"streamnzb/pkg/logger"
 	"streamnzb/pkg/nntp"
 	"streamnzb/pkg/nzbhydra"
+	"streamnzb/pkg/paths"
 	"streamnzb/pkg/persistence"
 	"streamnzb/pkg/prowlarr"
 )
@@ -49,7 +49,7 @@ func BuildComponents(cfg *config.Config) (*InitializedComponents, error) {
 	var indexers []indexer.Indexer
 
 	// Initialize State Manager
-	dataDir := filepath.Dir(cfg.LoadedPath)
+	dataDir := paths.GetDataDir()
 	stateMgr, err := persistence.GetManager(dataDir)
 	if err != nil {
 		logger.Error("Failed to initialize state manager", "err", err)
@@ -120,10 +120,6 @@ func BuildComponents(cfg *config.Config) (*InitializedComponents, error) {
 			// Remove trailing slash
 			if len(downloadBase) > 0 && downloadBase[len(downloadBase)-1] == '/' {
 				downloadBase = downloadBase[:len(downloadBase)-1]
-			}
-			// Add security token if present
-			if cfg.SecurityToken != "" {
-				downloadBase = fmt.Sprintf("%s/%s", downloadBase, cfg.SecurityToken)
 			}
 
 			easynewsClient, err := easynews.NewClient(idxCfg.Username, idxCfg.Password, idxCfg.Name, downloadBase, idxCfg.APIHitsDay, idxCfg.DownloadsDay, usageMgr)

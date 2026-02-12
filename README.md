@@ -11,6 +11,9 @@ StreamNZB is a unified **Stremio Addon** and **Usenet Proxy** that pools multipl
 *   **Smart Pooling**: Aggregates connections from multiple Usenet providers.
 *   **Availability Checking**: Verifies article existence before attempting playback.
 *   **NNTP Proxy**: Exposes a standard NNTP server (default port 119) for use with SABnzbd or NZBGet.
+*   **Admin Authentication**: Secure admin login with password protection and session management.
+*   **Device Management**: Create multiple device accounts, each with their own Stremio manifest URL and customizable filters/sorting.
+*   **Per-Device Configuration**: Each device can have custom quality filters, codec preferences, and sorting rules.
 *   **Cross-Platform**: Runs on Docker, Windows, Linux, and macOS.
 
 ### 🏗️ Architecture
@@ -69,25 +72,68 @@ Alternatively you can set environment variables to configure the application on 
 
 ### ⚙️ Getting started
 
-1. Once you've got StreamNZB running, you can access the web UI at `http://localhost:7000` or `http://localhost:7000/mysecret/` if you've set a security token.
+1. Once you've got StreamNZB running, you can access the web UI at `http://localhost:7000`.
+
+2. **First-time Setup**: On first launch, StreamNZB creates a default admin account:
+   - **Username**: `admin`
+   - **Password**: `admin`
+   - ⚠️ **Important**: You will be prompted to change this password on first login for security.
+   - This admin account is used to access the web dashboard and manage devices.
+
+3. **Accessing the Dashboard**: 
+   - Log in with your admin credentials
+   - The dashboard provides real-time statistics, provider status, and system logs
+   - Use the **Settings** icon to configure providers, indexers, filters, and devices
+
+4. **Device Management**:
+   - Navigate to **Settings → Devices** tab
+   - Create device accounts for different users or Stremio installations
+   - Each device gets a unique token and manifest URL
+   - Devices can have custom filters and sorting preferences
+   - Copy the manifest URL for each device to add it to Stremio
+
+5. **Configuration**:
+   - You need at least one **Usenet Provider** and one **Indexer** to get started
+   - Configure providers in **Settings → Providers**
+   - Configure indexers in **Settings → Indexers** (supports NZBHydra2, Prowlarr, and internal indexers)
+   - Set global filters and sorting in **Settings → Filters** and **Settings → Sorting**
 
 > [!TIP]
-> Use the **Security Token** to secure your instance when exposing it to the internet.
+> Use **Device Management** (Settings → Devices) to create separate accounts for different users or Stremio installations. Each device gets its own token and can have custom filters and sorting preferences.
 
-2. Click the **Settings** icon in the dashboard to configure everything visually.
+### 🔐 Authentication & Devices
 
-3. You need at least one **Usenet Provider** and one **Indexer** to get started.
+**Admin Account**
+- The admin account is created on first launch
+- Admin password can be changed in **Settings → General → Admin Password**
+- Admin session tokens persist across browser sessions (stored in localStorage)
+- Admin manifest URL is displayed in **Settings → General** (uses admin session token)
+
+**Device Accounts**
+- Create device accounts in **Settings → Devices**
+- Each device gets a unique token for accessing Stremio
+- Device tokens are permanent and don't expire
+- Each device can have custom filters and sorting preferences
+- Device manifest URLs follow the format: `{baseUrl}/{deviceToken}/manifest.json`
+- Regenerate device tokens if compromised
+- Delete devices when no longer needed
+
+**Security**
+- Admin accounts require password authentication
+- Device tokens provide secure access to Stremio without exposing admin credentials
+- Use device tokens instead of sharing admin credentials
 
 ### ❓ Troubleshooting
 
 **"No streams were found" in Stremio**
-- Ensure `NZBHYDRA2_URL` and API Key are correct.
-- Check if your Usenet providers are active.
-- Verify that `VALIDATION_SAMPLE_SIZE` is not too high (checking too many articles can timeout).
+- Ensure your indexer URLs and API keys are correct in **Settings → Indexers**
+- Check if your Usenet providers are active and connected
+- Verify that `Validation Sample Size` is not too high (checking too many articles can timeout)
+- Check device-specific filters in **Settings → Devices** - they may be blocking results
 
 **Slow Downloads**
-- Increase `MAX_CONCURRENT_VALIDATIONS`.
-- Ensure your system has sufficient bandwidth.
+- Ensure your system has sufficient bandwidth
+- Check provider connection limits in **Settings → Providers**
 
 ## Troubleshooting Playback Issues
 **Why am I seeing Big Buck Bunny instead of my movie?**

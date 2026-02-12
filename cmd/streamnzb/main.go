@@ -4,9 +4,11 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"time"
 
 	"streamnzb/pkg/api"
+	"streamnzb/pkg/auth"
 	"streamnzb/pkg/availnzb"
 	"streamnzb/pkg/initialization"
 	"streamnzb/pkg/logger"
@@ -95,15 +97,26 @@ func main() {
 	}
 	tmdbClient := tmdb.NewClient(tmdbKey)
 
+	// Initialize User Manager (needed before Stremio server)
+	dataDir := filepath.Dir(cfg.LoadedPath)
+	if dataDir == "" || dataDir == "." {
+		// Fallback to current directory if no config path
+		dataDir, _ = os.Getwd()
+	}
+	deviceManager, err := auth.GetDeviceManager(dataDir)
+	if err != nil {
+		initialization.WaitForInputAndExit(fmt.Errorf("Failed to initialize device manager: %v", err))
+	}
+
 	// Initialize Stremio addon server
 	stremioServer, err := stremio.NewServer(cfg, cfg.AddonBaseURL, cfg.AddonPort, comp.Indexer, validator,
-		sessionManager, triageService, availClient, tmdbClient, cfg.SecurityToken)
+		sessionManager, triageService, availClient, tmdbClient, deviceManager)
 	if err != nil {
 		initialization.WaitForInputAndExit(fmt.Errorf("Failed to initialize Stremio server: %v", err))
 	}
 
 	// Initialize API Server
-	apiServer := api.NewServer(cfg, comp.ProviderPools, sessionManager, stremioServer, comp.Indexer)
+	apiServer := api.NewServer(cfg, comp.ProviderPools, sessionManager, stremioServer, comp.Indexer, deviceManager)
 
 	// Set embedded web handler
 	stremioServer.SetWebHandler(web.Handler())
@@ -139,8 +152,8 @@ func main() {
 	// Start Stremio server
 	addr := fmt.Sprintf(":%d", cfg.AddonPort)
 
-	logger.Info("Stremio manifest URL", "url", fmt.Sprintf("%s/%s/manifest.json", cfg.AddonBaseURL, cfg.SecurityToken))
-	logger.Info("Frontend url", "url", fmt.Sprintf("%s/%s/", cfg.AddonBaseURL, cfg.SecurityToken))
+	logger.Info("Stremio addon server starting", "base_url", cfg.AddonBaseURL, "port", cfg.AddonPort)
+	logger.Info("Note: Access requires device authentication tokens")
 
 	if err := http.ListenAndServe(addr, mux); err != nil {
 		initialization.WaitForInputAndExit(fmt.Errorf("Server failed: %v", err))

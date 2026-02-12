@@ -3,15 +3,19 @@ import { DraggableList } from '@/components/ui/draggable-list'
 import { Slider } from '@/components/ui/slider'
 
 export function PriorityList({ items, value = {}, onChange, title, description }) {
+  // Ensure value is an object, not null/undefined
+  const safeValue = value || {}
+  
   // Convert weight map to ordered array
   const [orderedItems, setOrderedItems] = useState(() => {
     // Sort items by their weight (descending)
-    return [...items].sort((a, b) => (value[a.key] || 0) - (value[b.key] || 0)).reverse()
+    return [...items].sort((a, b) => (safeValue[a.key] || 0) - (safeValue[b.key] || 0)).reverse()
   })
 
   // Update ordered items when value changes externally
   useEffect(() => {
-    const newOrder = [...items].sort((a, b) => (value[a.key] || 0) - (value[b.key] || 0)).reverse()
+    const safeVal = value || {}
+    const newOrder = [...items].sort((a, b) => (safeVal[a.key] || 0) - (safeVal[b.key] || 0)).reverse()
     setOrderedItems(newOrder)
   }, [value, items])
 

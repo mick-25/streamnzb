@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"time"
 
+	"streamnzb/pkg/auth"
 	"streamnzb/pkg/availnzb"
 	"streamnzb/pkg/config"
 	"streamnzb/pkg/indexer/newznab"
@@ -38,6 +39,26 @@ type WSMessage struct {
 }
 
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
+	// Get authenticated device from context (set by auth middleware)
+	device, ok := auth.DeviceFromContext(r)
+	if !ok {
+		// Try cookie fallback
+		cookie, err := r.Cookie("auth_session")
+		if err == nil && cookie != nil {
+			device, err = s.deviceManager.AuthenticateToken(cookie.Value)
+			if err != nil {
+				http.Error(w, "Unauthorized", http.StatusUnauthorized)
+				return
+			}
+			ok = true
+		}
+	}
+
+	if !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Printf("[WS] Upgrade error: %v", err)
@@ -45,8 +66,13 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 
-	// Create Client
-	client := &Client{conn: conn, send: make(chan WSMessage, 256)}
+	// Create Client with device
+	client := &Client{
+		conn:   conn,
+		send:   make(chan WSMessage, 256),
+		device: device,
+		user:   device, // Backwards compatibility alias
+	}
 	s.AddClient(client)
 
 	// Ensure cleanup
@@ -70,11 +96,27 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		payload, _ := json.Marshal(stats)
 		client.send <- WSMessage{Type: "stats", Payload: payload}
 
-		cfgPayload, _ := json.Marshal(s.config)
-		client.send <- WSMessage{Type: "config", Payload: cfgPayload}
+		// Send user-specific config
+		s.sendConfig(client)
 
 		// Send log history
 		s.sendLogHistory(client)
+
+		// Send auth info on connect (replaces /api/auth/check)
+		var mustChangePassword bool
+		if client.device != nil && client.device.Username == "admin" {
+			adminCreds, err := s.deviceManager.GetAdminCredentials()
+			if err == nil {
+				mustChangePassword = adminCreds.MustChangePassword
+			}
+		}
+		authInfo := map[string]interface{}{
+			"authenticated":       true,
+			"username":             client.device.Username,
+			"must_change_password": mustChangePassword,
+		}
+		authPayload, _ := json.Marshal(authInfo)
+		client.send <- WSMessage{Type: "auth_info", Payload: authPayload}
 	}()
 
 	// Read loop (Client -> Server)
@@ -109,6 +151,20 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 				s.sendConfig(client)
 			case "save_config":
 				s.handleSaveConfigWS(conn, client, msg.Payload)
+			case "save_user_configs":
+				s.handleSaveUserConfigsWS(conn, client, msg.Payload)
+			case "get_users":
+				s.handleGetDevicesWS(client)
+			case "get_user":
+				s.handleGetDeviceWS(client, msg.Payload)
+			case "create_user":
+				s.handleCreateDeviceWS(client, msg.Payload)
+			case "delete_user":
+				s.handleDeleteDeviceWS(client, msg.Payload)
+			case "regenerate_token":
+				s.handleRegenerateTokenWS(client, msg.Payload)
+			case "update_password":
+				s.handleUpdatePasswordWS(client, msg.Payload)
 			case "close_session":
 				s.handleCloseSessionWS(msg.Payload)
 			case "restart":
@@ -145,7 +201,27 @@ func (s *Server) sendStats(client *Client) {
 }
 
 func (s *Server) sendConfig(client *Client) {
-	payload, _ := json.Marshal(s.config)
+	// Admin always gets global config, devices get merged config
+	var cfg config.Config
+	if client.device != nil && client.device.Username == "admin" {
+		// Admin gets global config
+		cfg = *s.config
+	} else if client.device != nil {
+		// Regular devices get global config merged with their custom filters/sorting (if any)
+		cfg = *s.config
+		// Only override if device has custom config
+		// Use helper functions from auth.go
+		if hasCustomFilters(client.device.Filters) {
+			cfg.Filters = client.device.Filters
+		}
+		if hasCustomSorting(client.device.Sorting) {
+			cfg.Sorting = client.device.Sorting
+		}
+	} else {
+		cfg = *s.config
+	}
+
+	payload, _ := json.Marshal(cfg)
 	select {
 	case client.send <- WSMessage{Type: "config", Payload: payload}:
 	default:
@@ -170,66 +246,334 @@ func (s *Server) handleSaveConfigWS(conn *websocket.Conn, client *Client, payloa
 		return
 	}
 
-	// Validate settings before saving
-	fieldErrors := s.validateConfig(&newCfg)
-	if len(fieldErrors) > 0 {
+	// Admin saves to global config, regular devices don't save via this endpoint
+	if client.device != nil && client.device.Username == "admin" {
+		// Validate settings before saving
+		fieldErrors := s.validateConfig(&newCfg)
+		if len(fieldErrors) > 0 {
+			errorPayload, _ := json.Marshal(map[string]interface{}{
+				"status":  "error",
+				"message": "Validation failed",
+				"errors":  fieldErrors,
+			})
+			client.send <- WSMessage{Type: "save_status", Payload: errorPayload}
+			return
+		}
+
+		// Update global config
+		s.mu.Lock()
+		s.config = &newCfg
+		s.mu.Unlock()
+
+		if err := s.config.Save(); err != nil {
+			client.send <- WSMessage{Type: "save_status", Payload: json.RawMessage([]byte(fmt.Sprintf(`{"status":"error","message":"Failed to save config: %s"}`, err.Error())))}
+			return
+		}
+
+		// Reload components with new config
+		go func() {
+			comp, err := initialization.Bootstrap()
+			if err != nil {
+				log.Printf("[Reload] Bootstrap failed: %v", err)
+				return
+			}
+
+			// Build dependencies for Stremio Server reload
+			validator := validation.NewChecker(comp.ProviderPools, 24*time.Hour, 10, 5)
+			triageService := triage.NewService(
+				&comp.Config.Filters,
+				comp.Config.Sorting,
+			)
+			availClient := availnzb.NewClient(comp.Config.AvailNZBURL, comp.Config.AvailNZBAPIKey)
+			tmdbClient := tmdb.NewClient(comp.Config.TMDBAPIKey)
+
+			s.Reload(comp.Config, comp.ProviderPools, comp.Indexer, validator, triageService, availClient, tmdbClient)
+			log.Printf("[Reload] Configuration reloaded successfully")
+		}()
+
+		// Push updated config back to client
+		s.sendConfig(client)
+		client.send <- WSMessage{Type: "save_status", Payload: json.RawMessage(`{"status":"success","message":"Configuration saved and reloaded."}`)}
+		return
+	}
+
+	// Regular devices cannot save via this endpoint
+	client.send <- WSMessage{Type: "save_status", Payload: json.RawMessage(`{"status":"error","message":"Only admin can save global configuration"}`)}
+}
+
+func (s *Server) handleSaveUserConfigsWS(conn *websocket.Conn, client *Client, payload json.RawMessage) {
+	// Only admin can save device configs
+	if client.device == nil || client.device.Username != "admin" {
+		client.send <- WSMessage{Type: "save_status", Payload: json.RawMessage(`{"status":"error","message":"Only admin can save device configurations"}`)}
+		return
+	}
+
+	var deviceConfigs map[string]struct {
+		Filters config.FilterConfig `json:"filters"`
+		Sorting config.SortConfig   `json:"sorting"`
+	}
+	if err := json.Unmarshal(payload, &deviceConfigs); err != nil {
+		client.send <- WSMessage{Type: "save_status", Payload: json.RawMessage(`{"status":"error","message":"Invalid device config data"}`)}
+		return
+	}
+
+	// Save each device's config
+	var errors []string
+	for username, deviceConfig := range deviceConfigs {
+		if username == "admin" {
+			continue // Skip admin
+		}
+
+		if err := s.deviceManager.UpdateDeviceFilters(username, deviceConfig.Filters); err != nil {
+			errors = append(errors, fmt.Sprintf("Failed to update filters for %s: %v", username, err))
+			continue
+		}
+
+		if err := s.deviceManager.UpdateDeviceSorting(username, deviceConfig.Sorting); err != nil {
+			errors = append(errors, fmt.Sprintf("Failed to update sorting for %s: %v", username, err))
+			continue
+		}
+	}
+
+	if len(errors) > 0 {
 		errorPayload, _ := json.Marshal(map[string]interface{}{
 			"status":  "error",
-			"message": "Validation failed",
-			"errors":  fieldErrors,
+			"message": "Some device configs failed to save",
+			"errors":  errors,
 		})
 		client.send <- WSMessage{Type: "save_status", Payload: errorPayload}
 		return
 	}
 
-	loadedPath := s.config.LoadedPath
-	availURL := s.config.AvailNZBURL
-	availKey := s.config.AvailNZBAPIKey
-	tmdbKey := s.config.TMDBAPIKey
+	client.send <- WSMessage{Type: "save_status", Payload: json.RawMessage(`{"status":"success","message":"Device configurations saved successfully"}`)}
+}
 
-	*s.config = newCfg
-
-	s.config.LoadedPath = loadedPath
-	s.config.AvailNZBURL = availURL
-	s.config.AvailNZBAPIKey = availKey
-	s.config.TMDBAPIKey = tmdbKey
-
-	// Apply Log Level immediately
-	logger.SetLevel(s.config.LogLevel)
-
-	if err := s.config.Save(); err != nil {
-		client.send <- WSMessage{Type: "save_status", Payload: json.RawMessage([]byte(fmt.Sprintf(`{"status":"error","message":"%s"}`, err.Error())))}
+func (s *Server) handleGetDevicesWS(client *Client) {
+	// Only admin can get devices list
+	if client.device == nil || client.device.Username != "admin" {
+		client.send <- WSMessage{Type: "users_response", Payload: json.RawMessage(`{"error":"Only admin can access devices list"}`)}
 		return
 	}
 
-	// push updated config back to client so UI is in sync
-	s.sendConfig(client)
+	devices := s.deviceManager.GetAllDevices()
 
-	// Trigger Hot-Reload
-	go func() {
-		// Wait a bit for the save to settle and response to be sent
-		time.Sleep(100 * time.Millisecond)
+	// Format devices for response (exclude sensitive data)
+	deviceList := make([]map[string]interface{}, 0, len(devices))
+	for _, device := range devices {
+		deviceList = append(deviceList, map[string]interface{}{
+			"username": device.Username,
+			"token":    device.Token,
+			"filters":  device.Filters,
+			"sorting":  device.Sorting,
+		})
+	}
 
-		comp, err := initialization.BuildComponents(s.config)
-		if err != nil {
-			log.Printf("[Reload] Failed to build components: %v", err)
-			return
+	deviceListPayload, _ := json.Marshal(deviceList)
+	client.send <- WSMessage{Type: "users_response", Payload: deviceListPayload}
+}
+
+func (s *Server) handleGetDeviceWS(client *Client, payload json.RawMessage) {
+	// Only admin can get user details
+	if client.device == nil || client.device.Username != "admin" {
+		client.send <- WSMessage{Type: "user_response", Payload: json.RawMessage(`{"error":"Only admin can access user details"}`)}
+		return
+	}
+
+	var req struct {
+		Username string `json:"username"`
+	}
+	if err := json.Unmarshal(payload, &req); err != nil {
+		client.send <- WSMessage{Type: "user_response", Payload: json.RawMessage(`{"error":"Invalid request"}`)}
+		return
+	}
+
+	device, err := s.deviceManager.GetDevice(req.Username)
+	if err != nil {
+		errorPayload, _ := json.Marshal(map[string]string{"error": err.Error()})
+		client.send <- WSMessage{Type: "user_response", Payload: errorPayload}
+		return
+	}
+
+	response := map[string]interface{}{
+		"username": device.Username,
+		"token":    device.Token,
+		"filters":  device.Filters,
+		"sorting":  device.Sorting,
+	}
+
+	respPayload, _ := json.Marshal(response)
+	client.send <- WSMessage{Type: "user_response", Payload: respPayload}
+}
+
+func (s *Server) handleCreateDeviceWS(client *Client, payload json.RawMessage) {
+	// Only admin can create users
+	if client.device == nil || client.device.Username != "admin" {
+		client.send <- WSMessage{Type: "user_action_response", Payload: json.RawMessage(`{"error":"Only admin can create users"}`)}
+		return
+	}
+
+	var req struct {
+		Username string `json:"username"`
+	}
+	if err := json.Unmarshal(payload, &req); err != nil {
+		client.send <- WSMessage{Type: "user_action_response", Payload: json.RawMessage(`{"error":"Invalid request"}`)}
+		return
+	}
+
+	// Create user without password (empty string)
+	device, err := s.deviceManager.CreateDevice(req.Username, "")
+	if err != nil {
+		errorPayload, _ := json.Marshal(map[string]string{"error": err.Error()})
+		client.send <- WSMessage{Type: "user_action_response", Payload: errorPayload}
+		return
+	}
+
+	response := map[string]interface{}{
+		"success": true,
+		"user": map[string]interface{}{
+			"username": device.Username,
+			"token":    device.Token,
+		},
+	}
+
+	respPayload, _ := json.Marshal(response)
+	client.send <- WSMessage{Type: "user_action_response", Payload: respPayload}
+
+	// Broadcast updated devices list to all admin clients
+	s.broadcastUsersList()
+}
+
+func (s *Server) handleDeleteDeviceWS(client *Client, payload json.RawMessage) {
+	// Only admin can delete users
+	if client.device == nil || client.device.Username != "admin" {
+		client.send <- WSMessage{Type: "user_action_response", Payload: json.RawMessage(`{"error":"Only admin can delete users"}`)}
+		return
+	}
+
+	var req struct {
+		Username string `json:"username"`
+	}
+	if err := json.Unmarshal(payload, &req); err != nil {
+		client.send <- WSMessage{Type: "user_action_response", Payload: json.RawMessage(`{"error":"Invalid request"}`)}
+		return
+	}
+
+	if err := s.deviceManager.DeleteDevice(req.Username); err != nil {
+		errorPayload, _ := json.Marshal(map[string]string{"error": err.Error()})
+		client.send <- WSMessage{Type: "user_action_response", Payload: errorPayload}
+		return
+	}
+
+	response := map[string]interface{}{
+		"success": true,
+		"message": fmt.Sprintf("Device %s deleted successfully", req.Username),
+	}
+
+	respPayload, _ := json.Marshal(response)
+	client.send <- WSMessage{Type: "user_action_response", Payload: respPayload}
+
+	// Broadcast updated devices list to all admin clients
+	s.broadcastUsersList()
+}
+
+func (s *Server) handleRegenerateTokenWS(client *Client, payload json.RawMessage) {
+	// Only admin can regenerate tokens
+	if client.device == nil || client.device.Username != "admin" {
+		client.send <- WSMessage{Type: "user_action_response", Payload: json.RawMessage(`{"error":"Only admin can regenerate tokens"}`)}
+		return
+	}
+
+	var req struct {
+		Username string `json:"username"`
+	}
+	if err := json.Unmarshal(payload, &req); err != nil {
+		client.send <- WSMessage{Type: "user_action_response", Payload: json.RawMessage(`{"error":"Invalid request"}`)}
+		return
+	}
+
+	token, err := s.deviceManager.RegenerateToken(req.Username)
+	if err != nil {
+		errorPayload, _ := json.Marshal(map[string]string{"error": err.Error()})
+		client.send <- WSMessage{Type: "user_action_response", Payload: errorPayload}
+		return
+	}
+
+	response := map[string]interface{}{
+		"success": true,
+		"token":   token,
+	}
+
+	respPayload, _ := json.Marshal(response)
+	client.send <- WSMessage{Type: "user_action_response", Payload: respPayload}
+
+	// Broadcast updated devices list to all admin clients
+	s.broadcastUsersList()
+}
+
+func (s *Server) handleUpdatePasswordWS(client *Client, payload json.RawMessage) {
+	// Only admin can update password
+	if client.device == nil || client.device.Username != "admin" {
+		client.send <- WSMessage{Type: "user_action_response", Payload: json.RawMessage(`{"error":"Only admin can update password"}`)}
+		return
+	}
+
+	var req struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	if err := json.Unmarshal(payload, &req); err != nil {
+		client.send <- WSMessage{Type: "user_action_response", Payload: json.RawMessage(`{"error":"Invalid request"}`)}
+		return
+	}
+
+	if req.Username != "admin" {
+		client.send <- WSMessage{Type: "user_action_response", Payload: json.RawMessage(`{"error":"Only admin user can change password"}`)}
+		return
+	}
+
+	if err := s.deviceManager.UpdateUser(req.Username, req.Password); err != nil {
+		errorPayload, _ := json.Marshal(map[string]string{"error": err.Error()})
+		client.send <- WSMessage{Type: "user_action_response", Payload: errorPayload}
+		return
+	}
+
+	response := map[string]interface{}{
+		"success": true,
+		"message": "Password updated successfully",
+	}
+
+	respPayload, _ := json.Marshal(response)
+	client.send <- WSMessage{Type: "user_action_response", Payload: respPayload}
+}
+
+func (s *Server) broadcastUsersList() {
+	devices := s.deviceManager.GetAllDevices()
+
+	// Format devices for response
+	deviceList := make([]map[string]interface{}, 0, len(devices))
+	for _, device := range devices {
+		deviceList = append(deviceList, map[string]interface{}{
+			"username": device.Username,
+			"token":    device.Token,
+			"filters":  device.Filters,
+			"sorting":  device.Sorting,
+		})
+	}
+
+	payload, _ := json.Marshal(deviceList)
+
+	// Send to all admin clients
+	s.clientsMu.Lock()
+	defer s.clientsMu.Unlock()
+	for client := range s.clients {
+		if client.device != nil && client.device.Username == "admin" {
+			select {
+			case client.send <- WSMessage{Type: "users_response", Payload: payload}:
+			default:
+				// Channel full, skip
+			}
 		}
-
-		// Build dependencies for Stremio Server reload
-		validator := validation.NewChecker(comp.ProviderPools, 24*time.Hour, 10, 5)
-		triageService := triage.NewService(
-			&comp.Config.Filters,
-			comp.Config.Sorting,
-		)
-		availClient := availnzb.NewClient(comp.Config.AvailNZBURL, comp.Config.AvailNZBAPIKey)
-		tmdbClient := tmdb.NewClient(comp.Config.TMDBAPIKey)
-
-		s.Reload(comp.Config, comp.ProviderPools, comp.Indexer, validator, triageService, availClient, tmdbClient)
-		log.Printf("[Reload] Configuration reloaded successfully")
-	}()
-
-	client.send <- WSMessage{Type: "save_status", Payload: json.RawMessage(`{"status":"success","message":"Configuration saved and reloaded."}`)}
+	}
 }
 
 // validateConfig checks connectivity for all components and returns a map of field errors

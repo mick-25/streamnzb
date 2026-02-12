@@ -1,5 +1,8 @@
 import { useState, useEffect, useRef } from 'react'
 import Settings from './Settings'
+import Login from './components/Login'
+import DeviceManagement from './components/DeviceManagement'
+import ChangePassword from './components/ChangePassword'
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -11,7 +14,7 @@ import {
 import { Area, AreaChart, ResponsiveContainer, XAxis, YAxis } from "recharts"
 import { 
   Activity, Server, Zap, Globe, Settings as SettingsIcon, AlertCircle, 
-  Sun, Moon, Monitor, X, Loader2, Tv, Clipboard, Check, ChevronDown, MonitorPlay, Menu
+  Sun, Moon, Monitor, X, Loader2, Tv, Clipboard, Check, ChevronDown, MonitorPlay, Menu, LogOut
 } from "lucide-react"
 import {
   DropdownMenu,
@@ -19,6 +22,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 
 
 const chartConfig = {
@@ -39,6 +43,10 @@ const DiscordIcon = (props) => (
 )
 
 function App() {
+  const [authenticated, setAuthenticated] = useState(false)
+  const [currentUser, setCurrentUser] = useState(null)
+  const [authToken, setAuthToken] = useState(localStorage.getItem('auth_token') || '')
+  const [mustChangePassword, setMustChangePassword] = useState(false)
   const [stats, setStats] = useState(null)
   const [config, setConfig] = useState(null)
   const [saveStatus, setSaveStatus] = useState({ type: '', msg: '', errors: null })
@@ -53,12 +61,76 @@ function App() {
   const [ws, setWs] = useState(null)
   const [theme, setTheme] = useState(localStorage.getItem('theme') || 'system')
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
+  const hasLoggedOutRef = useRef(false)
+  const authCheckTimeoutRef = useRef(null)
   
   const [logs, setLogs] = useState([])
   const logsEndRef = useRef(null)
   
   const MAX_HISTORY = 60
   const MAX_LOGS = 200
+
+  // Check authentication on mount - WebSocket will send auth_info on connect
+  useEffect(() => {
+    const token = localStorage.getItem('auth_token')
+    if (!token) {
+      // Check for legacy token in URL
+      const pathParts = window.location.pathname.split('/').filter(p => p !== '')
+      if (pathParts.length > 0 && pathParts[0] !== 'api') {
+        // Legacy token in URL path
+        hasLoggedOutRef.current = false
+        setAuthenticated(true)
+        setCurrentUser('legacy')
+      } else {
+        setAuthenticated(false)
+      }
+    } else {
+      // Token exists - optimistically set authenticated to true
+      // WebSocket will confirm or correct this when it connects
+      hasLoggedOutRef.current = false
+      setAuthToken(token)
+      setAuthenticated(true)
+      // Will be updated when WebSocket sends auth_info
+      
+      // Set timeout to clear invalid token if auth_info doesn't arrive
+      authCheckTimeoutRef.current = setTimeout(() => {
+        // If still waiting for auth after 5 seconds, token is likely invalid
+        if (authenticated && !currentUser && wsStatus !== 'connected') {
+          setAuthenticated(false)
+          setAuthToken('')
+          localStorage.removeItem('auth_token')
+        }
+      }, 5000)
+    }
+    // Auth will be confirmed when WebSocket connects and sends auth_info
+    return () => {
+      if (authCheckTimeoutRef.current) {
+        clearTimeout(authCheckTimeoutRef.current)
+      }
+    }
+  }, [])
+
+  const handleLogin = (username, token, mustChange) => {
+    hasLoggedOutRef.current = false
+    setAuthenticated(true)
+    setCurrentUser(username)
+    setAuthToken(token)
+    setMustChangePassword(mustChange)
+    localStorage.setItem('auth_token', token)
+  }
+
+  const handleLogout = () => {
+    hasLoggedOutRef.current = true
+    setAuthenticated(false)
+    setCurrentUser(null)
+    setAuthToken('')
+    localStorage.removeItem('auth_token')
+    if (ws) {
+      ws.close()
+    }
+    setWs(null)
+    window.ws = null
+  }
 
   useEffect(() => {
     const root = window.document.documentElement;
@@ -74,28 +146,46 @@ function App() {
   }, [theme]);
 
   useEffect(() => {
+    if (!authenticated) return
+    if (hasLoggedOutRef.current) return // Don't connect if user has logged out
+
     let socket;
     let reconnectTimeout;
 
     const connect = () => {
+      // Don't connect if user has logged out
+      if (hasLoggedOutRef.current) return
+      
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
       const host = window.location.host;
       const pathParts = window.location.pathname.split('/').filter(p => p !== '');
-      const tokenPrefix = pathParts.length > 0 ? `/${pathParts[0]}` : '';
-      socket = new WebSocket(`${protocol}//${host}${tokenPrefix}/api/ws`);
+      const tokenPrefix = pathParts.length > 0 && pathParts[0] !== 'api' ? `/${pathParts[0]}` : '';
+      // Use auth token if available, otherwise fall back to legacy token in URL
+      const wsToken = authToken || (pathParts.length > 0 && pathParts[0] !== 'api' ? pathParts[0] : '');
+      const wsUrl = `${protocol}//${host}${tokenPrefix}/api/ws${wsToken ? `?token=${wsToken}` : ''}`;
+      socket = new WebSocket(wsUrl);
 
       socket.onopen = () => {
         if (isRestartingRef.current) {
             window.location.reload(); // Forces a clean home redirect
             return;
         }
+        // Don't proceed if user has logged out
+        if (hasLoggedOutRef.current) {
+          socket.close();
+          return;
+        }
         setWsStatus('connected');
         setError(null);
         setWs(socket);
+        window.ws = socket; // Make available globally for DeviceManagement
         setLogs([]); // Clear logs on reconnect
       };
 
       socket.onmessage = (event) => {
+        // Ignore messages if user has logged out
+        if (hasLoggedOutRef.current) return
+        
         const msg = JSON.parse(event.data);
         
         switch (msg.type) {
@@ -109,6 +199,10 @@ function App() {
           }
           case 'config': {
             setConfig(msg.payload);
+            // Also update global config for DeviceManagement if callback exists
+            if (window.globalConfigCallback) {
+              window.globalConfigCallback(msg.payload);
+            }
             break;
           }
           case 'log_entry': {
@@ -130,17 +224,93 @@ function App() {
             setIsSaving(false);
             break;
           }
+          case 'auth_info': {
+            // Auth info sent on WebSocket connect (replaces /api/auth/check)
+            // Ignore if user has explicitly logged out
+            if (hasLoggedOutRef.current) {
+              socket.close();
+              return;
+            }
+            if (msg.payload.authenticated) {
+              // Clear auth check timeout since we got valid auth
+              if (authCheckTimeoutRef.current) {
+                clearTimeout(authCheckTimeoutRef.current)
+                authCheckTimeoutRef.current = null
+              }
+              setAuthenticated(true);
+              setCurrentUser(msg.payload.username);
+              setMustChangePassword(msg.payload.must_change_password || false);
+              // Token is already in localStorage from login
+            } else {
+              // Invalid token - clear it and show login immediately
+              if (authCheckTimeoutRef.current) {
+                clearTimeout(authCheckTimeoutRef.current)
+                authCheckTimeoutRef.current = null
+              }
+              hasLoggedOutRef.current = false // Reset logout flag since we're clearing invalid token
+              setAuthenticated(false);
+              setCurrentUser(null);
+              setAuthToken('')
+              localStorage.removeItem('auth_token');
+              socket.close(); // Close WebSocket since auth failed
+              // Component will re-render and show Login screen
+            }
+            break;
+          }
+          case 'users_response': {
+            // Handle devices list response - dispatch to DeviceManagement if callback exists
+            if (window.deviceManagementCallback) {
+              window.deviceManagementCallback(msg.payload);
+            }
+            break;
+          }
+          case 'user_response': {
+            // Handle single device response - dispatch to DeviceManagement if callback exists
+            if (window.deviceResponseCallback) {
+              window.deviceResponseCallback(msg.payload);
+            }
+            break;
+          }
+          case 'user_action_response': {
+            // Handle device action responses (create, delete, regenerate, update password)
+            if (window.deviceActionCallback) {
+              window.deviceActionCallback(msg.payload);
+            }
+            // Also handle password change callback (used by ChangePassword component)
+            if (window.passwordChangeCallback) {
+              window.passwordChangeCallback(msg.payload);
+            }
+            break;
+          }
         }
       };
 
       socket.onclose = () => {
         setWsStatus('disconnected');
         setWs(null);
-        reconnectTimeout = setTimeout(connect, 3000);
+        window.ws = null; // Clear global reference
+        // Don't reconnect if user has logged out
+        if (!hasLoggedOutRef.current) {
+          // If we were trying to authenticate and connection closed, check if we should show login
+          // Wait a moment to see if auth_info came through before closing
+          reconnectTimeout = setTimeout(() => {
+            // If still authenticated but no WebSocket, try reconnecting
+            // But if auth failed (authenticated is false), don't reconnect
+            if (authenticated && !hasLoggedOutRef.current) {
+              connect();
+            }
+          }, 3000);
+        }
       };
 
       socket.onerror = () => {
         setError("Network Error: Could not connect to API");
+        // If we were trying to authenticate and connection fails, clear token and show login
+        if (authToken && authenticated && !currentUser) {
+          setAuthenticated(false);
+          setAuthToken('')
+          localStorage.removeItem('auth_token');
+        }
         socket.close();
       };
     };
@@ -150,11 +320,11 @@ function App() {
       if (socket) socket.close();
       if (reconnectTimeout) clearTimeout(reconnectTimeout);
     }
-  }, []);
+  }, [authenticated, authToken]);
 
   const sendCommand = (type, payload) => {
       if (ws && ws.readyState === WebSocket.OPEN) {
-          if (type === 'save_config') {
+          if (type === 'save_config' || type === 'save_user_configs') {
               setSaveStatus({ type: 'normal', msg: 'Validating and saving...', errors: null });
               setIsSaving(true);
           } else if (type === 'restart') {
@@ -171,8 +341,8 @@ function App() {
       // Ensure protocol is https if it's not present (though origin usually has it)
       // Actually we just want the full manifest URL in HTTP(S) format
       let url = baseUrl.replace(/\/$/, '');
-      const token = config.security_token ? `/${config.security_token}` : '';
-      return `${url}${token}/manifest.json`;
+      // Note: Device tokens are handled via authentication, not in the URL path
+      return `${url}/manifest.json`;
   }
 
   const handleInstallClick = (type) => {
@@ -192,6 +362,20 @@ function App() {
 
   const [copied, setCopied] = useState(false);
 
+
+  // Show login page if not authenticated
+  if (!authenticated) {
+    return <Login onLogin={handleLogin} />
+  }
+
+  // Show password change page if password must be changed
+  if (mustChangePassword && currentUser) {
+    return <ChangePassword username={currentUser} onPasswordChanged={() => {
+      setMustChangePassword(false)
+      // Auth info will be updated when WebSocket sends auth_info (sent on connect/reconnect)
+      // The server will automatically send updated auth_info after password change
+    }} />
+  }
 
   if (error && wsStatus === 'disconnected') {
       return (
@@ -310,6 +494,19 @@ function App() {
               <span className="hidden md:inline">Settings</span>
             </Button>
 
+            {currentUser && currentUser !== 'legacy' && (
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={handleLogout}
+                className="h-8 w-8 md:w-auto md:px-3 gap-2"
+                title="Logout"
+              >
+                <LogOut className="h-4 w-4" />
+                <span className="hidden md:inline">Logout</span>
+              </Button>
+            )}
+
             {/* Discord */}
             <Button
               variant="default"
@@ -417,6 +614,20 @@ function App() {
                     <span>Settings</span>
                   </Button>
 
+                  {currentUser && currentUser !== 'legacy' && (
+                    <Button
+                      variant="ghost"
+                      className="w-full justify-start gap-3 h-12"
+                      onClick={() => {
+                        handleLogout()
+                        setMobileMenuOpen(false)
+                      }}
+                    >
+                      <LogOut className="h-5 w-5" />
+                      <span>Logout</span>
+                    </Button>
+                  )}
+
                   <Button
                     variant="default"
                     className="w-full justify-start gap-3 h-12 bg-[#5865F2] hover:bg-[#4752C4] text-white"
@@ -438,6 +649,7 @@ function App() {
             sendCommand={sendCommand} 
             saveStatus={saveStatus}
             isSaving={isSaving}
+            adminToken={currentUser && currentUser !== 'legacy' ? authToken : null}
             onClose={() => {
                 setShowSettings(false);
                 setSaveStatus({ type: '', msg: '', errors: null });

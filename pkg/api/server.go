@@ -9,6 +9,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
+	"streamnzb/pkg/auth"
 	"streamnzb/pkg/availnzb"
 	"streamnzb/pkg/config"
 	"streamnzb/pkg/indexer"
@@ -32,6 +33,7 @@ type Server struct {
 	strmServer     *stremio.Server
 	proxyServer    *proxy.Server
 	indexer        indexer.Indexer
+	deviceManager  *auth.DeviceManager
 
 	// WebSocket Client Registry
 	clients   map[*Client]bool
@@ -40,12 +42,15 @@ type Server struct {
 }
 
 type Client struct {
-	conn *websocket.Conn
-	send chan WSMessage
+	conn   *websocket.Conn
+	send   chan WSMessage
+	device *auth.Device
+	// user is an alias for device for backwards compatibility
+	user *auth.Device
 }
 
 // NewServer creates a new API server
-func NewServer(cfg *config.Config, pools map[string]*nntp.ClientPool, sessMgr *session.Manager, strmServer *stremio.Server, indexer indexer.Indexer) *Server {
+func NewServer(cfg *config.Config, pools map[string]*nntp.ClientPool, sessMgr *session.Manager, strmServer *stremio.Server, indexer indexer.Indexer, deviceManager *auth.DeviceManager) *Server {
 	// Build streaming pools list from map (initial)
 	var list []*nntp.ClientPool
 	for _, p := range pools {
@@ -59,6 +64,7 @@ func NewServer(cfg *config.Config, pools map[string]*nntp.ClientPool, sessMgr *s
 		sessionMgr:     sessMgr,
 		strmServer:     strmServer,
 		indexer:        indexer,
+		deviceManager:  deviceManager,
 		clients:        make(map[*Client]bool),
 		logCh:          make(chan string, 100),
 	}
@@ -151,7 +157,7 @@ func (s *Server) Reload(cfg *config.Config, pools map[string]*nntp.ClientPool, i
 	s.sessionMgr.UpdatePools(newStreamingPools)
 
 	if s.strmServer != nil {
-		s.strmServer.Reload(cfg.AddonBaseURL, indexers, validator, triage, avail, tmdbClient, cfg.SecurityToken)
+		s.strmServer.Reload(cfg.AddonBaseURL, indexers, validator, triage, avail, tmdbClient, s.deviceManager)
 	}
 
 	// 5. Restart Proxy if enabled
@@ -232,8 +238,13 @@ func (s *Server) getPoolList() []*nntp.ClientPool {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
-	// API Routes (WS only now)
-	mux.HandleFunc("/api/ws", s.handleWebSocket)
+	// Public routes (no auth required)
+	mux.HandleFunc("/api/login", s.handleLogin)
+	mux.HandleFunc("/api/auth/check", s.handleAuthCheck)
+
+	// Protected routes (require auth)
+	authMiddleware := auth.AuthMiddleware(s.deviceManager)
+	mux.Handle("/api/ws", authMiddleware(http.HandlerFunc(s.handleWebSocket)))
 
 	return mux
 }

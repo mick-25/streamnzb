@@ -3,8 +3,37 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { FormField, FormItem, FormLabel, FormControl, FormDescription, FormMessage } from "@/components/ui/form"
 import { Input } from "@/components/ui/input"
 import { PriorityList, MultiplierSlider } from "@/components/ui/priority-list"
+import { useFormContext } from "react-hook-form"
 
-export function SortingSection({ control, watch }) {
+export function SortingSection({ control, watch, fieldPrefix = '' }) {
+  // Use form context if control/watch not provided (for nested forms)
+  let formContext = null
+  try {
+    formContext = useFormContext()
+  } catch (e) {
+    // Not in form context, use provided props
+  }
+  
+  const actualControl = control || formContext?.control
+  const actualWatch = watch || formContext?.watch
+  
+  const getFieldName = (field) => {
+    if (!fieldPrefix) return field
+    // Handle both "sorting.field" and just "field" formats
+    if (field.startsWith('sorting.')) {
+      // If fieldPrefix is already "sorting", return the field as-is
+      // react-hook-form needs the full path "sorting.field" to access nested values
+      if (fieldPrefix === 'sorting') {
+        return field // Return "sorting.field" as-is
+      }
+      return `${fieldPrefix}.${field}`
+    }
+    // If fieldPrefix is "sorting" and field doesn't start with "sorting.", prepend it
+    if (fieldPrefix === 'sorting') {
+      return `sorting.${field}`
+    }
+    return `${fieldPrefix}.sorting.${field}`
+  }
   const resolutionItems = [
     { key: '4k', label: '4K' },
     { key: '1080p', label: '1080p' },
@@ -58,8 +87,8 @@ export function SortingSection({ control, watch }) {
       <CardContent className="space-y-6">
         {/* Resolution Priority */}
         <FormField
-          control={control}
-          name="sorting.resolution_weights"
+          control={actualControl}
+          name={getFieldName("sorting.resolution_weights")}
           render={({ field }) => (
             <PriorityList
               items={resolutionItems}
@@ -73,8 +102,8 @@ export function SortingSection({ control, watch }) {
 
         {/* Codec Priority */}
         <FormField
-          control={control}
-          name="sorting.codec_weights"
+          control={actualControl}
+          name={getFieldName("sorting.codec_weights")}
           render={({ field }) => (
             <PriorityList
               items={codecItems}
@@ -88,8 +117,8 @@ export function SortingSection({ control, watch }) {
 
         {/* Audio Priority */}
         <FormField
-          control={control}
-          name="sorting.audio_weights"
+          control={actualControl}
+          name={getFieldName("sorting.audio_weights")}
           render={({ field }) => (
             <PriorityList
               items={audioItems}
@@ -103,8 +132,8 @@ export function SortingSection({ control, watch }) {
 
         {/* Quality Priority */}
         <FormField
-          control={control}
-          name="sorting.quality_weights"
+          control={actualControl}
+          name={getFieldName("sorting.quality_weights")}
           render={({ field }) => (
             <PriorityList
               items={qualityItems}
@@ -118,8 +147,8 @@ export function SortingSection({ control, watch }) {
 
         {/* Visual Tag Priority */}
         <FormField
-          control={control}
-          name="sorting.visual_tag_weights"
+          control={actualControl}
+          name={getFieldName("sorting.visual_tag_weights")}
           render={({ field }) => (
             <PriorityList
               items={visualTagItems}
@@ -135,8 +164,8 @@ export function SortingSection({ control, watch }) {
         <div className="space-y-4 pt-4 border-t">
           <h4 className="font-medium">Preferred Settings</h4>
           <FormField
-            control={control}
-            name="sorting.preferred_groups"
+            control={actualControl}
+            name={getFieldName("sorting.preferred_groups")}
             render={({ field }) => (
               <FormItem>
                 <FormLabel>Preferred Release Groups</FormLabel>
@@ -153,8 +182,8 @@ export function SortingSection({ control, watch }) {
             )}
           />
           <FormField
-            control={control}
-            name="sorting.preferred_languages"
+            control={actualControl}
+            name={getFieldName("sorting.preferred_languages")}
             render={({ field }) => (
               <FormItem>
                 <FormLabel>Preferred Languages</FormLabel>
@@ -176,8 +205,8 @@ export function SortingSection({ control, watch }) {
         <div className="space-y-4 pt-4 border-t">
           <h4 className="font-medium">Score Multipliers</h4>
           <FormField
-            control={control}
-            name="sorting.grab_weight"
+            control={actualControl}
+            name={getFieldName("sorting.grab_weight")}
             render={({ field }) => (
               <MultiplierSlider
                 label="Grab Weight"
@@ -191,8 +220,8 @@ export function SortingSection({ control, watch }) {
             )}
           />
           <FormField
-            control={control}
-            name="sorting.age_weight"
+            control={actualControl}
+            name={getFieldName("sorting.age_weight")}
             render={({ field }) => (
               <MultiplierSlider
                 label="Age Weight"
