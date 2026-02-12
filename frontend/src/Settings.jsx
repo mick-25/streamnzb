@@ -104,6 +104,12 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, onClose })
           'HDTV': 1000,
           'Blu-ray': 2000
         },
+        visual_tag_weights: {
+          'DV': 1500,
+          'HDR10+': 1200,
+          'HDR': 1000,
+          '3D': 800
+        },
         grab_weight: 0.5,
         age_weight: 1.0,
         preferred_groups: [],
@@ -191,7 +197,7 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, onClose })
   
   return (
     <Dialog open={true} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-w-[90vw] h-[90vh] flex flex-col p-0 gap-0 overflow-hidden">
+      <DialogContent className="max-w-[90vw] h-[90vh] flex flex-col p-0 gap-0 overflow-hidden [&>*]:overflow-visible">
         <DialogHeader className="p-6 pb-4 border-b shrink-0">
           <DialogTitle>Configuration</DialogTitle>
           <DialogDescription>

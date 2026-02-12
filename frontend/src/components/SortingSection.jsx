@@ -40,6 +40,13 @@ export function SortingSection({ control, watch }) {
     { key: 'HDTV', label: 'HDTV' },
   ]
 
+  const visualTagItems = [
+    { key: 'DV', label: 'DV (Dolby Vision)' },
+    { key: 'HDR10+', label: 'HDR10+' },
+    { key: 'HDR', label: 'HDR' },
+    { key: '3D', label: '3D' },
+  ]
+
   return (
     <Card>
       <CardHeader>
@@ -105,6 +112,21 @@ export function SortingSection({ control, watch }) {
               onChange={field.onChange}
               title="Source Quality Preference"
               description="Prioritize releases from your preferred sources."
+            />
+          )}
+        />
+
+        {/* Visual Tag Priority */}
+        <FormField
+          control={control}
+          name="sorting.visual_tag_weights"
+          render={({ field }) => (
+            <PriorityList
+              items={visualTagItems}
+              value={field.value}
+              onChange={field.onChange}
+              title="Visual Tag Preference"
+              description="Prioritize releases with your preferred visual tags (HDR, Dolby Vision, 3D)."
             />
           )}
         />

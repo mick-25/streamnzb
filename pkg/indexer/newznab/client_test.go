@@ -87,37 +87,27 @@ func TestNewznabPagination(t *testing.T) {
 	callCount := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		callCount++
-		offset := r.URL.Query().Get("offset")
 		limit := r.URL.Query().Get("limit")
 
 		w.Header().Set("Content-Type", "application/xml")
-		if offset == "0" {
-			// Page 1: 1 item, total 2
+		// Indexer handles pagination internally, returns all requested items in one call
+		if limit == "2" {
 			fmt.Fprint(w, `<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0" xmlns:newznab="http://www.newznab.com/DTD/2010/feeds/attributes/">
 <channel>
 <newznab:response offset="0" total="2"/>
 <item><title>Item 1</title><newznab:attr name="size" value="100"/></item>
-</channel>
-</rss>`)
-		} else if offset == "1" {
-			// Page 2: 1 item, total 2
-			fmt.Fprint(w, `<?xml version="1.0" encoding="UTF-8"?>
-<rss version="2.0" xmlns:newznab="http://www.newznab.com/DTD/2010/feeds/attributes/">
-<channel>
-<newznab:response offset="1" total="2"/>
-<item><title>Item 2</title><newznab:attr name="size" value="100"/></item>
+<item><title>Item 2</title><newznab:attr name="size" value="200"/></item>
 </channel>
 </rss>`)
 		} else {
 			fmt.Fprint(w, `<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel></channel></rss>`)
 		}
-		logger.Debug("Mock server call", "count", callCount, "offset", offset, "limit", limit)
+		logger.Debug("Mock server call", "count", callCount, "limit", limit)
 	}))
 	defer server.Close()
 
-	// Request limit = 2, pageSize will be 2.
-	// But our mock returns 1 per page.
+	// Request limit = 2, indexer should return all 2 items in one call
 	client := NewClient(config.IndexerConfig{
 		Name:   "MockIndexer",
 		URL:    server.URL,
@@ -136,8 +126,8 @@ func TestNewznabPagination(t *testing.T) {
 		t.Fatalf("Expected 2 items, got %d", len(resp.Channel.Items))
 	}
 
-	if callCount != 2 {
-		t.Errorf("Expected 2 server calls for pagination, got %d", callCount)
+	if callCount != 1 {
+		t.Errorf("Expected 1 server call (indexer handles pagination), got %d", callCount)
 	}
 }
 

@@ -25,44 +25,44 @@ type FilterConfig struct {
 	// Quality filters
 	AllowedQualities []string `json:"allowed_qualities"` // e.g., ["BluRay", "WEB-DL", "HDTV"]
 	BlockedQualities []string `json:"blocked_qualities"` // e.g., ["CAM", "TeleSync"]
-	
+
 	// Resolution filters
 	MinResolution string `json:"min_resolution"` // e.g., "720p"
 	MaxResolution string `json:"max_resolution"` // e.g., "2160p"
-	
+
 	// Codec filters
 	AllowedCodecs []string `json:"allowed_codecs"` // e.g., ["HEVC", "AVC"]
 	BlockedCodecs []string `json:"blocked_codecs"` // e.g., ["MPEG-2"]
-	
+
 	// Audio filters
 	RequiredAudio []string `json:"required_audio"` // e.g., ["Atmos", "TrueHD"]
 	AllowedAudio  []string `json:"allowed_audio"`  // e.g., ["DTS", "DD", "AAC"]
 	MinChannels   string   `json:"min_channels"`   // e.g., "5.1"
-	
-	// HDR filters
-	RequireHDR bool     `json:"require_hdr"` // Require any HDR
-	AllowedHDR []string `json:"allowed_hdr"` // e.g., [" DV", "HDR10+"]
-	BlockedHDR []string `json:"blocked_hdr"` // e.g., ["DV"] to block Dolby Vision
+
+	// Visual tag filters (HDR and 3D)
+	RequireHDR bool     `json:"require_hdr"` // Require any visual tag (HDR or 3D)
+	AllowedHDR []string `json:"allowed_hdr"` // Allowed visual tags e.g., ["DV", "HDR10+", "3D"]
+	BlockedHDR []string `json:"blocked_hdr"` // Blocked visual tags e.g., ["DV"] to block Dolby Vision, ["3D"] to block 3D
 	BlockSDR   bool     `json:"block_sdr"`   // Block SDR releases
-	
+
 	// Language filters
 	RequiredLanguages []string `json:"required_languages"` // e.g., ["en"]
 	AllowedLanguages  []string `json:"allowed_languages"`  // e.g., ["en", "multi"]
 	BlockDubbed       bool     `json:"block_dubbed"`
-	
+
 	// Other filters
-	BlockCam       bool   `json:"block_cam"`        // Block CAM/TS/TC
+	BlockCam       bool   `json:"block_cam"` // Block CAM/TS/TC
 	RequireProper  bool   `json:"require_proper"`
 	AllowRepack    bool   `json:"allow_repack"`
 	BlockHardcoded bool   `json:"block_hardcoded"`
 	MinBitDepth    string `json:"min_bit_depth"` // e.g., "10bit"
-	
+
 	// Size filters
 	MinSizeGB float64 `json:"min_size_gb"`
 	MaxSizeGB float64 `json:"max_size_gb"`
-	
+
 	// Group filters (blocking only)
-	BlockedGroups   []string `json:"blocked_groups"`
+	BlockedGroups []string `json:"blocked_groups"`
 }
 
 // SortConfig holds weights for triage scoring
@@ -71,9 +71,10 @@ type SortConfig struct {
 	CodecWeights      map[string]int `json:"codec_weights"`
 	AudioWeights      map[string]int `json:"audio_weights"`
 	QualityWeights    map[string]int `json:"quality_weights"`
+	VisualTagWeights  map[string]int `json:"visual_tag_weights"` // e.g., {"DV": 1500, "HDR10+": 1200, "HDR": 1000, "3D": 800}
 	GrabWeight        float64        `json:"grab_weight"`
 	AgeWeight         float64        `json:"age_weight"`
-	
+
 	// Preference boosts (prioritization, not filtering)
 	PreferredGroups    []string `json:"preferred_groups"`    // e.g., ["FLUX", "NTb"]
 	PreferredLanguages []string `json:"preferred_languages"` // e.g., ["en", "multi"]
@@ -85,12 +86,12 @@ type IndexerConfig struct {
 	URL          string `json:"url"`
 	APIKey       string `json:"api_key"`
 	APIPath      string `json:"api_path"` // API path (default: "/api"), e.g., "/api" or "/api/v1"
-	Type         string `json:"type"`      // "newznab", "prowlarr", "nzbhydra", "easynews"
+	Type         string `json:"type"`     // "newznab", "prowlarr", "nzbhydra", "easynews"
 	APIHitsDay   int    `json:"api_hits_day"`
 	DownloadsDay int    `json:"downloads_day"`
 	// Easynews-specific fields
-	Username   string `json:"username"`    // Easynews username
-	Password   string `json:"password"`    // Easynews password
+	Username string `json:"username"` // Easynews username
+	Password string `json:"password"` // Easynews password
 }
 
 // Config holds application configuration
@@ -135,7 +136,7 @@ type Config struct {
 
 	// TMDB Settings
 	TMDBAPIKey string `json:"-"`
-	
+
 	// Filtering
 	Filters FilterConfig `json:"filters"`
 
@@ -165,15 +166,15 @@ func Load() (*Config, error) {
 	// 2. Load config.json (or create with defaults if it doesn't exist)
 	cfg := &Config{
 		// Set defaults
-		NZBHydra2URL:             "",
-		AddonPort:                7000,
-		AddonBaseURL:             "http://localhost:7000",
-		LogLevel:                 "INFO",
-		CacheTTLSeconds:          300,
-		ValidationSampleSize:     5,
-		MaxStreams:               6,
-		ProxyPort:                119,
-		ProxyHost:                "0.0.0.0",
+		NZBHydra2URL:         "",
+		AddonPort:            7000,
+		AddonBaseURL:         "http://localhost:7000",
+		LogLevel:             "INFO",
+		CacheTTLSeconds:      300,
+		ValidationSampleSize: 5,
+		MaxStreams:           6,
+		ProxyPort:            119,
+		ProxyHost:            "0.0.0.0",
 		Sorting: SortConfig{
 			ResolutionWeights: map[string]int{
 				"4k":    4000000,
@@ -188,16 +189,16 @@ func Load() (*Config, error) {
 				"AVC":  500,
 			},
 			AudioWeights: map[string]int{
-				"Atmos":   1500,
-				"TrueHD":  1200,
-				"DTS-HD":  1000,
-				"DTS-X":   1000,
-				"DTS":     500,
-				"DD+":     400,
-				"DD":      300,
-				"AC3":     200,
-				"5.1":     500,
-				"7.1":     1000,
+				"Atmos":  1500,
+				"TrueHD": 1200,
+				"DTS-HD": 1000,
+				"DTS-X":  1000,
+				"DTS":    500,
+				"DD+":    400,
+				"DD":     300,
+				"AC3":    200,
+				"5.1":    500,
+				"7.1":    1000,
 			},
 			QualityWeights: map[string]int{
 				"BluRay":  2000,
@@ -205,6 +206,12 @@ func Load() (*Config, error) {
 				"WEBRip":  1200,
 				"HDTV":    1000,
 				"Blu-ray": 2000,
+			},
+			VisualTagWeights: map[string]int{
+				"DV":    1500,
+				"HDR10+": 1200,
+				"HDR":    1000,
+				"3D":     800,
 			},
 			GrabWeight: 0.5,
 			AgeWeight:  1.0,

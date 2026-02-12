@@ -35,6 +35,13 @@ type Client struct {
 	mu                sync.RWMutex
 }
 
+// APIError represents a Newznab API error response
+type APIError struct {
+	XMLName     xml.Name `xml:"error"`
+	Code        int      `xml:"code,attr"`
+	Description string   `xml:"description,attr"`
+}
+
 // Name returns the name of this indexer
 func (c *Client) Name() string {
 	if c.name != "" {
@@ -213,7 +220,29 @@ func (c *Client) Ping() error {
 	return nil
 }
 
-// Search queries the Newznab indexer with pagination support
+// checkNewznabError checks for Newznab error responses and returns appropriate errors
+func (c *Client) checkNewznabError(bodyBytes []byte) error {
+	var apiErr APIError
+	if err := xml.Unmarshal(bodyBytes, &apiErr); err == nil && apiErr.Description != "" {
+		// Parse error code to determine error type
+		switch {
+		case apiErr.Code >= 100 && apiErr.Code <= 199:
+			return fmt.Errorf("%s authentication error (code %d): %s", c.Name(), apiErr.Code, apiErr.Description)
+		case apiErr.Code == 201:
+			return fmt.Errorf("%s request limit reached (code %d): %s", c.Name(), apiErr.Code, apiErr.Description)
+		case apiErr.Code >= 200 && apiErr.Code <= 299:
+			return fmt.Errorf("%s request error (code %d): %s", c.Name(), apiErr.Code, apiErr.Description)
+		case apiErr.Code >= 300 && apiErr.Code <= 399:
+			return fmt.Errorf("%s server error (code %d): %s", c.Name(), apiErr.Code, apiErr.Description)
+		default:
+			return fmt.Errorf("%s API error (code %d): %s", c.Name(), apiErr.Code, apiErr.Description)
+		}
+	}
+	return nil
+}
+
+// Search queries the Newznab indexer
+// The indexer handles pagination internally, we just request what we need
 func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, error) {
 	if err := c.checkAPILimit(); err != nil {
 		return nil, err
@@ -223,153 +252,113 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 	if limit <= 0 {
 		limit = 100 // Default limit
 	}
-
-	maxResults := limit
-	// Use the requested limit as the initial page size, but cap it to avoid common server errors
-	// Many indexers support up to 1000, others 100.
-	pageSize := limit
-	if pageSize > 1000 {
-		pageSize = 1000
+	// Cap at 1000 as most indexers support this max
+	if limit > 1000 {
+		limit = 1000
 	}
 
-	var allItems []indexer.Item
-	offset := 0
-	totalResults := -1 // Unknown initially
+	params := url.Values{}
+	params.Set("apikey", c.apiKey)
+	params.Set("o", "xml")
+	params.Set("limit", fmt.Sprintf("%d", limit))
+	params.Set("offset", "0") // Start from beginning
 
-	for len(allItems) < maxResults {
-		params := url.Values{}
-		params.Set("apikey", c.apiKey)
-		params.Set("o", "xml")
-		params.Set("offset", fmt.Sprintf("%d", offset))
+	// Map categories to Newznab search types
+	if req.Cat == "2000" {
+		params.Set("t", "movie")
+	} else if req.Cat == "5000" {
+		params.Set("t", "tvsearch")
+	} else {
+		params.Set("t", "search")
+	}
 
-		// Map categories to Newznab search types
-		if req.Cat == "2000" {
-			params.Set("t", "movie")
-		} else if req.Cat == "5000" {
-			params.Set("t", "tvsearch")
-		} else {
-			params.Set("t", "search")
+	if req.Query != "" {
+		params.Set("q", req.Query)
+	}
+	if req.IMDbID != "" {
+		imdbID := strings.TrimPrefix(req.IMDbID, "tt")
+		params.Set("imdbid", imdbID)
+	}
+	if req.TMDBID != "" {
+		params.Set("tmdbid", req.TMDBID)
+	}
+	if req.TVDBID != "" {
+		params.Set("tvdbid", req.TVDBID)
+	}
+	if req.Cat != "" {
+		params.Set("cat", req.Cat)
+	}
+	if req.Season != "" {
+		params.Set("season", req.Season)
+	}
+	if req.Episode != "" {
+		params.Set("ep", req.Episode)
+	}
+
+	apiURL := fmt.Sprintf("%s%s?%s", c.baseURL, c.apiPath, params.Encode())
+	logger.Debug("Newznab search request", "indexer", c.Name(), "url", apiURL, "limit", limit)
+
+	resp, err := c.client.Get(apiURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query %s: %w", c.Name(), err)
+	}
+	defer resp.Body.Close()
+
+	// Local increment as fallback
+	c.mu.Lock()
+	c.apiUsed++
+	if c.apiRemaining > 0 {
+		c.apiRemaining--
+	}
+	c.mu.Unlock()
+
+	c.updateUsageFromHeaders(resp.Header)
+
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read %s response: %w", c.Name(), err)
+	}
+
+	// Check for HTTP errors
+	if resp.StatusCode != http.StatusOK {
+		// Try to parse Newznab error response
+		if err := c.checkNewznabError(bodyBytes); err != nil {
+			return nil, err
 		}
+		return nil, fmt.Errorf("%s returned status %d: %s", c.Name(), resp.StatusCode, string(bodyBytes))
+	}
 
-		if req.Query != "" {
-			params.Set("q", req.Query)
-		}
-		if req.IMDbID != "" {
-			imdbID := strings.TrimPrefix(req.IMDbID, "tt")
-			params.Set("imdbid", imdbID)
-		}
-		if req.TMDBID != "" {
-			params.Set("tmdbid", req.TMDBID)
-		}
-		if req.TVDBID != "" {
-			params.Set("tvdbid", req.TVDBID)
-		}
-		if req.Cat != "" {
-			params.Set("cat", req.Cat)
-		}
+	// Check for Newznab API errors in successful HTTP responses
+	if err := c.checkNewznabError(bodyBytes); err != nil {
+		return nil, err
+	}
 
-		params.Set("limit", fmt.Sprintf("%d", pageSize))
+	var result indexer.SearchResponse
+	if err := xml.Unmarshal(bodyBytes, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse %s response: %w", c.Name(), err)
+	}
 
-		if req.Season != "" {
-			params.Set("season", req.Season)
-		}
-		if req.Episode != "" {
-			params.Set("ep", req.Episode)
-		}
+	// Populate SourceIndexer and fix metadata for each item
+	for i := range result.Channel.Items {
+		item := &result.Channel.Items[i]
+		item.SourceIndexer = c
 
-		apiURL := fmt.Sprintf("%s%s?%s", c.baseURL, c.apiPath, params.Encode())
-		logger.Debug("Newznab search request", "indexer", c.Name(), "url", apiURL, "offset", offset)
-
-		resp, err := c.client.Get(apiURL)
-		if err != nil {
-			if len(allItems) > 0 {
-				logger.Warn("Failed to fetch next page", "indexer", c.Name(), "err", err)
-				break
-			}
-			return nil, fmt.Errorf("failed to query %s: %w", c.Name(), err)
-		}
-		defer resp.Body.Close()
-
-		// Local increment as fallback
-		c.mu.Lock()
-		c.apiUsed++
-		if c.apiRemaining > 0 {
-			c.apiRemaining--
-		}
-		c.mu.Unlock()
-
-		c.updateUsageFromHeaders(resp.Header)
-
-		// If headers didn't update remaining, we should at least increment our local usage
-		// but updateUsageFromHeaders is more accurate if headers are present.
-		// Actually, let's manually decrement if it's a success and no headers were found?
-		// No, Newznab almost always has headers.
-
-		bodyBytes, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read %s response: %w", c.Name(), err)
-		}
-
-		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("%s returned status %d: %s", c.Name(), resp.StatusCode, string(bodyBytes))
-		}
-
-		var result indexer.SearchResponse
-		if err := xml.Unmarshal(bodyBytes, &result); err != nil {
-			return nil, fmt.Errorf("failed to parse %s response: %w", c.Name(), err)
-		}
-
-		// Update total if reported
-		if result.Channel.Response.Total > 0 {
-			totalResults = result.Channel.Response.Total
-		}
-
-		newItems := result.Channel.Items
-		if len(newItems) == 0 {
-			break // No more results
-		}
-
-		// Populate SourceIndexer and fix metadata for each item
-		for i := range newItems {
-			item := &newItems[i]
-			item.SourceIndexer = c
-
-			// Fallback size extraction
-			if item.Size <= 0 {
-				if item.Enclosure.Length > 0 {
-					item.Size = item.Enclosure.Length
-				} else if sizeAttr := item.GetAttribute("size"); sizeAttr != "" {
-					fmt.Sscanf(sizeAttr, "%d", &item.Size)
-				}
+		// Fallback size extraction
+		if item.Size <= 0 {
+			if item.Enclosure.Length > 0 {
+				item.Size = item.Enclosure.Length
+			} else if sizeAttr := item.GetAttribute("size"); sizeAttr != "" {
+				fmt.Sscanf(sizeAttr, "%d", &item.Size)
 			}
 		}
-
-		allItems = append(allItems, newItems...)
-
-		// Check if we have more results to fetch
-		if totalResults != -1 && len(allItems) >= totalResults {
-			break
-		}
-
-		// Move offset
-		offset += len(newItems)
-
-		// Sanity check to avoid infinite loops
-		if offset > 5000 {
-			break
-		}
 	}
 
-	// Truncate to requested limit if we fetched more
-	if len(allItems) > maxResults {
-		allItems = allItems[:maxResults]
+	// Truncate to requested limit if indexer returned more
+	if len(result.Channel.Items) > limit {
+		result.Channel.Items = result.Channel.Items[:limit]
 	}
 
-	return &indexer.SearchResponse{
-		Channel: indexer.Channel{
-			Items: allItems,
-		},
-	}, nil
+	return &result, nil
 }
 
 func (c *Client) DownloadNZB(nzbURL string) ([]byte, error) {

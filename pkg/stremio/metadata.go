@@ -61,8 +61,8 @@ func getQualityEmoji(meta *parser.ParsedRelease) string {
 		return "⚡" // REMUX
 	}
 	if strings.Contains(quality, "bluray") || strings.Contains(quality, "blu-ray") {
-		if len(meta.HDR) > 0 {
-			return "🔥" // HDR BluRay
+		if len(meta.HDR) > 0 || meta.ThreeD != "" {
+			return "🔥" // Visual tag BluRay (HDR/3D)
 		}
 		return "💿" // BluRay
 	}
@@ -103,11 +103,18 @@ func buildDetailedDescription(meta *parser.ParsedRelease, sizeGB float64, filena
 		lines = append(lines, strings.Join(line1, " "))
 	}
 
-	// Line 2: HDR + Audio
+	// Line 2: Visual Tags (HDR/3D) + Audio
+	// PTT ThreeD formats: "3D", "3D HSBS", "3D SBS", "3D HOU", "3D OU"
 	line2 := []string{}
-	if len(meta.HDR) > 0 {
-		hdr := strings.Join(meta.HDR, "|")
-		line2 = append(line2, fmt.Sprintf("📺 %s", hdr))
+	visualTags := make([]string, 0)
+	visualTags = append(visualTags, meta.HDR...)
+	if meta.ThreeD != "" {
+		// Preserve the actual 3D format from PTT
+		visualTags = append(visualTags, meta.ThreeD)
+	}
+	if len(visualTags) > 0 {
+		tags := strings.Join(visualTags, "|")
+		line2 = append(line2, fmt.Sprintf("📺 %s", tags))
 	}
 	if len(meta.Audio) > 0 {
 		audio := meta.Audio[0]

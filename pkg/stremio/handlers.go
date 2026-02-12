@@ -843,8 +843,8 @@ func getQualityScore(name string) int {
 		score += 200
 	}
 
-	// HDR bonus
-	if strings.Contains(nameLower, "hdr") || strings.Contains(nameLower, "dv") {
+	// Visual tag bonus (HDR/3D)
+	if strings.Contains(nameLower, "hdr") || strings.Contains(nameLower, "dv") || strings.Contains(nameLower, "3d") {
 		score += 100
 	}
 

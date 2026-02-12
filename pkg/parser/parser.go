@@ -7,6 +7,7 @@ import (
 )
 
 // ParsedRelease contains parsed metadata from a release title
+// Matches PTT parser output structure
 type ParsedRelease struct {
 	Title      string
 	Year       int
@@ -30,6 +31,11 @@ type ParsedRelease struct {
 	Unrated   bool
 	ThreeD    string
 	Size      string
+	
+	// PTT fields we were missing
+	BitDepth  string // e.g., "8bit", "10bit", "12bit"
+	Dubbed    bool   // Dubbed audio track
+	Hardcoded bool   // Hardcoded subtitles
 }
 
 // ParseReleaseTitle parses a release title using go-ptt
@@ -54,6 +60,9 @@ func ParseReleaseTitle(title string) *ParsedRelease {
 		Unrated:    info.Unrated,
 		ThreeD:     info.ThreeD,
 		Size:       info.Size,
+		BitDepth:   info.BitDepth,
+		Dubbed:     info.Dubbed,
+		Hardcoded:  info.Hardcoded,
 	}
 
 	// Convert year from string to int

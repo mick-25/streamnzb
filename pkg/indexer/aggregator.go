@@ -3,7 +3,9 @@ package indexer
 import (
 	"encoding/xml"
 	"fmt"
+	"net/url"
 	"sort"
+	"strings"
 	"streamnzb/pkg/logger"
 	"sync"
 )
@@ -113,21 +115,50 @@ func (a *Aggregator) Search(req SearchRequest) (*SearchResponse, error) {
 		allItems = append(allItems, items...)
 	}
 
-	// Deduplicate based on GUID (if available) or Link
-	// Simple map-based dedup
-	seen := make(map[string]bool)
+	// Deduplicate results using multiple strategies
+	// 1. GUID (most reliable)
+	// 2. Link URL (fallback)
+	// 3. Title + Size (for cases where GUID/Link differ but same release)
+	seenGUID := make(map[string]bool)
+	seenLink := make(map[string]bool)
+	seenTitleSize := make(map[string]bool)
 	uniqueItems := []Item{}
 
 	for _, item := range allItems {
-		key := item.GUID
-		if key == "" {
-			key = item.Link
+		// Normalize title for comparison (lowercase, remove extra spaces)
+		normalizedTitle := strings.ToLower(strings.TrimSpace(item.Title))
+		
+		// Strategy 1: GUID (most reliable)
+		if item.GUID != "" {
+			if seenGUID[item.GUID] {
+				continue
+			}
+			seenGUID[item.GUID] = true
+			uniqueItems = append(uniqueItems, item)
+			continue
 		}
 
-		if !seen[key] {
-			seen[key] = true
+		// Strategy 2: Link URL
+		if item.Link != "" {
+			// Normalize link (remove query params, fragments)
+			normalizedLink := normalizeURL(item.Link)
+			if seenLink[normalizedLink] {
+				continue
+			}
+			seenLink[normalizedLink] = true
 			uniqueItems = append(uniqueItems, item)
+			continue
 		}
+
+		// Strategy 3: Title + Size (last resort for releases without GUID/Link)
+		titleSizeKey := fmt.Sprintf("%s:%d", normalizedTitle, item.Size)
+		if item.Size > 0 && seenTitleSize[titleSizeKey] {
+			continue
+		}
+		if item.Size > 0 {
+			seenTitleSize[titleSizeKey] = true
+		}
+		uniqueItems = append(uniqueItems, item)
 	}
 
 	// Sort by size descending (usually preferred) or published date?
@@ -146,4 +177,15 @@ func (a *Aggregator) Search(req SearchRequest) (*SearchResponse, error) {
 			Items: uniqueItems,
 		},
 	}, nil
+}
+
+// normalizeURL normalizes a URL for deduplication by removing query params and fragments
+func normalizeURL(rawURL string) string {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return strings.ToLower(strings.TrimSpace(rawURL))
+	}
+	// Rebuild URL with just scheme, host, and path
+	normalized := fmt.Sprintf("%s://%s%s", parsed.Scheme, parsed.Host, parsed.Path)
+	return strings.ToLower(strings.TrimSpace(normalized))
 }

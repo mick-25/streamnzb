@@ -187,6 +187,34 @@ func (s *Service) calculateScore(res indexer.Item, p *parser.ParsedRelease) int 
 		}
 	}
 
+	// Visual tag boost (HDR and 3D)
+	// Combine HDR and 3D into visual tags
+	// PTT ThreeD formats: "3D", "3D HSBS", "3D SBS", "3D HOU", "3D OU"
+	if s.SortConfig.VisualTagWeights != nil && len(s.SortConfig.VisualTagWeights) > 0 {
+		visualTags := make([]string, 0)
+		visualTags = append(visualTags, p.HDR...)
+		if p.ThreeD != "" {
+			// Use the actual 3D format, but also check for "3D" weight
+			visualTags = append(visualTags, p.ThreeD)
+		}
+		for _, tag := range visualTags {
+			tagLower := strings.ToLower(tag)
+			for name, weight := range s.SortConfig.VisualTagWeights {
+				nameLower := strings.ToLower(name)
+				// Direct match
+				if strings.Contains(tagLower, nameLower) {
+					attributeBoost += weight
+					break
+				}
+				// Special handling: "3D" weight applies to all 3D formats
+				if nameLower == "3d" && strings.HasPrefix(tagLower, "3d") {
+					attributeBoost += weight
+					break
+				}
+			}
+		}
+	}
+
 	// 3. Age Score
 	ageScore := 0.0
 	if res.PubDate != "" {

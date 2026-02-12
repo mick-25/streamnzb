@@ -11,7 +11,7 @@ const INDEXER_PRESETS = [
     { name: 'Custom Newznab', url: '', api_path: '/api', type: 'newznab' },
     { name: 'Prowlarr', url: '', api_path: '/api', type: 'prowlarr' },
     { name: 'NZBHydra2', url: '', api_path: '/api', type: 'nzbhydra' },
-    { name: 'Easynews (Experimental)', url: '', api_path: '/api', type: 'easynews' },
+    // { name: 'Easynews (Experimental)', url: '', api_path: '/api', type: 'easynews' },
     { name: 'abNZB', url: 'https://abnzb.com', api_path: '/api', type: 'newznab' },
     { name: 'altHUB', url: 'https://api.althub.co.za', api_path: '/api', type: 'newznab' },
     { name: 'AnimeTosho (Usenet)', url: 'https://feed.animetosho.org', api_path: '/api', type: 'newznab' },
