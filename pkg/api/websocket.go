@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"strings"
+	"sync"
 	"time"
 
 	"streamnzb/pkg/auth"
@@ -21,8 +23,6 @@ import (
 	"streamnzb/pkg/tmdb"
 	"streamnzb/pkg/triage"
 	"streamnzb/pkg/validation"
-	"strings"
-	"sync"
 
 	"github.com/gorilla/websocket"
 )
@@ -258,6 +258,35 @@ func (s *Server) handleSaveConfigWS(conn *websocket.Conn, client *Client, payloa
 			})
 			client.send <- WSMessage{Type: "save_status", Payload: errorPayload}
 			return
+		}
+
+		// Clear legacy fields if migrated indexers were removed
+		// Check if migrated Prowlarr indexer was removed
+		hasProwlarrMigrated := false
+		for _, idx := range newCfg.Indexers {
+			if idx.Type == "prowlarr" && (idx.Name == "Prowlarr (Migrated)" || strings.Contains(idx.Name, "Prowlarr")) {
+				hasProwlarrMigrated = true
+				break
+			}
+		}
+		if !hasProwlarrMigrated {
+			// Migrated Prowlarr was removed, clear legacy fields
+			newCfg.ProwlarrAPIKey = ""
+			newCfg.ProwlarrURL = ""
+		}
+
+		// Check if migrated NZBHydra2 indexer was removed
+		hasHydraMigrated := false
+		for _, idx := range newCfg.Indexers {
+			if idx.Type == "nzbhydra" && (idx.Name == "NZBHydra2 (Migrated)" || strings.Contains(idx.Name, "NZBHydra2")) {
+				hasHydraMigrated = true
+				break
+			}
+		}
+		if !hasHydraMigrated {
+			// Migrated NZBHydra2 was removed, clear legacy fields
+			newCfg.NZBHydra2APIKey = ""
+			newCfg.NZBHydra2URL = ""
 		}
 
 		// Update global config

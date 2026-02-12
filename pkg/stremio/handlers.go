@@ -438,16 +438,69 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string, 
 		}(candidate)
 	}
 	
-	// Close result channel when all goroutines finish
+	// Close result channel when all goroutines finish (with timeout to prevent hanging)
+	done := make(chan struct{})
+	channelClosed := false
+	var channelMu sync.Mutex
+	
 	go func() {
 		wg.Wait()
-		close(resultChan)
+		channelMu.Lock()
+		if !channelClosed {
+			close(resultChan) // Close channel when all goroutines finish
+			channelClosed = true
+		}
+		channelMu.Unlock()
+		close(done)
 	}()
 	
-	// Collect all successful results
+	// Collect all successful results with timeout
 	var streams []Stream
-	for stream := range resultChan {
-		streams = append(streams, stream)
+	timeout := time.After(60 * time.Second)
+	
+	collecting := true
+	for collecting {
+		select {
+		case stream, ok := <-resultChan:
+			if !ok {
+				// Channel closed, all results collected
+				collecting = false
+			} else {
+				streams = append(streams, stream)
+			}
+		case <-timeout:
+			// Timeout after 60 seconds to prevent hanging
+			logger.Warn("Stream collection timeout, returning partial results", "count", len(streams))
+			cancel() // Cancel any remaining work
+			// Close channel to unblock any goroutines waiting to write
+			channelMu.Lock()
+			if !channelClosed {
+				close(resultChan)
+				channelClosed = true
+			}
+			channelMu.Unlock()
+			collecting = false
+		case <-ctx.Done():
+			// Context cancelled, return what we have
+			logger.Debug("Stream collection cancelled, returning partial results", "count", len(streams))
+			// Close channel to unblock any goroutines waiting to write
+			channelMu.Lock()
+			if !channelClosed {
+				close(resultChan)
+				channelClosed = true
+			}
+			channelMu.Unlock()
+			collecting = false
+		}
+	}
+	
+	// Wait briefly for goroutines to finish (non-blocking)
+	select {
+	case <-done:
+		// All goroutines finished
+	case <-time.After(1 * time.Second):
+		// Don't wait forever, just log warning
+		logger.Warn("Some validation goroutines may still be running")
 	}
 	
 	// Sort by quality score for display

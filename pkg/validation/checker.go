@@ -96,7 +96,25 @@ func (c *Checker) ValidateNZB(ctx context.Context, nzbData *nzb.NZB) map[string]
 		}(providerName, pool)
 	}
 
-	wg.Wait()
+	// Wait for all validations with timeout to prevent hanging
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	
+	select {
+	case <-done:
+		// All validations completed
+	case <-ctx.Done():
+		// Context cancelled, return partial results
+		logger.Debug("Validation cancelled, returning partial results")
+		return results
+	case <-time.After(30 * time.Second):
+		// Timeout after 30 seconds to prevent hanging
+		logger.Warn("Validation timeout, returning partial results", "providers", len(providers))
+		return results
+	}
 
 	// Cache results
 	c.cache.Set(cacheKey, results)
