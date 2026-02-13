@@ -326,7 +326,30 @@ func (f *File) DownloadSegment(ctx context.Context, index int) ([]byte, error) {
 			continue
 		}
 
-		frame, err := decode.DecodeToBytes(r)
+		// Decode with timeout to prevent indefinite blocking
+		// The connection already has a deadline, but this adds extra safety
+		decodeDone := make(chan struct {
+			frame *decode.Frame
+			err   error
+		}, 1)
+		go func() {
+			frame, err := decode.DecodeToBytes(r)
+			decodeDone <- struct {
+				frame *decode.Frame
+				err   error
+			}{frame, err}
+		}()
+
+		var frame *decode.Frame
+		select {
+		case <-downloadCtx.Done():
+			pool.Put(client)
+			return nil, downloadCtx.Err()
+		case result := <-decodeDone:
+			frame = result.frame
+			err = result.err
+		}
+
 		if err != nil {
 			// Decoding failed (corruption?)
 			pool.Put(client)
