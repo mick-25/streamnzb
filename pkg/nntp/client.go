@@ -161,6 +161,12 @@ func (c *Client) Body(messageID string) (io.Reader, error) {
 		c.conn.EndResponse(id)
 
 		if err == nil {
+			// Set deadline for body read to prevent indefinite blocking
+			// Use a longer timeout (5 minutes) for large segments
+			c.setDeadline()
+			if c.netConn != nil {
+				c.netConn.SetDeadline(time.Now().Add(5 * time.Minute))
+			}
 			// Wrap reader to track metrics
 			return &metricReader{r: c.conn.DotReader(), client: c}, nil
 		}
