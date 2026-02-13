@@ -348,10 +348,11 @@ function App() {
  const getHTTPSLink = () => {
       if (!config) return '#';
       let baseUrl = config.addon_base_url || window.location.origin;
-      // Ensure protocol is https if it's not present (though origin usually has it)
-      // Actually we just want the full manifest URL in HTTP(S) format
       let url = baseUrl.replace(/\/$/, '');
-      // Note: Device tokens are handled via authentication, not in the URL path
+      // Use admin manifest URL when user is admin (has token in path)
+      if (currentUser && currentUser !== 'legacy' && authToken) {
+        return `${url}/${authToken}/manifest.json`;
+      }
       return `${url}/manifest.json`;
   }
 
