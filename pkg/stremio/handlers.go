@@ -1076,3 +1076,10 @@ func (s *StreamMonitor) Read(p []byte) (n int, err error) {
 
 	return n, err
 }
+
+func (s *StreamMonitor) Close() error {
+	if s.ReadSeekCloser != nil {
+		return s.ReadSeekCloser.Close()
+	}
+	return nil
+}
