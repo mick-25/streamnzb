@@ -36,6 +36,10 @@ type SmartStream struct {
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 	closed bool
+
+	// Progress tracking to detect paused streams
+	lastReadTime time.Time
+	lastSegIdx   int // Track which segment was last read to detect progress
 }
 
 func NewSmartStream(f *File, startOffset int64) *SmartStream {
@@ -50,6 +54,7 @@ func NewSmartStream(f *File, startOffset int64) *SmartStream {
 		maxWorkers:      15,               // Default cap
 		ctx:             ctx,
 		cancel:          cancel,
+		lastReadTime:    time.Now(),
 	}
 
 	// Adjust maxWorkers to not exceed available connections
@@ -100,12 +105,23 @@ func (s *SmartStream) Read(p []byte) (n int, err error) {
 	}
 
 	n, err = s.currentReader.Read(p)
+	
+	// Update progress tracking on successful read
+	if n > 0 {
+		s.mu.Lock()
+		s.lastReadTime = time.Now()
+		s.lastSegIdx = s.currentSegIdx
+		s.mu.Unlock()
+	}
+	
 	if err == io.EOF {
 		// Finished current segment, move to next
 		s.closeCurrentSegment()
 
 		s.mu.Lock()
 		s.currentSegIdx++
+		s.lastReadTime = time.Now()
+		s.lastSegIdx = s.currentSegIdx
 		s.mu.Unlock()
 
 		// If we read partial data, return it with nil error (caller will call Read again)
@@ -129,40 +145,44 @@ func (s *SmartStream) advanceToNextSegment() error {
 		return io.EOF
 	}
 
-	// Wait for data
-	for {
-		if data, ok := s.segmentCache[idx]; ok {
-			// Found data!
-			// Create reader
-			// Adjust for startOffset if it's the first segment
-			startPos := int64(0)
-			if idx == s.file.FindSegmentIndex(s.startOffset) {
-				seg := s.file.segments[idx]
-				if s.startOffset > seg.StartOffset {
-					startPos = s.startOffset - seg.StartOffset
+		// Wait for data
+		for {
+			if data, ok := s.segmentCache[idx]; ok {
+				// Found data!
+				// Update progress tracking - we're advancing to a new segment
+				s.lastReadTime = time.Now()
+				s.lastSegIdx = idx
+				
+				// Create reader
+				// Adjust for startOffset if it's the first segment
+				startPos := int64(0)
+				if idx == s.file.FindSegmentIndex(s.startOffset) {
+					seg := s.file.segments[idx]
+					if s.startOffset > seg.StartOffset {
+						startPos = s.startOffset - seg.StartOffset
+					}
 				}
+
+				// Safety check bounds
+				if startPos >= int64(len(data)) {
+					// Should not happen unless offset > segment size?
+					// Just treat as empty
+					s.currentReader = &emptyReader{}
+				} else {
+					s.currentReader = &sliceReader{data: data, pos: startPos}
+				}
+
+				// Remove from cache? Keep until closed?
+				// UsenetReader removes on EOF. We will remove when we close current segment (Next Read)
+				// But for memory safety, we can rely on downloadManager cleaning up?
+				// No, downloadManager fills. We consume.
+				// Ideally we remove from cache NOW so downloadManager can fill more?
+				// Consumed data is returned to user.
+				// Let's keep it in cache until done reading
+
+				s.mu.Unlock()
+				return nil
 			}
-
-			// Safety check bounds
-			if startPos >= int64(len(data)) {
-				// Should not happen unless offset > segment size?
-				// Just treat as empty
-				s.currentReader = &emptyReader{}
-			} else {
-				s.currentReader = &sliceReader{data: data, pos: startPos}
-			}
-
-			// Remove from cache? Keep until closed?
-			// UsenetReader removes on EOF. We will remove when we close current segment (Next Read)
-			// But for memory safety, we can rely on downloadManager cleaning up?
-			// No, downloadManager fills. We consume.
-			// Ideally we remove from cache NOW so downloadManager can fill more?
-			// Consumed data is returned to user.
-			// Let's keep it in cache until done reading
-
-			s.mu.Unlock()
-			return nil
-		}
 
 		// Check if download failed?
 		// Simplification: We wait indefinitely unless closed or ctx dead
@@ -250,8 +270,48 @@ func (s *SmartStream) downloadManager() {
 			bufferUsed += int64(len(data))
 		}
 
-		// If buffer full, wait
+		// If buffer full, check if reader is making progress
 		if bufferUsed > s.maxBufferBytes {
+			// Check if reader has made progress recently (within last 30 seconds)
+			// If not, the stream is likely paused - use timeout to prevent deadlock
+			timeSinceLastRead := time.Since(s.lastReadTime)
+			hasProgress := timeSinceLastRead < 30*time.Second && s.lastSegIdx >= current
+			
+			if !hasProgress {
+				// Stream appears paused - reduce buffer by clearing old segments
+				// Keep only segments near current position to free memory
+				keepAhead := 5 // Keep 5 segments ahead
+				keepBehind := 2 // Keep 2 segments behind (for seeking)
+				clearedAny := false
+				for segIdx := range s.segmentCache {
+					if segIdx < current-keepBehind || segIdx > current+keepAhead {
+						delete(s.segmentCache, segIdx)
+						clearedAny = true
+					}
+				}
+				
+				// Broadcast to wake up any waiting readers after clearing segments
+				if clearedAny {
+					s.downloadCond.Broadcast()
+				}
+				
+				// Wait with timeout to prevent deadlock and allow periodic checks
+				s.mu.Unlock()
+				
+				// Use timer instead of goroutine to avoid leaks
+				timer := time.NewTimer(5 * time.Second)
+				defer timer.Stop()
+				
+				select {
+				case <-s.ctx.Done():
+					return
+				case <-timer.C:
+					// Continue loop to re-check
+				}
+				continue
+			}
+			
+			// Reader is active, wait normally (will be woken by closeCurrentSegment)
 			s.downloadCond.Wait()
 			s.mu.Unlock()
 			continue
