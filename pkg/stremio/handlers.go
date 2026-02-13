@@ -51,10 +51,10 @@ type Server struct {
 // NewServer creates a new Stremio addon server
 func NewServer(cfg *config.Config, baseURL string, port int, indexer indexer.Indexer, validator *validation.Checker,
 	sessionMgr *session.Manager, triageService *triage.Service, availClient *availnzb.Client,
-	tmdbClient *tmdb.Client, tvdbClient *tvdb.Client, deviceManager *auth.DeviceManager) (*Server, error) {
+	tmdbClient *tmdb.Client, tvdbClient *tvdb.Client, deviceManager *auth.DeviceManager, version string) (*Server, error) {
 
 	s := &Server{
-		manifest:       NewManifest(),
+		manifest:       NewManifest(version),
 		baseURL:        baseURL,
 		config:         cfg,
 		indexer:        indexer,
@@ -93,6 +93,16 @@ func (s *Server) SetWebHandler(h http.Handler) {
 // SetAPIHandler sets the handler for API requests
 func (s *Server) SetAPIHandler(h http.Handler) {
 	s.apiHandler = h
+}
+
+// Version returns the addon version (from manifest)
+func (s *Server) Version() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.manifest != nil {
+		return s.manifest.Version
+	}
+	return "dev"
 }
 
 // SetupRoutes configures HTTP routes for the addon
@@ -201,7 +211,11 @@ func (s *Server) handleManifest(w http.ResponseWriter, r *http.Request) {
 	manifest := s.manifest
 	s.mu.RUnlock()
 
-	data, err := manifest.ToJSON()
+	// Configure button (behaviorHints.configurable) only for admin users
+	device, _ := auth.DeviceFromContext(r)
+	isAdmin := device != nil && device.Username == "admin"
+
+	data, err := manifest.ToJSONForDevice(isAdmin)
 	if err != nil {
 		http.Error(w, "Failed to generate manifest", http.StatusInternalServerError)
 		return

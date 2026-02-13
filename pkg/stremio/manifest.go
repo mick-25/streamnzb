@@ -4,18 +4,25 @@ import (
 	"encoding/json"
 )
 
+// ManifestBehaviorHints controls Stremio addon UI (e.g. configure button)
+type ManifestBehaviorHints struct {
+	Configurable          bool `json:"configurable,omitempty"`
+	ConfigurationRequired bool `json:"configurationRequired,omitempty"`
+}
+
 // Manifest represents the Stremio addon manifest
 type Manifest struct {
-	ID          string    `json:"id"`
-	Version     string    `json:"version"`
-	Name        string    `json:"name"`
-	Description string    `json:"description"`
-	Resources   []string  `json:"resources"`
-	Types       []string  `json:"types"`
-	Catalogs    []Catalog `json:"catalogs"`
-	IDPrefixes  []string  `json:"idPrefixes,omitempty"`
-	Background  string    `json:"background,omitempty"`
-	Logo        string    `json:"logo,omitempty"`
+	ID            string                 `json:"id"`
+	Version       string                 `json:"version"`
+	Name          string                 `json:"name"`
+	Description   string                 `json:"description"`
+	Resources     []string               `json:"resources"`
+	Types         []string               `json:"types"`
+	Catalogs      []Catalog              `json:"catalogs"`
+	IDPrefixes    []string               `json:"idPrefixes,omitempty"`
+	Background    string                 `json:"background,omitempty"`
+	Logo          string                 `json:"logo,omitempty"`
+	BehaviorHints *ManifestBehaviorHints `json:"behaviorHints,omitempty"`
 }
 
 // Catalog represents a content catalog
@@ -26,22 +33,36 @@ type Catalog struct {
 }
 
 // NewManifest creates the addon manifest
-func NewManifest() *Manifest {
+func NewManifest(version string) *Manifest {
+	if version == "" {
+		version = "dev"
+	}
 	return &Manifest{
 		ID:          "community.streamnzb",
-		Version:     "0.1.0",
+		Version:     version,
 		Name:        "StreamNZB",
-		Description: "Stream content directly from Usenet via NZBHydra2",
+		Description: "Stream content directly from Usenet",
 		Resources:   []string{"stream"},
 		Types:       []string{"movie", "series"},
 		Catalogs:    []Catalog{},
 		IDPrefixes:  []string{"tt", "tmdb"},
-		Background:  "https://via.placeholder.com/1280x720/1a1a2e/16213e?text=StreamNZB",
-		Logo:        "https://via.placeholder.com/256x256/0f3460/16213e?text=NZB",
+		Logo:        "https://cdn.discordapp.com/icons/1470288400157380710/6f397b4a2e9561dc7ad43526588cfd67.png",
 	}
 }
 
 // ToJSON converts manifest to JSON
 func (m *Manifest) ToJSON() ([]byte, error) {
 	return json.MarshalIndent(m, "", "  ")
+}
+
+// ToJSONForDevice returns manifest JSON with behaviorHints set for the given device.
+// Configurable is true only for admin users (shows configure button in Stremio).
+func (m *Manifest) ToJSONForDevice(isAdmin bool) ([]byte, error) {
+	// Copy base manifest
+	out := *m
+	out.BehaviorHints = &ManifestBehaviorHints{
+		Configurable:          isAdmin,
+		ConfigurationRequired: false,
+	}
+	return json.MarshalIndent(out, "", "  ")
 }

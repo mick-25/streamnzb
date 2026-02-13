@@ -61,6 +61,7 @@ function App() {
   const [ws, setWs] = useState(null)
   const [theme, setTheme] = useState(localStorage.getItem('theme') || 'system')
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
+  const [version, setVersion] = useState(null)
   const hasLoggedOutRef = useRef(false)
   const authCheckTimeoutRef = useRef(null)
   
@@ -69,6 +70,14 @@ function App() {
   
   const MAX_HISTORY = 60
   const MAX_LOGS = 200
+
+  // Fetch app info (version) on mount - public endpoint
+  useEffect(() => {
+    fetch('/api/info')
+      .then(res => res.ok ? res.json() : null)
+      .then(data => data?.version && setVersion(data.version))
+      .catch(() => {})
+  }, [])
 
   // Check authentication on mount - WebSocket will send auth_info on connect
   useEffect(() => {
@@ -226,6 +235,7 @@ function App() {
           }
           case 'auth_info': {
             // Auth info sent on WebSocket connect (replaces /api/auth/check)
+            if (msg.payload?.version) setVersion(msg.payload.version)
             // Ignore if user has explicitly logged out
             if (hasLoggedOutRef.current) {
               socket.close();
@@ -365,7 +375,7 @@ function App() {
 
   // Show login page if not authenticated
   if (!authenticated) {
-    return <Login onLogin={handleLogin} />
+    return <Login onLogin={handleLogin} version={version} />
   }
 
   // Show password change page if password must be changed
@@ -416,7 +426,10 @@ function App() {
             <Zap className="h-6 w-6 text-primary-foreground" />
           </div>
           <div>
-            <h1 className="text-3xl font-bold tracking-tight">StreamNZB</h1>
+            <h1 className="text-3xl font-bold tracking-tight flex items-baseline gap-2">
+              StreamNZB
+              {version && <span className="text-xs font-normal text-muted-foreground">v{version}</span>}
+            </h1>
             <p className="text-sm text-muted-foreground">High-performance Usenet Streaming</p>
           </div>
         </div>

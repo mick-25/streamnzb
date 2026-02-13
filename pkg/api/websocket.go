@@ -118,6 +118,9 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			"username":             client.device.Username,
 			"must_change_password": mustChangePassword,
 		}
+		if s.strmServer != nil {
+			authInfo["version"] = s.strmServer.Version()
+		}
 		authPayload, _ := json.Marshal(authInfo)
 		client.send <- WSMessage{Type: "auth_info", Payload: authPayload}
 	}()

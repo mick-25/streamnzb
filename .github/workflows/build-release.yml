@@ -65,15 +65,33 @@ jobs:
           mkdir -p pkg/web/static
           cp -r frontend/dist/* pkg/web/static/
 
+      - name: Set version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            VERSION="${GITHUB_REF#refs/tags/}"
+            VERSION="${VERSION#v}"
+            echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          else
+            TAG="${{ github.event.inputs.tag_name }}"
+            if [ -n "$TAG" ] && [ "$TAG" != "manual-build" ]; then
+              echo "VERSION=${TAG#v}" >> $GITHUB_OUTPUT
+            else
+              SHORT_SHA="${GITHUB_SHA:0:7}"
+              echo "VERSION=dev-${SHORT_SHA}" >> $GITHUB_OUTPUT
+            fi
+          fi
+
       - name: Build binaries
         run: |
           mkdir -p dist/linux_amd64 dist/linux_arm64 dist/windows_amd64
+          LDFLAGS="-s -w -X main.AvailNZBURL=${{ secrets.AVAILNZB_URL }} -X main.AvailNZBAPIKey=${{ secrets.AVAILNZB_API_KEY }} -X main.TMDBKey=${{ secrets.TMDB_API_KEY }} -X main.TVDBKey=${{ secrets.TVDB_API_KEY }} -X main.Version=${{ steps.version.outputs.VERSION }}"
           # Build for Linux AMD64 (for Docker and Release)
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w -X main.AvailNZBURL=${{ secrets.AVAILNZB_URL }} -X main.AvailNZBAPIKey=${{ secrets.AVAILNZB_API_KEY }} -X main.TMDBKey=${{ secrets.TMDB_API_KEY }} -X main.TVDBKey=${{ secrets.TVDB_API_KEY }}" -o dist/linux_amd64/streamnzb ./cmd/streamnzb
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="$LDFLAGS" -o dist/linux_amd64/streamnzb ./cmd/streamnzb
           # Build for Linux ARM64 (for Docker and Release)
-          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w -X main.AvailNZBURL=${{ secrets.AVAILNZB_URL }} -X main.AvailNZBAPIKey=${{ secrets.AVAILNZB_API_KEY }} -X main.TMDBKey=${{ secrets.TMDB_API_KEY }} -X main.TVDBKey=${{ secrets.TVDB_API_KEY }}" -o dist/linux_arm64/streamnzb ./cmd/streamnzb
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="$LDFLAGS" -o dist/linux_arm64/streamnzb ./cmd/streamnzb
           # Build for Windows AMD64 (Release only)
-          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="-s -w -X main.AvailNZBURL=${{ secrets.AVAILNZB_URL }} -X main.AvailNZBAPIKey=${{ secrets.AVAILNZB_API_KEY }} -X main.TMDBKey=${{ secrets.TMDB_API_KEY }} -X main.TVDBKey=${{ secrets.TVDB_API_KEY }}" -o dist/windows_amd64/streamnzb.exe ./cmd/streamnzb
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="$LDFLAGS" -o dist/windows_amd64/streamnzb.exe ./cmd/streamnzb
 
       - name: Extract metadata (tags, labels) for Docker
         id: meta

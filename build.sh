@@ -16,6 +16,7 @@ mkdir -p pkg/web/static
 cp -r frontend/dist/* pkg/web/static/
 
 echo "Building Go Binary..."
-go build ./cmd/streamnzb/
+VERSION="dev-$(git rev-parse --short HEAD 2>/dev/null || echo 'unknown')"
+go build -ldflags="-X main.Version=$VERSION" ./cmd/streamnzb/
 
 echo "Build Complete!"

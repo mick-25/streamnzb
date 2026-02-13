@@ -86,6 +86,20 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleInfo returns app info (version) - public, no auth
+func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	version := "dev"
+	if s.strmServer != nil {
+		version = s.strmServer.Version()
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"version": version})
+}
+
 // handleAuthCheck checks if user is authenticated
 func (s *Server) handleAuthCheck(w http.ResponseWriter, r *http.Request) {
 	device, ok := auth.DeviceFromContext(r)

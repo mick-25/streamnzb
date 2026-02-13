@@ -242,6 +242,7 @@ func (s *Server) Handler() http.Handler {
 	// Public routes (no auth required)
 	mux.HandleFunc("/api/login", s.handleLogin)
 	mux.HandleFunc("/api/auth/check", s.handleAuthCheck)
+	mux.HandleFunc("/api/info", s.handleInfo)
 
 	// Protected routes (require auth)
 	authMiddleware := auth.AuthMiddleware(s.deviceManager)

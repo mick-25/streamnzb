@@ -34,6 +34,9 @@ var (
 	TMDBKey = ""
 	// TVDB Key via ldflags
 	TVDBKey = ""
+
+	// Version set at build time via -ldflags (from release-please tag, e.g. v1.0.0)
+	Version = "dev"
 )
 
 func main() {
@@ -45,7 +48,7 @@ func main() {
 	// Initialize Logger early so bootstrap can use it
 	logger.Init(env.LogLevel())
 
-	logger.Info("Starting StreamNZB")
+	logger.Info("Starting StreamNZB", "version", Version)
 
 	// Bootstrap application
 	comp, err := initialization.Bootstrap()
@@ -118,7 +121,7 @@ func main() {
 
 	// Initialize Stremio addon server
 	stremioServer, err := stremio.NewServer(cfg, cfg.AddonBaseURL, cfg.AddonPort, comp.Indexer, validator,
-		sessionManager, triageService, availClient, tmdbClient, tvdbClient, deviceManager)
+		sessionManager, triageService, availClient, tmdbClient, tvdbClient, deviceManager, Version)
 	if err != nil {
 		initialization.WaitForInputAndExit(fmt.Errorf("Failed to initialize Stremio server: %v", err))
 	}
