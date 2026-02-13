@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"sync"
+	"time"
 
 	"streamnzb/pkg/decode"
 	"streamnzb/pkg/logger"
@@ -248,6 +249,11 @@ func (f *File) DownloadSegment(ctx context.Context, index int) ([]byte, error) {
 	}
 	f.mu.Unlock()
 
+	// Add overall timeout for segment download (5 minutes max)
+	// This prevents worker goroutines from being tied up indefinitely on slow downloads
+	downloadCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+
 	seg := f.segments[index]
 	tried := make([]bool, len(f.pools))
 	var lastErr error
@@ -256,8 +262,8 @@ func (f *File) DownloadSegment(ctx context.Context, index int) ([]byte, error) {
 	for attempt := 0; attempt < len(f.pools); attempt++ {
 		// Check context before doing work
 		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
+		case <-downloadCtx.Done():
+			return nil, downloadCtx.Err()
 		default:
 		}
 
@@ -269,7 +275,7 @@ func (f *File) DownloadSegment(ctx context.Context, index int) ([]byte, error) {
 		// This enables "Spillover" (Speed) - if Priority 0 is busy, we grab Priority 1 immediately.
 		for i, p := range f.pools {
 			if !tried[i] {
-				if c, ok := p.TryGet(ctx); ok {
+				if c, ok := p.TryGet(downloadCtx); ok {
 					client = c
 					pool = p
 					poolIdx = i
@@ -283,7 +289,7 @@ func (f *File) DownloadSegment(ctx context.Context, index int) ([]byte, error) {
 			for i, p := range f.pools {
 				if !tried[i] {
 					var err error
-					client, err = p.Get(ctx) // Blocking wait
+					client, err = p.Get(downloadCtx) // Blocking wait
 					if err != nil {
 						// This pool is broken (closed?) or context canceled
 						tried[i] = true
