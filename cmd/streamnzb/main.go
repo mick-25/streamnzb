@@ -17,6 +17,7 @@ import (
 	"streamnzb/pkg/stremio"
 	"streamnzb/pkg/tmdb"
 	"streamnzb/pkg/triage"
+	"streamnzb/pkg/env"
 	"streamnzb/pkg/validation"
 	"streamnzb/pkg/web"
 
@@ -39,11 +40,7 @@ func main() {
 	}
 
 	// Initialize Logger early so bootstrap can use it
-	logLevel := os.Getenv("LOG_LEVEL")
-	if logLevel == "" {
-		logLevel = "INFO"
-	}
-	logger.Init(logLevel)
+	logger.Init(env.LogLevel())
 
 	logger.Info("Starting StreamNZB")
 

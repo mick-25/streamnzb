@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"streamnzb/pkg/env"
 	"streamnzb/pkg/paths"
 )
 
@@ -83,8 +84,8 @@ func Init(levelStr string) {
 		level = slog.LevelInfo
 	}
 
-	// Load timezone from TZ environment variable
-	tzEnv := os.Getenv("TZ")
+	// Load timezone from TZ environment variable (single source: pkg/env)
+	tzEnv := env.TZ()
 	var loc *time.Location
 	locationMu.Lock()
 	if tzEnv != "" {

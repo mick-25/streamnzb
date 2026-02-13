@@ -2,13 +2,13 @@ package config
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
+	"strings"
+
+	"streamnzb/pkg/env"
 	"streamnzb/pkg/logger"
 	"streamnzb/pkg/paths"
-	"strings"
 )
 
 // Provider represents a Usenet provider configuration
@@ -146,7 +146,10 @@ type Config struct {
 	LoadedPath string `json:"-"`
 }
 
-// Load loads configuration from config.json, overrides with env vars, and saves
+// Load is intended for startup only. It loads configuration from config.json,
+// applies environment variable overrides once, then saves the merged config.
+// Environment variables are not read again after startup; subsequent reloads
+// use only the saved config.
 // Priority: Environment variables (if not empty) > config.json > defaults
 func Load() (*Config, error) {
 	// 1. Determine config path using common data directory function
@@ -224,80 +227,9 @@ func Load() (*Config, error) {
 		logger.Info("Loaded configuration", "path", configPath)
 	}
 
-	// 3. Override with environment variables (if not empty)
-	if val := os.Getenv("NZBHYDRA2_URL"); val != "" {
-		cfg.NZBHydra2URL = val
-	}
-	if val := os.Getenv("NZBHYDRA2_API_KEY"); val != "" {
-		cfg.NZBHydra2APIKey = val
-	}
-	if val := os.Getenv("PROWLARR_URL"); val != "" {
-		cfg.ProwlarrURL = val
-	}
-	if val := os.Getenv("PROWLARR_API_KEY"); val != "" {
-		cfg.ProwlarrAPIKey = val
-	}
-	if val := os.Getenv("ADDON_PORT"); val != "" {
-		if port, err := strconv.Atoi(val); err == nil {
-			cfg.AddonPort = port
-		}
-	}
-	if val := os.Getenv("ADDON_BASE_URL"); val != "" {
-		cfg.AddonBaseURL = val
-	}
-	if val := os.Getenv("LOG_LEVEL"); val != "" {
-		cfg.LogLevel = val
-	}
-	if val := os.Getenv("CACHE_TTL_SECONDS"); val != "" {
-		if ttl, err := strconv.Atoi(val); err == nil {
-			cfg.CacheTTLSeconds = ttl
-		}
-	}
-	if val := os.Getenv("VALIDATION_SAMPLE_SIZE"); val != "" {
-		if size, err := strconv.Atoi(val); err == nil {
-			cfg.ValidationSampleSize = size
-		}
-	}
-	if val := os.Getenv("AVAILNZB_URL"); val != "" {
-		cfg.AvailNZBURL = val
-	}
-	if val := os.Getenv("AVAILNZB_API_KEY"); val != "" {
-		cfg.AvailNZBAPIKey = val
-	}
-	if val := os.Getenv("TMDB_API_KEY"); val != "" {
-		cfg.TMDBAPIKey = val
-	}
-
-	// Proxy settings
-	if val := os.Getenv("NNTP_PROXY_ENABLED"); val != "" {
-		cfg.ProxyEnabled = val == "true" || val == "1"
-	}
-	if val := os.Getenv("NNTP_PROXY_PORT"); val != "" {
-		if port, err := strconv.Atoi(val); err == nil {
-			cfg.ProxyPort = port
-		}
-	}
-	if val := os.Getenv("NNTP_PROXY_HOST"); val != "" {
-		cfg.ProxyHost = val
-	}
-	if val := os.Getenv("NNTP_PROXY_AUTH_USER"); val != "" {
-		cfg.ProxyAuthUser = val
-	}
-	if val := os.Getenv("NNTP_PROXY_AUTH_PASS"); val != "" {
-		cfg.ProxyAuthPass = val
-	}
-
-	// Load providers from env vars (if any)
-	envProviders := loadProviders()
-	if len(envProviders) > 0 {
-		cfg.Providers = envProviders
-	}
-
-	// Load internal indexers from env vars (if any)
-	envIndexers := loadIndexers()
-	if len(envIndexers) > 0 {
-		cfg.Indexers = envIndexers
-	}
+	// 3. Override with environment variables (single source: pkg/env)
+	overrides, keys := env.ReadConfigOverrides()
+	ApplyEnvOverrides(cfg, overrides, keys)
 
 	// 4. Migrate legacy indexers
 	cfg.MigrateLegacyIndexers()
@@ -412,68 +344,99 @@ func (c *Config) SaveFile(path string) error {
 	return encoder.Encode(c)
 }
 
-// loadProviders loads provider configurations from environment
-func loadProviders() []Provider {
-	var providers []Provider
-	for i := 1; i <= 10; i++ {
-		prefix := fmt.Sprintf("PROVIDER_%d_", i)
-		host := os.Getenv(prefix + "HOST")
-		if host == "" {
-			continue
+// keySet returns true if s is in list.
+func keySet(list []string, s string) bool {
+	for _, k := range list {
+		if k == s {
+			return true
 		}
-		provider := Provider{
-			Name:        getEnv(prefix+"NAME", fmt.Sprintf("Provider %d", i)),
-			Host:        host,
-			Port:        getEnvInt(prefix+"PORT", 563),
-			Username:    os.Getenv(prefix + "USERNAME"),
-			Password:    os.Getenv(prefix + "PASSWORD"),
-			Connections: getEnvInt(prefix+"CONNECTIONS", 10),
-			UseSSL:      getEnvBool(prefix+"SSL", true),
-		}
-		providers = append(providers, provider)
 	}
-	return providers
+	return false
 }
 
-// loadIndexers loads indexer configurations from environment
-func loadIndexers() []IndexerConfig {
-	var indexers []IndexerConfig
-	for i := 1; i <= 10; i++ {
-		prefix := fmt.Sprintf("INDEXER_%d_", i)
-		url := os.Getenv(prefix + "URL")
-		if url == "" {
-			continue
-		}
-		indexer := IndexerConfig{
-			Name:   getEnv(prefix+"NAME", fmt.Sprintf("Indexer %d", i)),
-			URL:    url,
-			APIKey: os.Getenv(prefix + "API_KEY"),
-		}
-		indexers = append(indexers, indexer)
+// ApplyEnvOverrides applies environment-derived overrides to cfg (used at startup only).
+// Only fields present in keys are applied, so env vars override file values per setting.
+func ApplyEnvOverrides(cfg *Config, o env.ConfigOverrides, keys []string) {
+	if keySet(keys, env.KeyNZBHydraURL) {
+		cfg.NZBHydra2URL = o.NZBHydra2URL
 	}
-	return indexers
+	if keySet(keys, env.KeyNZBHydraAPIKey) {
+		cfg.NZBHydra2APIKey = o.NZBHydra2APIKey
+	}
+	if keySet(keys, env.KeyProwlarrURL) {
+		cfg.ProwlarrURL = o.ProwlarrURL
+	}
+	if keySet(keys, env.KeyProwlarrAPIKey) {
+		cfg.ProwlarrAPIKey = o.ProwlarrAPIKey
+	}
+	if keySet(keys, env.KeyAddonPort) {
+		cfg.AddonPort = o.AddonPort
+	}
+	if keySet(keys, env.KeyAddonBaseURL) {
+		cfg.AddonBaseURL = o.AddonBaseURL
+	}
+	if keySet(keys, env.KeyLogLevel) {
+		cfg.LogLevel = o.LogLevel
+	}
+	if keySet(keys, env.KeyCacheTTL) {
+		cfg.CacheTTLSeconds = o.CacheTTLSeconds
+	}
+	if keySet(keys, env.KeyValidationSize) {
+		cfg.ValidationSampleSize = o.ValidationSampleSize
+	}
+	if o.AvailNZBURL != "" {
+		cfg.AvailNZBURL = o.AvailNZBURL
+	}
+	if o.AvailNZBAPIKey != "" {
+		cfg.AvailNZBAPIKey = o.AvailNZBAPIKey
+	}
+	if o.TMDBAPIKey != "" {
+		cfg.TMDBAPIKey = o.TMDBAPIKey
+	}
+	if keySet(keys, env.KeyProxyEnabled) {
+		cfg.ProxyEnabled = o.ProxyEnabled
+	}
+	if keySet(keys, env.KeyProxyPort) {
+		cfg.ProxyPort = o.ProxyPort
+	}
+	if keySet(keys, env.KeyProxyHost) {
+		cfg.ProxyHost = o.ProxyHost
+	}
+	if keySet(keys, env.KeyProxyAuthUser) {
+		cfg.ProxyAuthUser = o.ProxyAuthUser
+	}
+	if keySet(keys, env.KeyProxyAuthPass) {
+		cfg.ProxyAuthPass = o.ProxyAuthPass
+	}
+	if keySet(keys, env.KeyProviders) {
+		cfg.Providers = make([]Provider, len(o.Providers))
+		for i, p := range o.Providers {
+			cfg.Providers[i] = Provider{
+				Name:        p.Name,
+				Host:        p.Host,
+				Port:        p.Port,
+				Username:    p.Username,
+				Password:    p.Password,
+				Connections: p.Connections,
+				UseSSL:      p.UseSSL,
+			}
+		}
+	}
+	if keySet(keys, env.KeyIndexers) {
+		cfg.Indexers = make([]IndexerConfig, len(o.Indexers))
+		for i, idx := range o.Indexers {
+			cfg.Indexers[i] = IndexerConfig{
+				Name:   idx.Name,
+				URL:    idx.URL,
+				APIKey: idx.APIKey,
+				Type:   "newznab",
+			}
+		}
+	}
 }
 
-// Helper functions (Unchanged)
-func getEnv(key, defaultValue string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
-	}
-	return defaultValue
-}
-
-func getEnvInt(key string, defaultValue int) int {
-	if value := os.Getenv(key); value != "" {
-		if i, err := strconv.Atoi(value); err == nil {
-			return i
-		}
-	}
-	return defaultValue
-}
-
-func getEnvBool(key string, defaultValue bool) bool {
-	if value := os.Getenv(key); value != "" {
-		return strings.ToLower(value) == "true" || value == "1"
-	}
-	return defaultValue
+// GetEnvOverrideKeys returns config JSON keys that have environment variable overrides set.
+// These values will be overwritten on next restart. Used by the UI to show warnings.
+func GetEnvOverrideKeys() []string {
+	return env.OverrideKeys()
 }

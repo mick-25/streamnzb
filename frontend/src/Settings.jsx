@@ -11,7 +11,7 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { Form, FormField, FormItem, FormLabel, FormControl, FormMessage, FormDescription } from "@/components/ui/form"
 import { PasswordInput } from "@/components/ui/password-input"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
-import { Trash2, Plus, Loader2, RotateCcw, Info, AlertCircle, Check, Key, Copy } from "lucide-react"
+import { Trash2, Plus, Loader2, RotateCcw, Info, AlertCircle, Check, Key, Copy, AlertTriangle } from "lucide-react"
 import { FiltersSection } from "@/components/FiltersSection"
 import { SortingSection } from "@/components/SortingSection"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
@@ -26,6 +26,17 @@ import { IndexerSettings } from "@/components/IndexerSettings"
 import { ProviderSettings } from "@/components/ProviderSettings"
 import DeviceManagement from "@/components/DeviceManagement"
 
+
+// Shown under a setting when an env var will overwrite it on restart
+function EnvOverrideNote({ show }) {
+  if (!show) return null
+  return (
+    <p className="text-xs text-amber-600 dark:text-amber-500 flex items-center gap-1 mt-1">
+      <AlertTriangle className="h-3.5 w-3 shrink-0" />
+      Overwritten by environment variable on restart.
+    </p>
+  )
+}
 
 function Settings({ initialConfig, sendCommand, saveStatus, isSaving, onClose, adminToken }) {
   const [loading, setLoading] = useState(!initialConfig)
@@ -126,6 +137,9 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, onClose, a
     }
   })
 
+  // Keys that have env var overrides (overwritten on restart) - for showing warnings
+  const envOverrides = initialConfig?.env_overrides ?? []
+
   // Destructure for easy access
   const { control, handleSubmit, reset, setError, formState, setValue, watch, getValues } = form
   const { fields, append, remove } = useFieldArray({
@@ -213,8 +227,9 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, onClose, a
         blocked_groups: []
       }
 
+      const { env_overrides: _envOverrides, ...configForForm } = initialConfig
       const formattedData = {
-        ...initialConfig,
+        ...configForForm,
         addon_port: Number(initialConfig.addon_port),
         proxy_port: Number(initialConfig.proxy_port),
         cache_ttl_seconds: Number(initialConfig.cache_ttl_seconds),
@@ -448,6 +463,7 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, onClose, a
                                                             <Input placeholder="http://localhost:7000" {...field} />
                                                         </FormControl>
                                                         <FormMessage />
+                                                        <EnvOverrideNote show={envOverrides.includes('addon_base_url')} />
                                                     </FormItem>
                                                 )}
                                             />
@@ -461,6 +477,7 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, onClose, a
                                                             <Input type="number" {...field} onChange={e => field.onChange(e.target.valueAsNumber)} />
                                                         </FormControl>
                                                         <FormMessage />
+                                                        <EnvOverrideNote show={envOverrides.includes('addon_port')} />
                                                     </FormItem>
                                                 )}
                                             />
@@ -597,6 +614,12 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, onClose, a
                                     <CardHeader>
                                         <CardTitle className="text-lg">NNTP Proxy Server</CardTitle>
                                         <CardDescription>Allow other apps (SABnzbd, NZBGet) to use StreamNZB as a localized news server.</CardDescription>
+                                        {(envOverrides.includes('proxy_enabled') || envOverrides.includes('proxy_port') || envOverrides.includes('proxy_host') || envOverrides.includes('proxy_auth_user') || envOverrides.includes('proxy_auth_pass')) && (
+                                            <p className="text-xs text-amber-600 dark:text-amber-500 flex items-center gap-1 mt-1">
+                                                <AlertTriangle className="h-3.5 w-3 shrink-0" />
+                                                Some settings overwritten by environment variables (NNTP_PROXY_*) on restart.
+                                            </p>
+                                        )}
                                     </CardHeader>
                                     <CardContent className="grid gap-4">
                                         <FormField
@@ -663,7 +686,7 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, onClose, a
                                                     <FormField
                                                         control={control}
                                                         name="proxy_auth_pass"
-                                                        render={({ field}) => (
+                                                        render={({ field }) => (
                                                             <FormItem>
                                                                 <FormLabel>Proxy Password</FormLabel>
                                                                 <FormControl>
@@ -681,6 +704,14 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, onClose, a
                             </TabsContent>
 
                             <TabsContent value="indexers" className="space-y-6">
+                                {envOverrides.includes('indexers') && (
+                                    <div className="rounded-lg border border-amber-200 bg-amber-50 dark:border-amber-900 dark:bg-amber-950/40 p-3">
+                                        <p className="text-sm text-amber-800 dark:text-amber-200 flex items-center gap-2">
+                                            <AlertTriangle className="h-4 w-4 shrink-0" />
+                                            Indexer list is overwritten by environment variables (INDEXER_1_*, etc.) on restart.
+                                        </p>
+                                    </div>
+                                )}
                                 <IndexerSettings
                                     control={control}
                                     indexerFields={indexerFields}
@@ -718,6 +749,7 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, onClose, a
                                                     </select>
                                                 </div>
                                                 <FormMessage />
+                                                <EnvOverrideNote show={envOverrides.includes('log_level')} />
                                             </FormItem>
                                         )}
                                     />
@@ -746,6 +778,7 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, onClose, a
                                                     Cache duration in seconds (default: 300)
                                                 </FormDescription>
                                                 <FormMessage />
+                                                <EnvOverrideNote show={envOverrides.includes('cache_ttl_seconds')} />
                                             </FormItem>
                                         )}
                                     />
@@ -776,6 +809,7 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, onClose, a
                                                     Segments to check per NZB (default: 5)
                                                 </FormDescription>
                                                 <FormMessage />
+                                                <EnvOverrideNote show={envOverrides.includes('validation_sample_size')} />
                                             </FormItem>
                                         )}
                                     />
@@ -814,6 +848,14 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, onClose, a
                             </TabsContent>
 
                             <TabsContent value="providers" className="space-y-6">
+                                {envOverrides.includes('providers') && (
+                                    <div className="rounded-lg border border-amber-200 bg-amber-50 dark:border-amber-900 dark:bg-amber-950/40 p-3">
+                                        <p className="text-sm text-amber-800 dark:text-amber-200 flex items-center gap-2">
+                                            <AlertTriangle className="h-4 w-4 shrink-0" />
+                                            Provider list is overwritten by environment variables (PROVIDER_1_*, etc.) on restart.
+                                        </p>
+                                    </div>
+                                )}
                                 <ProviderSettings
                                     control={control}
                                     fields={fields}

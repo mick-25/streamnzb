@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"streamnzb/pkg/initialization"
 	"streamnzb/pkg/logger"
 	"streamnzb/pkg/nntp"
+	"streamnzb/pkg/paths"
 	"streamnzb/pkg/nzbhydra"
 	"streamnzb/pkg/prowlarr"
 	"streamnzb/pkg/tmdb"
@@ -200,6 +202,12 @@ func (s *Server) sendStats(client *Client) {
 	}
 }
 
+// configPayload is sent to the client; includes env_overrides for admin so the UI can show warnings
+type configPayload struct {
+	config.Config
+	EnvOverrides []string `json:"env_overrides,omitempty"`
+}
+
 func (s *Server) sendConfig(client *Client) {
 	// Admin always gets global config, devices get merged config
 	var cfg config.Config
@@ -221,7 +229,14 @@ func (s *Server) sendConfig(client *Client) {
 		cfg = *s.config
 	}
 
-	payload, _ := json.Marshal(cfg)
+	var payload []byte
+	if client.device != nil && client.device.Username == "admin" {
+		envKeys := config.GetEnvOverrideKeys()
+		pl := configPayload{Config: cfg, EnvOverrides: envKeys}
+		payload, _ = json.Marshal(pl)
+	} else {
+		payload, _ = json.Marshal(cfg)
+	}
 	select {
 	case client.send <- WSMessage{Type: "config", Payload: payload}:
 	default:
@@ -289,6 +304,15 @@ func (s *Server) handleSaveConfigWS(conn *websocket.Conn, client *Client, payloa
 			newCfg.NZBHydra2URL = ""
 		}
 
+		// Set LoadedPath so Save() writes to the same path (env vars are not re-applied on save)
+		s.mu.RLock()
+		currentLoadedPath := s.config.LoadedPath
+		s.mu.RUnlock()
+		if currentLoadedPath == "" {
+			currentLoadedPath = filepath.Join(paths.GetDataDir(), "config.json")
+		}
+		newCfg.LoadedPath = currentLoadedPath
+
 		// Update global config
 		s.mu.Lock()
 		s.config = &newCfg
@@ -299,15 +323,14 @@ func (s *Server) handleSaveConfigWS(conn *websocket.Conn, client *Client, payloa
 			return
 		}
 
-		// Reload components with new config
+		// Reload components from the saved config only (no env var reload)
 		go func() {
-			comp, err := initialization.Bootstrap()
+			comp, err := initialization.BuildComponents(&newCfg)
 			if err != nil {
-				log.Printf("[Reload] Bootstrap failed: %v", err)
+				log.Printf("[Reload] BuildComponents failed: %v", err)
 				return
 			}
 
-			// Build dependencies for Stremio Server reload
 			validator := validation.NewChecker(comp.ProviderPools, 24*time.Hour, 10, 5)
 			triageService := triage.NewService(
 				&comp.Config.Filters,
