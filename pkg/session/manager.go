@@ -262,7 +262,10 @@ func (m *Manager) cleanup() {
 	now := time.Now()
 	for id, session := range m.sessions {
 		session.mu.Lock()
-		if now.Sub(session.LastAccess) > m.ttl {
+		// Don't clean up sessions with active playback
+		// This prevents cancelling streams that are currently being served
+		hasActivePlayback := session.ActivePlays > 0 || len(session.Clients) > 0
+		if !hasActivePlayback && now.Sub(session.LastAccess) > m.ttl {
 			session.Close()
 			delete(m.sessions, id)
 		}
