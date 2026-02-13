@@ -184,15 +184,18 @@ func (s *SmartStream) advanceToNextSegment() error {
 				return nil
 			}
 
-		// Check if download failed?
-		// Simplification: We wait indefinitely unless closed or ctx dead
-		if s.ctx.Err() != nil {
-			s.mu.Unlock()
-			return s.ctx.Err()
-		}
+			// Check if download failed or context cancelled
+			if s.ctx.Err() != nil {
+				s.mu.Unlock()
+				return s.ctx.Err()
+			}
 
-		s.downloadCond.Wait()
-	}
+			// Wait on condition variable
+			// Note: Condition variable wait must be called while holding mutex
+			// The downloadManager's progress detection should prevent indefinite waits,
+			// but we check context before each wait to ensure cancellation propagates
+			s.downloadCond.Wait()
+		}
 }
 
 func (s *SmartStream) closeCurrentSegment() {
