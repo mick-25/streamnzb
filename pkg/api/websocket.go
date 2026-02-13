@@ -23,6 +23,7 @@ import (
 	"streamnzb/pkg/nzbhydra"
 	"streamnzb/pkg/prowlarr"
 	"streamnzb/pkg/tmdb"
+	"streamnzb/pkg/tvdb"
 	"streamnzb/pkg/triage"
 	"streamnzb/pkg/validation"
 
@@ -338,8 +339,13 @@ func (s *Server) handleSaveConfigWS(conn *websocket.Conn, client *Client, payloa
 			)
 			availClient := availnzb.NewClient(comp.Config.AvailNZBURL, comp.Config.AvailNZBAPIKey)
 			tmdbClient := tmdb.NewClient(comp.Config.TMDBAPIKey)
+			dataDir := filepath.Dir(comp.Config.LoadedPath)
+			if dataDir == "" {
+				dataDir, _ = os.Getwd()
+			}
+			tvdbClient := tvdb.NewClient(comp.Config.TVDBAPIKey, dataDir)
 
-			s.Reload(comp.Config, comp.ProviderPools, comp.Indexer, validator, triageService, availClient, tmdbClient)
+			s.Reload(comp.Config, comp.ProviderPools, comp.Indexer, validator, triageService, availClient, tmdbClient, tvdbClient)
 			log.Printf("[Reload] Configuration reloaded successfully")
 		}()
 

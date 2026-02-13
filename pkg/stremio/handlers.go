@@ -25,6 +25,7 @@ import (
 	"streamnzb/pkg/session"
 	"streamnzb/pkg/tmdb"
 	"streamnzb/pkg/triage"
+	"streamnzb/pkg/tvdb"
 	"streamnzb/pkg/unpack"
 	"streamnzb/pkg/validation"
 )
@@ -41,6 +42,7 @@ type Server struct {
 	triageService  *triage.Service
 	availClient    *availnzb.Client
 	tmdbClient     *tmdb.Client
+	tvdbClient     *tvdb.Client
 	deviceManager  *auth.DeviceManager
 	webHandler     http.Handler
 	apiHandler     http.Handler
@@ -49,7 +51,7 @@ type Server struct {
 // NewServer creates a new Stremio addon server
 func NewServer(cfg *config.Config, baseURL string, port int, indexer indexer.Indexer, validator *validation.Checker,
 	sessionMgr *session.Manager, triageService *triage.Service, availClient *availnzb.Client,
-	tmdbClient *tmdb.Client, deviceManager *auth.DeviceManager) (*Server, error) {
+	tmdbClient *tmdb.Client, tvdbClient *tvdb.Client, deviceManager *auth.DeviceManager) (*Server, error) {
 
 	s := &Server{
 		manifest:       NewManifest(),
@@ -61,6 +63,7 @@ func NewServer(cfg *config.Config, baseURL string, port int, indexer indexer.Ind
 		triageService:  triageService,
 		availClient:    availClient,
 		tmdbClient:     tmdbClient,
+		tvdbClient:     tvdbClient,
 		deviceManager:  deviceManager,
 	}
 
@@ -293,14 +296,25 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string, 
 	} else {
 		req.Cat = "5000" // TV category
 
-		// Attempt to resolve TVDB ID using TMDB (if available) for better indexer results
-		if req.IMDbID != "" && req.TVDBID == "" && s.tmdbClient != nil {
-			tvdbID, err := s.tmdbClient.ResolveTVDBID(req.IMDbID)
-			if err == nil && tvdbID != "" {
+		// Attempt to resolve TVDB ID for better indexer results (TVDB first, TMDB as fallback)
+		if req.IMDbID != "" && req.TVDBID == "" {
+			var tvdbID string
+			var err error
+			if s.tvdbClient != nil {
+				tvdbID, err = s.tvdbClient.ResolveTVDBID(req.IMDbID)
+				if err != nil {
+					logger.Debug("TVDB failed to resolve TVDB ID, trying TMDB fallback", "imdb", req.IMDbID, "err", err)
+				}
+			}
+			if (tvdbID == "" || err != nil) && s.tmdbClient != nil {
+				tvdbID, err = s.tmdbClient.ResolveTVDBID(req.IMDbID)
+				if err != nil {
+					logger.Debug("Failed to resolve TVDB ID", "err", err)
+				}
+			}
+			if tvdbID != "" {
 				req.TVDBID = tvdbID
 				req.IMDbID = ""
-			} else if err != nil {
-				logger.Debug("Failed to resolve TVDB ID", "err", err)
 			}
 		}
 	}
@@ -1002,7 +1016,7 @@ func forceDisconnect(w http.ResponseWriter, baseURL string) {
 
 // Reload updates the server components at runtime
 func (s *Server) Reload(baseURL string, indexer indexer.Indexer, validator *validation.Checker,
-	triage *triage.Service, avail *availnzb.Client, tmdbClient *tmdb.Client, deviceManager *auth.DeviceManager) {
+	triage *triage.Service, avail *availnzb.Client, tmdbClient *tmdb.Client, tvdbClient *tvdb.Client, deviceManager *auth.DeviceManager) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -1012,6 +1026,7 @@ func (s *Server) Reload(baseURL string, indexer indexer.Indexer, validator *vali
 	s.triageService = triage
 	s.availClient = avail
 	s.tmdbClient = tmdbClient
+	s.tvdbClient = tvdbClient
 	s.deviceManager = deviceManager
 	// Note: sessionManager pools are updated separately via sessionManager.UpdatePools
 }

@@ -10,6 +10,7 @@ import (
 	"streamnzb/pkg/api"
 	"streamnzb/pkg/auth"
 	"streamnzb/pkg/availnzb"
+	"streamnzb/pkg/env"
 	"streamnzb/pkg/initialization"
 	"streamnzb/pkg/logger"
 	"streamnzb/pkg/nntp/proxy"
@@ -17,7 +18,7 @@ import (
 	"streamnzb/pkg/stremio"
 	"streamnzb/pkg/tmdb"
 	"streamnzb/pkg/triage"
-	"streamnzb/pkg/env"
+	"streamnzb/pkg/tvdb"
 	"streamnzb/pkg/validation"
 	"streamnzb/pkg/web"
 
@@ -31,6 +32,8 @@ var (
 
 	// TMDB Key via ldflags
 	TMDBKey = ""
+	// TVDB Key via ldflags
+	TVDBKey = ""
 )
 
 func main() {
@@ -86,6 +89,12 @@ func main() {
 	// Initialize AvailNZB client
 	availClient := availnzb.NewClient(availNZBUrl, availNZBAPIKey)
 
+	// Data directory for state.json (TVDB token, devices, etc.)
+	dataDir := filepath.Dir(cfg.LoadedPath)
+	if dataDir == "" || dataDir == "." {
+		dataDir, _ = os.Getwd()
+	}
+
 	// Initialize TMDB client
 	// Prefer Env Var, fallback to ldflag
 	tmdbKey := cfg.TMDBAPIKey
@@ -94,12 +103,14 @@ func main() {
 	}
 	tmdbClient := tmdb.NewClient(tmdbKey)
 
-	// Initialize User Manager (needed before Stremio server)
-	dataDir := filepath.Dir(cfg.LoadedPath)
-	if dataDir == "" || dataDir == "." {
-		// Fallback to current directory if no config path
-		dataDir, _ = os.Getwd()
+	// Initialize TVDB client (fallback for TMDB when resolving IMDb -> TVDB ID)
+	tvdbKey := cfg.TVDBAPIKey
+	if tvdbKey == "" {
+		tvdbKey = TVDBKey
 	}
+	tvdbClient := tvdb.NewClient(tvdbKey, dataDir)
+
+	// Initialize User Manager (needed before Stremio server)
 	deviceManager, err := auth.GetDeviceManager(dataDir)
 	if err != nil {
 		initialization.WaitForInputAndExit(fmt.Errorf("Failed to initialize device manager: %v", err))
@@ -107,7 +118,7 @@ func main() {
 
 	// Initialize Stremio addon server
 	stremioServer, err := stremio.NewServer(cfg, cfg.AddonBaseURL, cfg.AddonPort, comp.Indexer, validator,
-		sessionManager, triageService, availClient, tmdbClient, deviceManager)
+		sessionManager, triageService, availClient, tmdbClient, tvdbClient, deviceManager)
 	if err != nil {
 		initialization.WaitForInputAndExit(fmt.Errorf("Failed to initialize Stremio server: %v", err))
 	}

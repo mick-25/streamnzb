@@ -136,6 +136,9 @@ type Config struct {
 	// TMDB Settings
 	TMDBAPIKey string `json:"-"`
 
+	// TVDB Settings
+	TVDBAPIKey string `json:"-"`
+
 	// Filtering
 	Filters FilterConfig `json:"filters"`
 
@@ -205,7 +208,7 @@ func Load() (*Config, error) {
 				"Blu-ray": 2000,
 			},
 			VisualTagWeights: map[string]int{
-				"DV":    1500,
+				"DV":     1500,
 				"HDR10+": 1200,
 				"HDR":    1000,
 				"3D":     800,
@@ -392,6 +395,9 @@ func ApplyEnvOverrides(cfg *Config, o env.ConfigOverrides, keys []string) {
 	}
 	if o.TMDBAPIKey != "" {
 		cfg.TMDBAPIKey = o.TMDBAPIKey
+	}
+	if o.TVDBAPIKey != "" {
+		cfg.TVDBAPIKey = o.TVDBAPIKey
 	}
 	if keySet(keys, env.KeyProxyEnabled) {
 		cfg.ProxyEnabled = o.ProxyEnabled

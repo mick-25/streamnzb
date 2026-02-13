@@ -23,6 +23,7 @@ const (
 	AvailNZBURL              = "AVAILNZB_URL"
 	AvailNZBAPIKey           = "AVAILNZB_API_KEY"
 	TMDBAPIKey               = "TMDB_API_KEY"
+	TVDBAPIKey               = "TVDB_API_KEY"
 	NNTPProxyEnabled         = "NNTP_PROXY_ENABLED"
 	NNTPProxyPort            = "NNTP_PROXY_PORT"
 	NNTPProxyHost            = "NNTP_PROXY_HOST"
@@ -98,6 +99,7 @@ type ConfigOverrides struct {
 	AvailNZBURL             string
 	AvailNZBAPIKey          string
 	TMDBAPIKey              string
+	TVDBAPIKey              string
 	ProxyEnabled            bool
 	ProxyPort               int
 	ProxyHost               string
@@ -164,6 +166,9 @@ func ReadConfigOverrides() (ConfigOverrides, []string) {
 	}
 	if v := os.Getenv(TMDBAPIKey); v != "" {
 		o.TMDBAPIKey = v
+	}
+	if v := os.Getenv(TVDBAPIKey); v != "" {
+		o.TVDBAPIKey = v
 	}
 	if v := os.Getenv(NNTPProxyEnabled); v != "" {
 		o.ProxyEnabled = v == "true" || v == "1"
