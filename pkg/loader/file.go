@@ -343,7 +343,9 @@ func (f *File) DownloadSegment(ctx context.Context, index int) ([]byte, error) {
 		var frame *decode.Frame
 		select {
 		case <-downloadCtx.Done():
-			pool.Put(client)
+			// We did not consume the body; reusing this client would leave the connection
+			// in a bad state and can cause panics in Group()/ReadCodeLine. Discard it.
+			pool.Discard(client)
 			return nil, downloadCtx.Err()
 		case result := <-decodeDone:
 			frame = result.frame

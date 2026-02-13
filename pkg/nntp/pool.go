@@ -240,6 +240,16 @@ func (p *ClientPool) Put(c *Client) {
 	}
 }
 
+// Discard closes the client and releases its slot. Use when the connection cannot be reused
+// (e.g. body was not fully read), so the next user does not get a connection in a bad state.
+func (p *ClientPool) Discard(c *Client) {
+	if c == nil {
+		return
+	}
+	c.Quit()
+	p.slots <- struct{}{}
+}
+
 // InitializedPool creates 'count' connections immediately. (Legacy/Eager)
 func NewInitializedClientPool(host string, port int, ssl bool, user, pass string, count int) (*ClientPool, error) {
 	p := NewClientPool(host, port, ssl, user, pass, count)
