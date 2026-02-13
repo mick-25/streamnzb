@@ -795,6 +795,14 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 	s.sessionManager.StartPlayback(sessionID, clientIP)
 	defer s.sessionManager.EndPlayback(sessionID, clientIP)
 
+	// Cancel session context when HTTP request is cancelled (client disconnects)
+	// This ensures stream operations stop when client disconnects
+	go func() {
+		<-r.Context().Done()
+		logger.Debug("HTTP request cancelled, cancelling session context", "session", sessionID)
+		sess.Close()
+	}()
+
 	// Wrap stream with monitor to keep session alive during playback
 	monitoredStream := &StreamMonitor{
 		ReadSeekCloser: stream,
