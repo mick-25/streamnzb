@@ -136,8 +136,8 @@ Alternatively you can set environment variables to configure the application on 
 - Check provider connection limits in **Settings → Providers**
 
 ## Troubleshooting Playback Issues
-**Why am I seeing Big Buck Bunny instead of my movie?**
-Big Buck Bunny appears when StreamNZB cannot play the selected content. Common causes:
+**Why am I seeing a "Stream Unavailable" video instead of my movie?**
+A failure video plays when StreamNZB cannot play the selected content. Common causes:
 ### Archive Issues
 - ❌ **Compressed archive** - Only uncompressed (STORE mode) archives work
   - *Solution:* Try a different release or uploader

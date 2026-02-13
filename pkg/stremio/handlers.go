@@ -106,6 +106,12 @@ func (s *Server) SetupRoutes(mux *http.ServeMux) {
 		path := r.URL.Path
 		var authenticatedDevice *auth.Device
 
+		// Serve embedded error video directly - bypass token logic so /error/... is never treated as a device token
+		if path == "/error/failure.mp4" && webHandler != nil {
+			webHandler.ServeHTTP(w, r)
+			return
+		}
+
 		// Determine if this is a Stremio route that requires device token
 		isStremioRoute := path == "/manifest.json" || strings.HasPrefix(path, "/stream/") || strings.HasPrefix(path, "/play/") || strings.HasPrefix(path, "/debug/play")
 
@@ -707,7 +713,7 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 			if sess.NZB != nil {
 				s.validator.InvalidateCache(sess.NZB.Hash())
 			}
-			forceDisconnect(w)
+			forceDisconnect(w, s.baseURL)
 			return
 		}
 	}
@@ -739,7 +745,7 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 			s.validator.InvalidateCache(sess.NZB.Hash())
 		}
 
-		forceDisconnect(w)
+		forceDisconnect(w, s.baseURL)
 		return
 	}
 
@@ -983,13 +989,10 @@ func getQualityScore(name string) int {
 	return score
 }
 
-// forceDisconnect redirects to a verified valid public video file.
-// If Stremio plays this video, it finishes naturally and closes the player.
-// We use Big Buck Bunny (10s) because it is a proven reliable URL that Stremio accepts.
-// TODO: Replace with a smaller, hosted "Stream Unavailable" video if possible.
-var errorVideoURL = "https://test-videos.co.uk/vids/bigbuckbunny/mp4/h264/360/Big_Buck_Bunny_360_10s_1MB.mp4"
-
-func forceDisconnect(w http.ResponseWriter) {
+// forceDisconnect redirects to the embedded failure video when streaming is unavailable.
+// The video is packaged with the binary and served from /error/failure.mp4.
+func forceDisconnect(w http.ResponseWriter, baseURL string) {
+	errorVideoURL := strings.TrimSuffix(baseURL, "/") + "/error/failure.mp4"
 	logger.Info("Redirecting to error video", "url", errorVideoURL)
 
 	w.Header().Set("Connection", "close")
