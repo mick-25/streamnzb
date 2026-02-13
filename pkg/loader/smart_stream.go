@@ -286,10 +286,23 @@ func (s *SmartStream) downloadManager() {
 				keepAhead := 5 // Keep 5 segments ahead
 				keepBehind := 2 // Keep 2 segments behind (for seeking)
 				clearedAny := false
+				// Track segments being cleared so we can cancel their downloads
+				clearedSegs := make(map[int]bool)
 				for segIdx := range s.segmentCache {
 					if segIdx < current-keepBehind || segIdx > current+keepAhead {
 						delete(s.segmentCache, segIdx)
+						clearedSegs[segIdx] = true
 						clearedAny = true
+					}
+				}
+				
+				// Cancel any ongoing downloads for cleared segments
+				// This releases connections back to the pool promptly
+				for segIdx := range s.downloadingSegs {
+					if clearedSegs[segIdx] {
+						// Mark as not downloading - the download will be cancelled
+						// when context is checked, and connection will be returned
+						delete(s.downloadingSegs, segIdx)
 					}
 				}
 				
