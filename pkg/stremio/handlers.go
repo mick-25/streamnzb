@@ -34,6 +34,7 @@ import (
 type Server struct {
 	mu             sync.RWMutex
 	manifest       *Manifest
+	version        string // raw version for API/frontend (e.g. dev-9a3e479)
 	baseURL        string
 	config         *config.Config
 	indexer        indexer.Indexer
@@ -53,8 +54,12 @@ func NewServer(cfg *config.Config, baseURL string, port int, indexer indexer.Ind
 	sessionMgr *session.Manager, triageService *triage.Service, availClient *availnzb.Client,
 	tmdbClient *tmdb.Client, tvdbClient *tvdb.Client, deviceManager *auth.DeviceManager, version string) (*Server, error) {
 
+	if version == "" {
+		version = "dev"
+	}
 	s := &Server{
 		manifest:       NewManifest(version),
+		version:        version,
 		baseURL:        baseURL,
 		config:         cfg,
 		indexer:        indexer,
@@ -95,12 +100,12 @@ func (s *Server) SetAPIHandler(h http.Handler) {
 	s.apiHandler = h
 }
 
-// Version returns the addon version (from manifest)
+// Version returns the raw version for API/frontend (e.g. dev-9a3e479)
 func (s *Server) Version() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if s.manifest != nil {
-		return s.manifest.Version
+	if s.version != "" {
+		return s.version
 	}
 	return "dev"
 }

@@ -16,7 +16,9 @@ mkdir -p pkg/web/static
 cp -r frontend/dist/* pkg/web/static/
 
 echo "Building Go Binary..."
-VERSION="dev-$(git rev-parse --short HEAD 2>/dev/null || echo 'unknown')"
+SHORT_SHA=$(git rev-parse --short HEAD 2>/dev/null || echo 'unknown')
+RELEASE_VERSION=$(grep -oE '[0-9]+\.[0-9]+\.[0-9]+' .release-please-manifest.json 2>/dev/null | head -1 || echo "0.0.0")
+VERSION="${RELEASE_VERSION}-${SHORT_SHA}"
 go build -ldflags="-X main.Version=$VERSION" ./cmd/streamnzb/
 
 echo "Build Complete!"
