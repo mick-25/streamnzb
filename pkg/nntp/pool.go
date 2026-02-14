@@ -239,6 +239,15 @@ func (p *ClientPool) Put(c *Client) {
 	if c == nil {
 		return
 	}
+	p.mu.Lock()
+	closed := p.closed
+	p.mu.Unlock()
+	if closed {
+		// Shutdown closed idleClients; don't send on closed channel (would panic)
+		c.Quit()
+		p.slots <- struct{}{}
+		return
+	}
 	c.LastUsed = time.Now()
 	logger.Trace("pool.Put", "host", p.host)
 

@@ -95,7 +95,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		stats := s.collectStats()
 		logger.Trace("WS initial send: collectStats done")
 		payload, _ := json.Marshal(stats)
-		client.send <- WSMessage{Type: "stats", Payload: payload}
+		trySendWS(client, WSMessage{Type: "stats", Payload: payload})
 		logger.Trace("WS initial send: stats sent")
 
 		// Send user-specific config
@@ -121,7 +121,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			authInfo["version"] = s.strmServer.Version()
 		}
 		authPayload, _ := json.Marshal(authInfo)
-		client.send <- WSMessage{Type: "auth_info", Payload: authPayload}
+		trySendWS(client, WSMessage{Type: "auth_info", Payload: authPayload})
 	}()
 
 	// Read loop (Client -> Server)
@@ -196,13 +196,21 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// trySendWS sends msg to the client's channel without blocking. Returns true if sent.
+// Use for status/response messages so handlers don't hang when the client is slow.
+func trySendWS(client *Client, msg WSMessage) bool {
+	select {
+	case client.send <- msg:
+		return true
+	default:
+		return false
+	}
+}
+
 func (s *Server) sendStats(client *Client) {
 	stats := s.collectStats()
 	payload, _ := json.Marshal(stats)
-	select {
-	case client.send <- WSMessage{Type: "stats", Payload: payload}:
-	default:
-	}
+	trySendWS(client, WSMessage{Type: "stats", Payload: payload})
 }
 
 // configPayload is sent to the client; includes env_overrides for admin so the UI can show warnings
@@ -240,10 +248,7 @@ func (s *Server) sendConfig(client *Client) {
 	} else {
 		payload, _ = json.Marshal(cfg)
 	}
-	select {
-	case client.send <- WSMessage{Type: "config", Payload: payload}:
-	default:
-	}
+	trySendWS(client, WSMessage{Type: "config", Payload: payload})
 }
 
 func (s *Server) sendLogHistory(client *Client) {
@@ -251,16 +256,13 @@ func (s *Server) sendLogHistory(client *Client) {
 	history := logger.GetHistory()
 	payload, _ := json.Marshal(history)
 
-	select {
-	case client.send <- WSMessage{Type: "log_history", Payload: payload}:
-	default:
-	}
+	trySendWS(client, WSMessage{Type: "log_history", Payload: payload})
 }
 
 func (s *Server) handleSaveConfigWS(conn *websocket.Conn, client *Client, payload json.RawMessage) {
 	var newCfg config.Config
 	if err := json.Unmarshal(payload, &newCfg); err != nil {
-		client.send <- WSMessage{Type: "save_status", Payload: json.RawMessage(`{"status":"error","message":"Invalid config data"}`)}
+		trySendWS(client, WSMessage{Type: "save_status", Payload: json.RawMessage(`{"status":"error","message":"Invalid config data"}`)})
 		return
 	}
 
@@ -274,7 +276,7 @@ func (s *Server) handleSaveConfigWS(conn *websocket.Conn, client *Client, payloa
 				"message": "Validation failed",
 				"errors":  fieldErrors,
 			})
-			client.send <- WSMessage{Type: "save_status", Payload: errorPayload}
+			trySendWS(client, WSMessage{Type: "save_status", Payload: errorPayload})
 			return
 		}
 
@@ -322,7 +324,7 @@ func (s *Server) handleSaveConfigWS(conn *websocket.Conn, client *Client, payloa
 		s.mu.Unlock()
 
 		if err := s.config.Save(); err != nil {
-			client.send <- WSMessage{Type: "save_status", Payload: json.RawMessage([]byte(fmt.Sprintf(`{"status":"error","message":"Failed to save config: %s"}`, err.Error())))}
+			trySendWS(client, WSMessage{Type: "save_status", Payload: json.RawMessage([]byte(fmt.Sprintf(`{"status":"error","message":"Failed to save config: %s"}`, err.Error())))})
 			return
 		}
 
@@ -353,18 +355,18 @@ func (s *Server) handleSaveConfigWS(conn *websocket.Conn, client *Client, payloa
 
 		// Push updated config back to client
 		s.sendConfig(client)
-		client.send <- WSMessage{Type: "save_status", Payload: json.RawMessage(`{"status":"success","message":"Configuration saved and reloaded."}`)}
+		trySendWS(client, WSMessage{Type: "save_status", Payload: json.RawMessage(`{"status":"success","message":"Configuration saved and reloaded."}`)})
 		return
 	}
 
 	// Regular devices cannot save via this endpoint
-	client.send <- WSMessage{Type: "save_status", Payload: json.RawMessage(`{"status":"error","message":"Only admin can save global configuration"}`)}
+	trySendWS(client, WSMessage{Type: "save_status", Payload: json.RawMessage(`{"status":"error","message":"Only admin can save global configuration"}`)})
 }
 
 func (s *Server) handleSaveUserConfigsWS(conn *websocket.Conn, client *Client, payload json.RawMessage) {
 	// Only admin can save device configs
 	if client.device == nil || client.device.Username != "admin" {
-		client.send <- WSMessage{Type: "save_status", Payload: json.RawMessage(`{"status":"error","message":"Only admin can save device configurations"}`)}
+		trySendWS(client, WSMessage{Type: "save_status", Payload: json.RawMessage(`{"status":"error","message":"Only admin can save device configurations"}`)})
 		return
 	}
 
@@ -373,7 +375,7 @@ func (s *Server) handleSaveUserConfigsWS(conn *websocket.Conn, client *Client, p
 		Sorting config.SortConfig   `json:"sorting"`
 	}
 	if err := json.Unmarshal(payload, &deviceConfigs); err != nil {
-		client.send <- WSMessage{Type: "save_status", Payload: json.RawMessage(`{"status":"error","message":"Invalid device config data"}`)}
+		trySendWS(client, WSMessage{Type: "save_status", Payload: json.RawMessage(`{"status":"error","message":"Invalid device config data"}`)})
 		return
 	}
 
@@ -401,17 +403,17 @@ func (s *Server) handleSaveUserConfigsWS(conn *websocket.Conn, client *Client, p
 			"message": "Some device configs failed to save",
 			"errors":  errors,
 		})
-		client.send <- WSMessage{Type: "save_status", Payload: errorPayload}
+		trySendWS(client, WSMessage{Type: "save_status", Payload: errorPayload})
 		return
 	}
 
-	client.send <- WSMessage{Type: "save_status", Payload: json.RawMessage(`{"status":"success","message":"Device configurations saved successfully"}`)}
+	trySendWS(client, WSMessage{Type: "save_status", Payload: json.RawMessage(`{"status":"success","message":"Device configurations saved successfully"}`)})
 }
 
 func (s *Server) handleGetDevicesWS(client *Client) {
 	// Only admin can get devices list
 	if client.device == nil || client.device.Username != "admin" {
-		client.send <- WSMessage{Type: "users_response", Payload: json.RawMessage(`{"error":"Only admin can access devices list"}`)}
+		trySendWS(client, WSMessage{Type: "users_response", Payload: json.RawMessage(`{"error":"Only admin can access devices list"}`)})
 		return
 	}
 
@@ -429,13 +431,13 @@ func (s *Server) handleGetDevicesWS(client *Client) {
 	}
 
 	deviceListPayload, _ := json.Marshal(deviceList)
-	client.send <- WSMessage{Type: "users_response", Payload: deviceListPayload}
+	trySendWS(client, WSMessage{Type: "users_response", Payload: deviceListPayload})
 }
 
 func (s *Server) handleGetDeviceWS(client *Client, payload json.RawMessage) {
 	// Only admin can get user details
 	if client.device == nil || client.device.Username != "admin" {
-		client.send <- WSMessage{Type: "user_response", Payload: json.RawMessage(`{"error":"Only admin can access user details"}`)}
+		trySendWS(client, WSMessage{Type: "user_response", Payload: json.RawMessage(`{"error":"Only admin can access user details"}`)})
 		return
 	}
 
@@ -443,14 +445,14 @@ func (s *Server) handleGetDeviceWS(client *Client, payload json.RawMessage) {
 		Username string `json:"username"`
 	}
 	if err := json.Unmarshal(payload, &req); err != nil {
-		client.send <- WSMessage{Type: "user_response", Payload: json.RawMessage(`{"error":"Invalid request"}`)}
+		trySendWS(client, WSMessage{Type: "user_response", Payload: json.RawMessage(`{"error":"Invalid request"}`)})
 		return
 	}
 
 	device, err := s.deviceManager.GetDevice(req.Username)
 	if err != nil {
 		errorPayload, _ := json.Marshal(map[string]string{"error": err.Error()})
-		client.send <- WSMessage{Type: "user_response", Payload: errorPayload}
+		trySendWS(client, WSMessage{Type: "user_response", Payload: errorPayload})
 		return
 	}
 
@@ -462,13 +464,13 @@ func (s *Server) handleGetDeviceWS(client *Client, payload json.RawMessage) {
 	}
 
 	respPayload, _ := json.Marshal(response)
-	client.send <- WSMessage{Type: "user_response", Payload: respPayload}
+	trySendWS(client, WSMessage{Type: "user_response", Payload: respPayload})
 }
 
 func (s *Server) handleCreateDeviceWS(client *Client, payload json.RawMessage) {
 	// Only admin can create users
 	if client.device == nil || client.device.Username != "admin" {
-		client.send <- WSMessage{Type: "user_action_response", Payload: json.RawMessage(`{"error":"Only admin can create users"}`)}
+		trySendWS(client, WSMessage{Type: "user_action_response", Payload: json.RawMessage(`{"error":"Only admin can create users"}`)})
 		return
 	}
 
@@ -476,7 +478,7 @@ func (s *Server) handleCreateDeviceWS(client *Client, payload json.RawMessage) {
 		Username string `json:"username"`
 	}
 	if err := json.Unmarshal(payload, &req); err != nil {
-		client.send <- WSMessage{Type: "user_action_response", Payload: json.RawMessage(`{"error":"Invalid request"}`)}
+		trySendWS(client, WSMessage{Type: "user_action_response", Payload: json.RawMessage(`{"error":"Invalid request"}`)})
 		return
 	}
 
@@ -484,7 +486,7 @@ func (s *Server) handleCreateDeviceWS(client *Client, payload json.RawMessage) {
 	device, err := s.deviceManager.CreateDevice(req.Username, "")
 	if err != nil {
 		errorPayload, _ := json.Marshal(map[string]string{"error": err.Error()})
-		client.send <- WSMessage{Type: "user_action_response", Payload: errorPayload}
+		trySendWS(client, WSMessage{Type: "user_action_response", Payload: errorPayload})
 		return
 	}
 
@@ -497,7 +499,7 @@ func (s *Server) handleCreateDeviceWS(client *Client, payload json.RawMessage) {
 	}
 
 	respPayload, _ := json.Marshal(response)
-	client.send <- WSMessage{Type: "user_action_response", Payload: respPayload}
+	trySendWS(client, WSMessage{Type: "user_action_response", Payload: respPayload})
 
 	// Broadcast updated devices list to all admin clients
 	s.broadcastUsersList()
@@ -506,7 +508,7 @@ func (s *Server) handleCreateDeviceWS(client *Client, payload json.RawMessage) {
 func (s *Server) handleDeleteDeviceWS(client *Client, payload json.RawMessage) {
 	// Only admin can delete users
 	if client.device == nil || client.device.Username != "admin" {
-		client.send <- WSMessage{Type: "user_action_response", Payload: json.RawMessage(`{"error":"Only admin can delete users"}`)}
+		trySendWS(client, WSMessage{Type: "user_action_response", Payload: json.RawMessage(`{"error":"Only admin can delete users"}`)})
 		return
 	}
 
@@ -514,13 +516,13 @@ func (s *Server) handleDeleteDeviceWS(client *Client, payload json.RawMessage) {
 		Username string `json:"username"`
 	}
 	if err := json.Unmarshal(payload, &req); err != nil {
-		client.send <- WSMessage{Type: "user_action_response", Payload: json.RawMessage(`{"error":"Invalid request"}`)}
+		trySendWS(client, WSMessage{Type: "user_action_response", Payload: json.RawMessage(`{"error":"Invalid request"}`)})
 		return
 	}
 
 	if err := s.deviceManager.DeleteDevice(req.Username); err != nil {
 		errorPayload, _ := json.Marshal(map[string]string{"error": err.Error()})
-		client.send <- WSMessage{Type: "user_action_response", Payload: errorPayload}
+		trySendWS(client, WSMessage{Type: "user_action_response", Payload: errorPayload})
 		return
 	}
 
@@ -530,7 +532,7 @@ func (s *Server) handleDeleteDeviceWS(client *Client, payload json.RawMessage) {
 	}
 
 	respPayload, _ := json.Marshal(response)
-	client.send <- WSMessage{Type: "user_action_response", Payload: respPayload}
+	trySendWS(client, WSMessage{Type: "user_action_response", Payload: respPayload})
 
 	// Broadcast updated devices list to all admin clients
 	s.broadcastUsersList()
@@ -539,7 +541,7 @@ func (s *Server) handleDeleteDeviceWS(client *Client, payload json.RawMessage) {
 func (s *Server) handleRegenerateTokenWS(client *Client, payload json.RawMessage) {
 	// Only admin can regenerate tokens
 	if client.device == nil || client.device.Username != "admin" {
-		client.send <- WSMessage{Type: "user_action_response", Payload: json.RawMessage(`{"error":"Only admin can regenerate tokens"}`)}
+		trySendWS(client, WSMessage{Type: "user_action_response", Payload: json.RawMessage(`{"error":"Only admin can regenerate tokens"}`)})
 		return
 	}
 
@@ -547,14 +549,14 @@ func (s *Server) handleRegenerateTokenWS(client *Client, payload json.RawMessage
 		Username string `json:"username"`
 	}
 	if err := json.Unmarshal(payload, &req); err != nil {
-		client.send <- WSMessage{Type: "user_action_response", Payload: json.RawMessage(`{"error":"Invalid request"}`)}
+		trySendWS(client, WSMessage{Type: "user_action_response", Payload: json.RawMessage(`{"error":"Invalid request"}`)})
 		return
 	}
 
 	token, err := s.deviceManager.RegenerateToken(req.Username)
 	if err != nil {
 		errorPayload, _ := json.Marshal(map[string]string{"error": err.Error()})
-		client.send <- WSMessage{Type: "user_action_response", Payload: errorPayload}
+		trySendWS(client, WSMessage{Type: "user_action_response", Payload: errorPayload})
 		return
 	}
 
@@ -564,7 +566,7 @@ func (s *Server) handleRegenerateTokenWS(client *Client, payload json.RawMessage
 	}
 
 	respPayload, _ := json.Marshal(response)
-	client.send <- WSMessage{Type: "user_action_response", Payload: respPayload}
+	trySendWS(client, WSMessage{Type: "user_action_response", Payload: respPayload})
 
 	// Broadcast updated devices list to all admin clients
 	s.broadcastUsersList()
@@ -573,7 +575,7 @@ func (s *Server) handleRegenerateTokenWS(client *Client, payload json.RawMessage
 func (s *Server) handleUpdatePasswordWS(client *Client, payload json.RawMessage) {
 	// Only admin can update password
 	if client.device == nil || client.device.Username != "admin" {
-		client.send <- WSMessage{Type: "user_action_response", Payload: json.RawMessage(`{"error":"Only admin can update password"}`)}
+		trySendWS(client, WSMessage{Type: "user_action_response", Payload: json.RawMessage(`{"error":"Only admin can update password"}`)})
 		return
 	}
 
@@ -582,18 +584,18 @@ func (s *Server) handleUpdatePasswordWS(client *Client, payload json.RawMessage)
 		Password string `json:"password"`
 	}
 	if err := json.Unmarshal(payload, &req); err != nil {
-		client.send <- WSMessage{Type: "user_action_response", Payload: json.RawMessage(`{"error":"Invalid request"}`)}
+		trySendWS(client, WSMessage{Type: "user_action_response", Payload: json.RawMessage(`{"error":"Invalid request"}`)})
 		return
 	}
 
 	if req.Username != "admin" {
-		client.send <- WSMessage{Type: "user_action_response", Payload: json.RawMessage(`{"error":"Only admin user can change password"}`)}
+		trySendWS(client, WSMessage{Type: "user_action_response", Payload: json.RawMessage(`{"error":"Only admin user can change password"}`)})
 		return
 	}
 
 	if err := s.deviceManager.UpdateUser(req.Username, req.Password); err != nil {
 		errorPayload, _ := json.Marshal(map[string]string{"error": err.Error()})
-		client.send <- WSMessage{Type: "user_action_response", Payload: errorPayload}
+		trySendWS(client, WSMessage{Type: "user_action_response", Payload: errorPayload})
 		return
 	}
 
@@ -603,7 +605,7 @@ func (s *Server) handleUpdatePasswordWS(client *Client, payload json.RawMessage)
 	}
 
 	respPayload, _ := json.Marshal(response)
-	client.send <- WSMessage{Type: "user_action_response", Payload: respPayload}
+	trySendWS(client, WSMessage{Type: "user_action_response", Payload: respPayload})
 }
 
 func (s *Server) broadcastUsersList() {
