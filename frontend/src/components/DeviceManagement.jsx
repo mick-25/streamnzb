@@ -93,9 +93,9 @@ function DeviceConfigForm({ username, initialFilters, initialSorting, onConfigCh
 
   return (
     <Tabs defaultValue="filters" className="w-full">
-      <TabsList className="mb-6">
-        <TabsTrigger value="filters">Filters</TabsTrigger>
-        <TabsTrigger value="sorting">Sorting</TabsTrigger>
+      <TabsList className="mb-6 w-full grid grid-cols-2">
+        <TabsTrigger value="filters" className="text-sm sm:text-base">Filters</TabsTrigger>
+        <TabsTrigger value="sorting" className="text-sm sm:text-base">Sorting</TabsTrigger>
       </TabsList>
       <TabsContent value="filters">
         <FiltersSection 
@@ -444,7 +444,7 @@ const DeviceManagement = forwardRef(function DeviceManagement({ globalFilters, g
   return (
     <Card>
       <CardHeader>
-        <div className="flex items-center justify-between">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <CardDescription>
               Manage devices and their authentication tokens
@@ -452,8 +452,8 @@ const DeviceManagement = forwardRef(function DeviceManagement({ globalFilters, g
           </div>
           <Dialog open={showAddDialog} onOpenChange={setShowAddDialog}>
             <DialogTrigger asChild>
-              <Button type="button">
-                <Plus className="mr-2 h-4 w-4" />
+              <Button type="button" className="w-full sm:w-auto">
+                <Plus className="mr-2 h-4 w-4 shrink-0" />
                 Add Device
               </Button>
             </DialogTrigger>
@@ -535,15 +535,15 @@ const DeviceManagement = forwardRef(function DeviceManagement({ globalFilters, g
               <Card key={device.username}>
                 <CardContent className="pt-6">
                   <div className="space-y-4">
-                    <div className="flex items-start justify-between">
-                      <div className="flex-1">
+                    <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                      <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-2 mb-2">
                           <h3 className="font-semibold">{device.username}</h3>
                         </div>
                         <div className="space-y-2">
-                          <div className="flex items-center gap-2">
-                            <Label className="text-xs text-muted-foreground">Stremio URL:</Label>
-                            <code className="text-xs bg-muted px-2 py-1 rounded flex-1 truncate">
+                          <Label className="text-xs text-muted-foreground block">Stremio URL:</Label>
+                          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                            <code className="text-xs bg-muted px-2 py-1.5 rounded break-all min-w-0">
                               {getManifestUrl(device.token)}
                             </code>
                             <Button
@@ -551,19 +551,22 @@ const DeviceManagement = forwardRef(function DeviceManagement({ globalFilters, g
                               variant="ghost"
                               size="sm"
                               onClick={() => copyManifestUrl(device.token)}
-                              className="h-7"
+                              className="h-8 shrink-0 self-start sm:self-center"
                               title="Copy manifest URL"
                             >
                               {copiedToken === device.token ? (
-                                <Check className="h-3 w-3" />
+                                <Check className="h-4 w-4 sm:mr-1" />
                               ) : (
-                                <Copy className="h-3 w-3" />
+                                <Copy className="h-4 w-4 sm:mr-1" />
                               )}
+                              <span className="hidden sm:inline">
+                                {copiedToken === device.token ? 'Copied' : 'Copy'}
+                              </span>
                             </Button>
                           </div>
                         </div>
                       </div>
-                      <div className="flex gap-2 ml-4">
+                      <div className="flex flex-wrap gap-2 sm:shrink-0 sm:ml-4">
                         {device.username !== 'admin' && (
                           <Button
                             type="button"
@@ -571,16 +574,17 @@ const DeviceManagement = forwardRef(function DeviceManagement({ globalFilters, g
                             size="sm"
                             onClick={() => handleToggleConfig(device.username)}
                             disabled={actionLoading !== null || loading}
+                            className="flex-1 min-w-[7rem] sm:flex-none"
                           >
                             {expandedDevice === device.username ? (
                               <>
-                                <ChevronUp className="h-3 w-3 mr-1" />
-                                Hide Config
+                                <ChevronUp className="h-3 w-3 mr-1 shrink-0" />
+                                <span className="truncate">Hide Config</span>
                               </>
                             ) : (
                               <>
-                                <Settings className="h-3 w-3 mr-1" />
-                                Configure
+                                <Settings className="h-3 w-3 mr-1 shrink-0" />
+                                <span className="truncate">Configure</span>
                               </>
                             )}
                           </Button>
@@ -591,13 +595,15 @@ const DeviceManagement = forwardRef(function DeviceManagement({ globalFilters, g
                           size="sm"
                           onClick={() => handleRegenerateToken(device.username)}
                           disabled={actionLoading !== null || loading}
+                          className="flex-1 min-w-[7rem] sm:flex-none"
                         >
                           {actionLoading === `regenerate-${device.username}` ? (
-                            <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                            <Loader2 className="h-3 w-3 mr-1 shrink-0 animate-spin" />
                           ) : (
-                            <RefreshCw className="h-3 w-3 mr-1" />
+                            <RefreshCw className="h-3 w-3 mr-1 shrink-0" />
                           )}
-                          Regenerate Token
+                          <span className="truncate hidden sm:inline">Regenerate Token</span>
+                          <span className="truncate sm:hidden">Regenerate</span>
                         </Button>
                         {device.username !== 'admin' && (
                           <Button
@@ -606,12 +612,14 @@ const DeviceManagement = forwardRef(function DeviceManagement({ globalFilters, g
                             size="sm"
                             onClick={() => handleDeleteDevice(device.username)}
                             disabled={actionLoading !== null || loading}
+                            className="flex-1 min-w-[7rem] sm:flex-none"
                           >
                             {actionLoading === `delete-${device.username}` ? (
-                              <Loader2 className="h-3 w-3 animate-spin" />
+                              <Loader2 className="h-3 w-3 shrink-0 animate-spin" />
                             ) : (
-                              <Trash2 className="h-3 w-3" />
+                              <Trash2 className="h-3 w-3 shrink-0" />
                             )}
+                            <span className="ml-1">Delete</span>
                           </Button>
                         )}
                       </div>

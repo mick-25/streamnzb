@@ -105,7 +105,7 @@ func (s *SmartStream) Read(p []byte) (n int, err error) {
 	}
 
 	n, err = s.currentReader.Read(p)
-	
+
 	// Update progress tracking on successful read
 	if n > 0 {
 		s.mu.Lock()
@@ -113,7 +113,7 @@ func (s *SmartStream) Read(p []byte) (n int, err error) {
 		s.lastSegIdx = s.currentSegIdx
 		s.mu.Unlock()
 	}
-	
+
 	if err == io.EOF {
 		// Finished current segment, move to next
 		s.closeCurrentSegment()
@@ -145,57 +145,70 @@ func (s *SmartStream) advanceToNextSegment() error {
 		return io.EOF
 	}
 
-		// Wait for data
-		for {
-			if data, ok := s.segmentCache[idx]; ok {
-				// Found data!
-				// Update progress tracking - we're advancing to a new segment
-				s.lastReadTime = time.Now()
-				s.lastSegIdx = idx
-				
-				// Create reader
-				// Adjust for startOffset if it's the first segment
-				startPos := int64(0)
-				if idx == s.file.FindSegmentIndex(s.startOffset) {
-					seg := s.file.segments[idx]
-					if s.startOffset > seg.StartOffset {
-						startPos = s.startOffset - seg.StartOffset
-					}
+	// Wait for data
+	for {
+		if data, ok := s.segmentCache[idx]; ok {
+			// Found data!
+			// Update progress tracking - we're advancing to a new segment
+			s.lastReadTime = time.Now()
+			s.lastSegIdx = idx
+
+			// Create reader
+			// Adjust for startOffset if it's the first segment
+			startPos := int64(0)
+			if idx == s.file.FindSegmentIndex(s.startOffset) {
+				seg := s.file.segments[idx]
+				if s.startOffset > seg.StartOffset {
+					startPos = s.startOffset - seg.StartOffset
 				}
-
-				// Safety check bounds
-				if startPos >= int64(len(data)) {
-					// Should not happen unless offset > segment size?
-					// Just treat as empty
-					s.currentReader = &emptyReader{}
-				} else {
-					s.currentReader = &sliceReader{data: data, pos: startPos}
-				}
-
-				// Remove from cache? Keep until closed?
-				// UsenetReader removes on EOF. We will remove when we close current segment (Next Read)
-				// But for memory safety, we can rely on downloadManager cleaning up?
-				// No, downloadManager fills. We consume.
-				// Ideally we remove from cache NOW so downloadManager can fill more?
-				// Consumed data is returned to user.
-				// Let's keep it in cache until done reading
-
-				s.mu.Unlock()
-				return nil
 			}
 
-			// Check if download failed or context cancelled
-			if s.ctx.Err() != nil {
-				s.mu.Unlock()
-				return s.ctx.Err()
+			// Safety check bounds
+			if startPos >= int64(len(data)) {
+				// Should not happen unless offset > segment size?
+				// Just treat as empty
+				s.currentReader = &emptyReader{}
+			} else {
+				s.currentReader = &sliceReader{data: data, pos: startPos}
 			}
 
-			// Wait on condition variable
-			// Note: Condition variable wait must be called while holding mutex
-			// The downloadManager's progress detection should prevent indefinite waits,
-			// but we check context before each wait to ensure cancellation propagates
-			s.downloadCond.Wait()
+			// Remove from cache? Keep until closed?
+			// UsenetReader removes on EOF. We will remove when we close current segment (Next Read)
+			// But for memory safety, we can rely on downloadManager cleaning up?
+			// No, downloadManager fills. We consume.
+			// Ideally we remove from cache NOW so downloadManager can fill more?
+			// Consumed data is returned to user.
+			// Let's keep it in cache until done reading
+
+			s.mu.Unlock()
+			return nil
 		}
+
+		// Check if download failed or context cancelled
+		if s.ctx.Err() != nil {
+			s.mu.Unlock()
+			return s.ctx.Err()
+		}
+
+		// Wait on condition variable with timeout to prevent indefinite blocking
+		done := make(chan struct{}, 1)
+		go func() {
+			s.mu.Lock()
+			s.downloadCond.Wait()
+			s.mu.Unlock()
+			done <- struct{}{}
+		}()
+		s.mu.Unlock()
+		select {
+		case <-done:
+			s.mu.Lock()
+			// Re-acquire lock for next iteration of loop
+		case <-time.After(2 * time.Minute):
+			return context.DeadlineExceeded
+		case <-s.ctx.Done():
+			return s.ctx.Err()
+		}
+	}
 }
 
 func (s *SmartStream) closeCurrentSegment() {
@@ -279,11 +292,11 @@ func (s *SmartStream) downloadManager() {
 			// If not, the stream is likely paused - use timeout to prevent deadlock
 			timeSinceLastRead := time.Since(s.lastReadTime)
 			hasProgress := timeSinceLastRead < 30*time.Second && s.lastSegIdx >= current
-			
+
 			if !hasProgress {
 				// Stream appears paused - reduce buffer by clearing old segments
 				// Keep only segments near current position to free memory
-				keepAhead := 5 // Keep 5 segments ahead
+				keepAhead := 5  // Keep 5 segments ahead
 				keepBehind := 2 // Keep 2 segments behind (for seeking)
 				clearedAny := false
 				// Track segments being cleared so we can cancel their downloads
@@ -295,7 +308,7 @@ func (s *SmartStream) downloadManager() {
 						clearedAny = true
 					}
 				}
-				
+
 				// Cancel any ongoing downloads for cleared segments
 				// This releases connections back to the pool promptly
 				for segIdx := range s.downloadingSegs {
@@ -305,28 +318,25 @@ func (s *SmartStream) downloadManager() {
 						delete(s.downloadingSegs, segIdx)
 					}
 				}
-				
+
 				// Broadcast to wake up any waiting readers after clearing segments
 				if clearedAny {
 					s.downloadCond.Broadcast()
 				}
-				
+
 				// Wait with timeout to prevent deadlock and allow periodic checks
 				s.mu.Unlock()
-				
-				// Use timer instead of goroutine to avoid leaks
 				timer := time.NewTimer(5 * time.Second)
-				defer timer.Stop()
-				
 				select {
 				case <-s.ctx.Done():
+					timer.Stop()
 					return
 				case <-timer.C:
 					// Continue loop to re-check
 				}
 				continue
 			}
-			
+
 			// Reader is active, wait normally (will be woken by closeCurrentSegment)
 			s.downloadCond.Wait()
 			s.mu.Unlock()
@@ -368,17 +378,13 @@ func (s *SmartStream) downloadManager() {
 						s.segmentCache[idx] = data
 						s.downloadCond.Broadcast() // Wake up reader
 					} else {
-						// Suppress cancellation errors (happens on seek/close)
-						// Check both wrapped error and string message for robustness
 						isCanceled := errors.Is(err, context.Canceled) ||
 							err == context.Canceled ||
 							strings.Contains(err.Error(), "canceled") ||
 							strings.Contains(err.Error(), "cancelled")
-
 						if !isCanceled {
 							logger.Error("SmartStream download fail", "seg", idx, "err", err)
 						}
-						// Remove from downloading, will be retried next loop
 					}
 					s.mu.Unlock()
 				}(targetIdx)

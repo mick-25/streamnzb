@@ -252,7 +252,7 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request, device *au
 	}())
 
 	// Search NZBHydra2
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
 	streams, err := s.searchAndValidate(ctx, contentType, id, device)

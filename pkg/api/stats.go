@@ -50,13 +50,17 @@ type ProviderStats struct {
 func (s *Server) collectStats() SystemStats {
 	stats := SystemStats{
 		Timestamp: time.Now(),
-		Providers: make([]ProviderStats, 0, len(s.providerPools)),
+		Providers: make([]ProviderStats, 0),
 	}
 
 	var totalActive, totalMax int
 	var totalDownloadedMB float64
 
-	for name, pool := range s.providerPools {
+	s.mu.RLock()
+	pools := s.providerPools
+	s.mu.RUnlock()
+
+	for name, pool := range pools {
 		// Sync usage to persistent storage periodically
 		pool.SyncUsage()
 
