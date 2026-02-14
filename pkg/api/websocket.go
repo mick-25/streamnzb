@@ -86,7 +86,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	logger.Debug("WS Client connected", "remote", r.RemoteAddr)
 
-	ticker := time.NewTicker(1 * time.Second)
+	ticker := time.NewTicker(5 * time.Second) // Throttled to reduce load from collectStats/SyncUsage
 	defer ticker.Stop()
 
 	// Notify current stats and config immediately

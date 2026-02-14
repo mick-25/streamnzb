@@ -7,13 +7,18 @@ import (
 	"path/filepath"
 	"streamnzb/pkg/logger"
 	"sync"
+	"time"
 )
+
+const saveDebounceInterval = 2 * time.Second
 
 // StateManager handles persistent key-value storage in a JSON file
 type StateManager struct {
-	filePath string
-	data     map[string]json.RawMessage
-	mu       sync.RWMutex
+	filePath  string
+	data      map[string]json.RawMessage
+	mu        sync.RWMutex
+	saveTimer *time.Timer
+	saveMu    sync.Mutex
 }
 
 var globalManager *StateManager
@@ -108,7 +113,8 @@ func (m *StateManager) Get(key string, target interface{}) (bool, error) {
 	return true, nil
 }
 
-// Set stores data for a key and saves to disk
+// Set stores data for a key and schedules a debounced save to disk.
+// Multiple rapid updates (e.g. usage stats) are batched into a single write.
 func (m *StateManager) Set(key string, value interface{}) error {
 	raw, err := json.Marshal(value)
 	if err != nil {
@@ -119,5 +125,37 @@ func (m *StateManager) Set(key string, value interface{}) error {
 	m.data[key] = raw
 	m.mu.Unlock()
 
+	m.scheduleSave()
+	return nil
+}
+
+// scheduleSave triggers a debounced save. The actual write runs after saveDebounceInterval
+// with no further updates; rapid updates coalesce into one write.
+func (m *StateManager) scheduleSave() {
+	m.saveMu.Lock()
+	defer m.saveMu.Unlock()
+
+	if m.saveTimer != nil {
+		m.saveTimer.Stop()
+	}
+	m.saveTimer = time.AfterFunc(saveDebounceInterval, func() {
+		m.saveMu.Lock()
+		m.saveTimer = nil
+		m.saveMu.Unlock()
+		if err := m.Save(); err != nil {
+			logger.Error("Failed to save state", "err", err)
+		}
+	})
+}
+
+// Flush immediately persists any pending changes. Call before shutdown or when
+// immediate persistence is required.
+func (m *StateManager) Flush() error {
+	m.saveMu.Lock()
+	if m.saveTimer != nil {
+		m.saveTimer.Stop()
+		m.saveTimer = nil
+	}
+	m.saveMu.Unlock()
 	return m.Save()
 }
