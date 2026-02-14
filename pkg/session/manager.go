@@ -72,43 +72,43 @@ func NewManager(pools []*nntp.ClientPool, ttl time.Duration) *Manager {
 	return m
 }
 
-// CreateSession creates a new session for the given NZB
+// CreateSession creates a new session for the given NZB.
+// Heavy work (GetContentFiles, NewFile) is done outside the manager lock so
+// GetActiveSessions (e.g. from WebSocket collectStats) is not blocked.
 func (m *Manager) CreateSession(sessionID string, nzbData *nzb.NZB, guid string) (*Session, error) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	// Check if session already exists
 	if existing, ok := m.sessions[sessionID]; ok {
 		existing.mu.Lock()
 		existing.LastAccess = time.Now()
 		existing.mu.Unlock()
+		m.mu.Unlock()
 		return existing, nil
 	}
+	m.mu.Unlock()
 
-	// Get content files from NZB
+	// Heavy work outside lock so we don't block GetActiveSessions / WebSocket stats
 	contentFiles := nzbData.GetContentFiles()
 	if len(contentFiles) == 0 {
 		return nil, fmt.Errorf("no content files found in NZB")
 	}
+	m.mu.RLock()
+	pools := m.pools
+	estimator := m.estimator
+	m.mu.RUnlock()
 
-	// Lifecycle context
 	ctx, cancel := context.WithCancel(context.Background())
-
-	// Create loader.File for each content file
 	var loaderFiles []*loader.File
 	for _, info := range contentFiles {
-		lf := loader.NewFile(ctx, info.File, m.pools, m.estimator)
+		lf := loader.NewFile(ctx, info.File, pools, estimator)
 		loaderFiles = append(loaderFiles, lf)
 	}
 
-	// Helper: File is the first one (often sufficient for simple check or single file)
 	firstFile := loaderFiles[0]
-
 	session := &Session{
 		ID:         sessionID,
 		NZB:        nzbData,
 		Files:      loaderFiles,
-		File:       firstFile, // Keep for backward compat within session pkg
+		File:       firstFile,
 		CreatedAt:  time.Now(),
 		LastAccess: time.Now(),
 		Clients:    make(map[string]time.Time),
@@ -117,6 +117,14 @@ func (m *Manager) CreateSession(sessionID string, nzbData *nzb.NZB, guid string)
 		cancel:     cancel,
 	}
 
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if existing, ok := m.sessions[sessionID]; ok {
+		existing.mu.Lock()
+		existing.LastAccess = time.Now()
+		existing.mu.Unlock()
+		return existing, nil
+	}
 	m.sessions[sessionID] = session
 	return session, nil
 }
@@ -354,33 +362,32 @@ type ActiveSessionInfo struct {
 	StartTime string   `json:"start_time"`
 }
 
-// GetActiveSessions returns a list of sessions that are currently playing
+// GetActiveSessions returns a list of sessions that are currently playing.
+// We snapshot session refs under RLock then release, so CreateSession/CreateDeferredSession
+// are not blocked while we lock each session (avoids blocking stream validation and WebSocket).
 func (m *Manager) GetActiveSessions() []ActiveSessionInfo {
 	m.mu.RLock()
-	defer m.mu.RUnlock()
+	snapshot := make([]*Session, 0, len(m.sessions))
+	for _, s := range m.sessions {
+		snapshot = append(snapshot, s)
+	}
+	m.mu.RUnlock()
 
 	var result []ActiveSessionInfo
-	for _, s := range m.sessions {
+	for _, s := range snapshot {
 		s.mu.Lock()
-
-		// 1. Purge IPs that haven't been seen for 60 seconds
+		// Purge IPs that haven't been seen for 60 seconds
 		for ip, lastSeen := range s.Clients {
 			if time.Since(lastSeen) > 60*time.Second {
 				delete(s.Clients, ip)
 			}
 		}
-
-		// 2. A session is active if it has clients.
-		// Search availability checks create sessions but don't register clients,
-		// so they won't appear as active streams.
 		isActive := len(s.Clients) > 0
-
 		if isActive {
 			clients := make([]string, 0, len(s.Clients))
 			for ip := range s.Clients {
 				clients = append(clients, ip)
 			}
-
 			title := "Unknown"
 			if s.NZB != nil && len(s.NZB.Files) > 0 {
 				parts := strings.Split(nzb.ExtractFilename(s.NZB.Files[0].Subject), ".")
@@ -390,7 +397,6 @@ func (m *Manager) GetActiveSessions() []ActiveSessionInfo {
 					title = parts[0]
 				}
 			}
-
 			result = append(result, ActiveSessionInfo{
 				ID:        s.ID,
 				Title:     title,

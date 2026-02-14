@@ -134,18 +134,25 @@ func (c *Checker) validateProvider(ctx context.Context, nzbData *nzb.NZB, provid
 		Host:     pool.Host(),
 	}
 
-	// Get sample of articles to check
 	articles := c.getSampleArticles(nzbData)
-	result.TotalArticles = len(nzbData.Files[0].Segments) // Total in first file
+	result.TotalArticles = len(nzbData.Files[0].Segments)
 	result.CheckedArticles = len(articles)
 
-	// Check articles using STAT command (faster than ARTICLE)
 	client, err := pool.Get(ctx)
 	if err != nil {
 		result.Error = fmt.Errorf("failed to get client: %w", err)
 		return result
 	}
-	defer pool.Put(client)
+	// Only Put back if we finished cleanly; otherwise Discard to avoid poisoning the pool
+	// (errors or ctx cancel can leave the connection in a bad state)
+	releaseAsOk := false
+	defer func() {
+		if releaseAsOk {
+			pool.Put(client)
+		} else {
+			pool.Discard(client)
+		}
+	}()
 
 	missing := 0
 	for _, articleID := range articles {
@@ -156,13 +163,18 @@ func (c *Checker) validateProvider(ctx context.Context, nzbData *nzb.NZB, provid
 		default:
 		}
 
-		// Use STAT to check if article exists (doesn't download it)
 		exists, err := client.StatArticle(articleID)
-		if err != nil || !exists {
+		if err != nil {
+			// Connection error or timeout; don't reuse this client
+			result.Error = err
+			return result
+		}
+		if !exists {
 			missing++
 		}
 	}
 
+	releaseAsOk = true
 	result.MissingArticles = missing
 	result.Available = missing == 0
 
