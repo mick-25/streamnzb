@@ -251,7 +251,6 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request, device *au
 		return "legacy"
 	}())
 
-	// Search NZBHydra2
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
@@ -507,27 +506,12 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string, 
 				streams = append(streams, stream)
 			}
 		case <-timeout:
-			// Timeout after 60 seconds to prevent hanging
 			logger.Warn("Stream collection timeout, returning partial results", "count", len(streams))
-			cancel() // Cancel any remaining work
-			// Close channel to unblock any goroutines waiting to write
-			channelMu.Lock()
-			if !channelClosed {
-				close(resultChan)
-				channelClosed = true
-			}
-			channelMu.Unlock()
+			cancel()
 			collecting = false
 		case <-ctx.Done():
-			// Context cancelled, return what we have
 			logger.Debug("Stream collection cancelled, returning partial results", "count", len(streams))
-			// Close channel to unblock any goroutines waiting to write
-			channelMu.Lock()
-			if !channelClosed {
-				close(resultChan)
-				channelClosed = true
-			}
-			channelMu.Unlock()
+			cancel()
 			collecting = false
 		}
 	}
@@ -820,8 +804,12 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 	w.Header().Set("Accept-Ranges", "bytes")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 
+	// Wrap ResponseWriter with rolling write timeout to detect abandoned clients.
+	// When client stops reading, writes block; after 10 min the connection closes
+	// so EndPlayback runs and NNTP connections are released.
+	w = newWriteTimeoutResponseWriter(w, 10*time.Minute)
+
 	// Handle streaming using standard library ServeContent
-	// This automatically handles Range requests, HEAD requests, and efficient copying.
 	http.ServeContent(w, r, name, time.Time{}, monitoredStream)
 
 	// Log completion (ServeContent blocks until done)
@@ -942,6 +930,7 @@ func (s *Server) handleDebugPlay(w http.ResponseWriter, r *http.Request, device 
 
 	w.Header().Set("Content-Type", "video/mp4")
 	w.Header().Set("Accept-Ranges", "bytes")
+	w = newWriteTimeoutResponseWriter(w, 10*time.Minute)
 	http.ServeContent(w, r, name, time.Time{}, monitoredStream)
 
 	logger.Debug("Finished serving debug media")
@@ -1056,6 +1045,31 @@ func (s *Server) Reload(baseURL string, indexer indexer.Indexer, validator *vali
 	s.tvdbClient = tvdbClient
 	s.deviceManager = deviceManager
 	// Note: sessionManager pools are updated separately via sessionManager.UpdatePools
+}
+
+// writeTimeoutResponseWriter wraps http.ResponseWriter and sets a rolling write deadline
+// before each Write. This detects abandoned clients (e.g. crashed app, network drop)
+// when the TCP connection stays half-open: writes block until the deadline, then the
+// connection closes so EndPlayback runs and resources are released.
+type writeTimeoutResponseWriter struct {
+	http.ResponseWriter
+	timeout time.Duration
+	rc      *http.ResponseController
+}
+
+func newWriteTimeoutResponseWriter(w http.ResponseWriter, timeout time.Duration) *writeTimeoutResponseWriter {
+	return &writeTimeoutResponseWriter{
+		ResponseWriter: w,
+		timeout:        timeout,
+		rc:             http.NewResponseController(w),
+	}
+}
+
+func (w *writeTimeoutResponseWriter) Write(p []byte) (n int, err error) {
+	if setErr := w.rc.SetWriteDeadline(time.Now().Add(w.timeout)); setErr != nil {
+		return 0, setErr
+	}
+	return w.ResponseWriter.Write(p)
 }
 
 // StreamMonitor wraps an io.ReadSeekCloser to provide keep-alive updates
