@@ -74,6 +74,8 @@ func SetBroadcast(ch chan<- string) {
 func Init(levelStr string) {
 	var level slog.Level
 	switch strings.ToUpper(levelStr) {
+	case "TRACE":
+		level = slog.LevelDebug - 1 // More verbose than Debug
 	case "DEBUG":
 		level = slog.LevelDebug
 	case "WARN":
@@ -271,6 +273,11 @@ func Close() {
 }
 
 // Helper functions for easy access
+// Trace is for verbose debugging; set LOG_LEVEL=TRACE to see these
+func Trace(msg string, args ...any) {
+	Log.Log(context.TODO(), slog.LevelDebug-1, msg, args...)
+}
+
 func Debug(msg string, args ...any) {
 	Log.Debug(msg, args...)
 }

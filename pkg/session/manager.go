@@ -76,16 +76,19 @@ func NewManager(pools []*nntp.ClientPool, ttl time.Duration) *Manager {
 // Heavy work (GetContentFiles, NewFile) is done outside the manager lock so
 // GetActiveSessions (e.g. from WebSocket collectStats) is not blocked.
 func (m *Manager) CreateSession(sessionID string, nzbData *nzb.NZB, guid string) (*Session, error) {
+	logger.Trace("session CreateSession start", "id", sessionID)
 	m.mu.Lock()
 	if existing, ok := m.sessions[sessionID]; ok {
 		existing.mu.Lock()
 		existing.LastAccess = time.Now()
 		existing.mu.Unlock()
 		m.mu.Unlock()
+		logger.Trace("session CreateSession existing", "id", sessionID)
 		return existing, nil
 	}
 	m.mu.Unlock()
 
+	logger.Trace("session CreateSession heavy work", "id", sessionID)
 	// Heavy work outside lock so we don't block GetActiveSessions / WebSocket stats
 	contentFiles := nzbData.GetContentFiles()
 	if len(contentFiles) == 0 {
@@ -117,6 +120,7 @@ func (m *Manager) CreateSession(sessionID string, nzbData *nzb.NZB, guid string)
 		cancel:     cancel,
 	}
 
+	logger.Trace("session CreateSession insert", "id", sessionID)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if existing, ok := m.sessions[sessionID]; ok {
@@ -126,11 +130,13 @@ func (m *Manager) CreateSession(sessionID string, nzbData *nzb.NZB, guid string)
 		return existing, nil
 	}
 	m.sessions[sessionID] = session
+	logger.Trace("session CreateSession done", "id", sessionID)
 	return session, nil
 }
 
 // CreateDeferredSession creates a session placeholder without downloading the NZB yet
 func (m *Manager) CreateDeferredSession(sessionID, nzbURL, indexerName, itemTitle string, idx indexer.Indexer, guid string) (*Session, error) {
+	logger.Trace("session CreateDeferredSession start", "id", sessionID)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -139,6 +145,7 @@ func (m *Manager) CreateDeferredSession(sessionID, nzbURL, indexerName, itemTitl
 		existing.mu.Lock()
 		existing.LastAccess = time.Now()
 		existing.mu.Unlock()
+		logger.Trace("session CreateDeferredSession existing", "id", sessionID)
 		return existing, nil
 	}
 
@@ -161,6 +168,7 @@ func (m *Manager) CreateDeferredSession(sessionID, nzbURL, indexerName, itemTitl
 	}
 
 	m.sessions[sessionID] = session
+	logger.Trace("session CreateDeferredSession done", "id", sessionID)
 	return session, nil
 }
 
@@ -366,6 +374,7 @@ type ActiveSessionInfo struct {
 // We snapshot session refs under RLock then release, so CreateSession/CreateDeferredSession
 // are not blocked while we lock each session (avoids blocking stream validation and WebSocket).
 func (m *Manager) GetActiveSessions() []ActiveSessionInfo {
+	logger.Trace("session GetActiveSessions start")
 	m.mu.RLock()
 	snapshot := make([]*Session, 0, len(m.sessions))
 	for _, s := range m.sessions {
@@ -406,6 +415,7 @@ func (m *Manager) GetActiveSessions() []ActiveSessionInfo {
 		}
 		s.mu.Unlock()
 	}
+	logger.Trace("session GetActiveSessions done", "sessions", len(snapshot), "active", len(result))
 	return result
 }
 

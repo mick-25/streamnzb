@@ -4,6 +4,8 @@ import (
 	"context"
 	"sync"
 	"time"
+
+	"streamnzb/pkg/logger"
 )
 
 type ClientPool struct {
@@ -140,11 +142,14 @@ func (p *ClientPool) TotalMegabytes() float64 {
 }
 
 func (p *ClientPool) Get(ctx context.Context) (*Client, error) {
+	logger.Trace("pool.Get start", "host", p.host)
 	// 1. Prefer Idle Client
 	select {
 	case <-ctx.Done():
+		logger.Trace("pool.Get ctx.Done (idle check)", "host", p.host)
 		return nil, ctx.Err()
 	case c := <-p.idleClients:
+		logger.Trace("pool.Get from idle", "host", p.host)
 		return c, nil
 	default:
 	}
@@ -152,6 +157,7 @@ func (p *ClientPool) Get(ctx context.Context) (*Client, error) {
 	// 2. Try to create new connection (check slots)
 	select {
 	case <-ctx.Done():
+		logger.Trace("pool.Get ctx.Done (slot check)", "host", p.host)
 		return nil, ctx.Err()
 	case <-p.slots:
 		// Got permit, dial
@@ -166,15 +172,19 @@ func (p *ClientPool) Get(ctx context.Context) (*Client, error) {
 			p.slots <- struct{}{}
 			return nil, err
 		}
+		logger.Trace("pool.Get new client", "host", p.host)
 		return c, nil
 	default:
 	}
 
 	// 3. Block and wait for resource
+	logger.Trace("pool.Get blocking", "host", p.host)
 	select {
 	case <-ctx.Done():
+		logger.Trace("pool.Get ctx.Done (blocking)", "host", p.host)
 		return nil, ctx.Err()
 	case c := <-p.idleClients:
+		logger.Trace("pool.Get from idle (after block)", "host", p.host)
 		return c, nil
 	case <-p.slots:
 		// Got permit, dial
@@ -188,6 +198,7 @@ func (p *ClientPool) Get(ctx context.Context) (*Client, error) {
 			p.slots <- struct{}{}
 			return nil, err
 		}
+		logger.Trace("pool.Get new client (after block)", "host", p.host)
 		return c, nil
 	}
 }
@@ -229,6 +240,7 @@ func (p *ClientPool) Put(c *Client) {
 		return
 	}
 	c.LastUsed = time.Now()
+	logger.Trace("pool.Put", "host", p.host)
 
 	select {
 	case p.idleClients <- c:
@@ -246,6 +258,7 @@ func (p *ClientPool) Discard(c *Client) {
 	if c == nil {
 		return
 	}
+	logger.Trace("pool.Discard", "host", p.host)
 	c.Quit()
 	p.slots <- struct{}{}
 }
