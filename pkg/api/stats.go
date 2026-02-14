@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"streamnzb/pkg/indexer"
+	"streamnzb/pkg/logger"
 	"streamnzb/pkg/session"
 )
 
@@ -48,6 +49,7 @@ type ProviderStats struct {
 
 // collectStats gathers metrics from all sources
 func (s *Server) collectStats() SystemStats {
+	logger.Trace("collectStats start")
 	stats := SystemStats{
 		Timestamp: time.Now(),
 		Providers: make([]ProviderStats, 0),
@@ -190,5 +192,6 @@ func (s *Server) collectStats() SystemStats {
 
 	stats.ActiveStreams = len(stats.ActiveSessions)
 
+	logger.Trace("collectStats done", "providers", len(stats.Providers), "sessions", len(stats.ActiveSessions))
 	return stats
 }
