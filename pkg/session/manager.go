@@ -172,53 +172,63 @@ func (m *Manager) CreateDeferredSession(sessionID, nzbURL, indexerName, itemTitl
 	return session, nil
 }
 
-// GetOrDownloadNZB returns the NZB, downloading it if necessary
+// GetOrDownloadNZB returns the NZB, downloading it if necessary.
+// I/O (DownloadNZB, parse, NewFile) is done outside the session lock so GetActiveSessions
+// and other callers are not blocked for the duration of the download (avoids app appearing
+// hung and requiring restart when the indexer is slow or the play request holds the lock).
 func (s *Session) GetOrDownloadNZB(manager *Manager) (*nzb.NZB, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	if s.NZB != nil {
-		return s.NZB, nil
+		nzb := s.NZB
+		s.mu.Unlock()
+		return nzb, nil
 	}
-
-	// Double-check if we have deferred info
 	if s.NZBURL == "" || s.Indexer == nil {
+		s.mu.Unlock()
 		return nil, fmt.Errorf("session has no NZB and no deferred download info")
 	}
+	nzbURL := s.NZBURL
+	indexer := s.Indexer
+	itemTitle := s.ItemTitle
+	indexerName := s.IndexerName
+	ctx := s.ctx
+	s.mu.Unlock()
 
-	// Download it now!
-	// We use the stored Indexer interface
-	logger.Info("Lazy Downloading NZB...", "title", s.ItemTitle, "indexer", s.IndexerName)
-	
-	data, err := s.Indexer.DownloadNZB(s.NZBURL)
+	// Download and parse outside lock so session is not held for I/O duration
+	logger.Info("Lazy Downloading NZB...", "title", itemTitle, "indexer", indexerName)
+	data, err := indexer.DownloadNZB(nzbURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to lazy download NZB: %w", err)
 	}
-
-	// Parse it
 	parsedNZB, err := nzb.Parse(bytes.NewReader(data))
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse lazy downloaded NZB: %w", err)
 	}
-
-	// Initialize files (same logic as CreateSession)
 	contentFiles := parsedNZB.GetContentFiles()
 	if len(contentFiles) == 0 {
 		return nil, fmt.Errorf("no content files found in lazy NZB")
 	}
 
-	// We need access to manager's pools/estimator to create loader files
-	// We passed manager as arg to avoid storing it in Session (circular ref or just clean design)
+	manager.mu.RLock()
+	pools := manager.pools
+	estimator := manager.estimator
+	manager.mu.RUnlock()
+
 	var loaderFiles []*loader.File
 	for _, info := range contentFiles {
-		lf := loader.NewFile(s.ctx, info.File, manager.pools, manager.estimator)
+		lf := loader.NewFile(ctx, info.File, pools, estimator)
 		loaderFiles = append(loaderFiles, lf)
 	}
 
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// Re-check in case another goroutine filled it
+	if s.NZB != nil {
+		return s.NZB, nil
+	}
 	s.NZB = parsedNZB
 	s.Files = loaderFiles
 	s.File = loaderFiles[0]
-	
 	return s.NZB, nil
 }
 
@@ -270,22 +280,27 @@ func (m *Manager) cleanupLoop() {
 	}
 }
 
-// cleanup removes sessions that haven't been accessed within TTL
+// cleanup removes sessions that haven't been accessed within TTL.
+// We must not call session.Close() while holding session.mu: Close() locks the same
+// mutex, causing deadlock (sync.Mutex is not reentrant). So we remove from map
+// under lock, then unlock, then Close().
 func (m *Manager) cleanup() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	now := time.Now()
+	var toClose []*Session
 	for id, session := range m.sessions {
 		session.mu.Lock()
-		// Don't clean up sessions with active playback
-		// This prevents cancelling streams that are currently being served
 		hasActivePlayback := session.ActivePlays > 0 || len(session.Clients) > 0
 		if !hasActivePlayback && now.Sub(session.LastAccess) > m.ttl {
-			session.Close()
 			delete(m.sessions, id)
+			toClose = append(toClose, session)
 		}
 		session.mu.Unlock()
+	}
+	for _, s := range toClose {
+		s.Close()
 	}
 }
 
@@ -384,7 +399,11 @@ func (m *Manager) GetActiveSessions() []ActiveSessionInfo {
 
 	var result []ActiveSessionInfo
 	for _, s := range snapshot {
-		s.mu.Lock()
+		// Use TryLock so we never block: if a session is busy (e.g. KeepAlive during stream Read),
+		// skip it this round rather than hanging the dashboard/WebSocket stats.
+		if !s.mu.TryLock() {
+			continue
+		}
 		// Purge IPs that haven't been seen for 60 seconds
 		for ip, lastSeen := range s.Clients {
 			if time.Since(lastSeen) > 60*time.Second {
