@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"time"
+
+	"streamnzb/pkg/logger"
 )
 
 type Client struct {
@@ -108,6 +110,7 @@ func (c *Client) GetStatus(nzbID string) (*StatusResponse, error) {
 // CheckPreDownload checks if the NZB is already known by its Indexer ID
 // Returns the NZB ID (hash), availability status, last updated time, and the capable provider if known
 func (c *Client) CheckPreDownload(indexerName, externalID string, validProviders []string) (string, bool, time.Time, string, error) {
+	logger.Trace("CheckPreDownload start", "indexer", indexerName, "externalID", externalID)
 	if c.APIKey == "" {
 		return "", false, time.Time{}, "", nil
 	}
@@ -115,6 +118,7 @@ func (c *Client) CheckPreDownload(indexerName, externalID string, validProviders
 	url := fmt.Sprintf("%s/status/placeholder?indexer=%s&external_id=%s", c.BaseURL, indexerName, externalID)
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
+		logger.Trace("CheckPreDownload request build err", "err", err)
 		return "", false, time.Time{}, "", err
 	}
 	
@@ -122,15 +126,18 @@ func (c *Client) CheckPreDownload(indexerName, externalID string, validProviders
 
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
+		logger.Trace("CheckPreDownload HTTP err", "err", err)
 		return "", false, time.Time{}, "", err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusNotFound {
+		logger.Trace("CheckPreDownload done", "status", "not_found")
 		return "", false, time.Time{}, "", nil // Unknown mapping
 	}
 
 	if resp.StatusCode != http.StatusOK {
+		logger.Trace("CheckPreDownload done", "status", resp.StatusCode)
 		return "", false, time.Time{}, "", fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
 
@@ -168,5 +175,6 @@ func (c *Client) CheckPreDownload(indexerName, externalID string, validProviders
 		}
 	}
 
+	logger.Trace("CheckPreDownload done", "nzbID", status.NZBID, "isHealthy", isHealthy, "capableProvider", capableProvider)
 	return status.NZBID, status.Available || isHealthy, status.LastUpdated, capableProvider, nil
 }

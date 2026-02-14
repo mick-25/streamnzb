@@ -90,14 +90,13 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	defer ticker.Stop()
 
 	// Notify current stats and config immediately
-	// We push to the send channel instead of writing directly to avoid concurrency issues
-	// But since this is the only goroutine at this point (before read/write loops), direct write is risky if we start the read loop early?
-	// No, we haven't started write loop yet.
-	// Actually, let's just push to channel.
 	go func() {
+		logger.Trace("WS initial send: collectStats start")
 		stats := s.collectStats()
+		logger.Trace("WS initial send: collectStats done")
 		payload, _ := json.Marshal(stats)
 		client.send <- WSMessage{Type: "stats", Payload: payload}
+		logger.Trace("WS initial send: stats sent")
 
 		// Send user-specific config
 		s.sendConfig(client)

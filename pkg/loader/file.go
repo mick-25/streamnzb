@@ -240,11 +240,13 @@ func (f *File) TotalConnections() int {
 
 // DownloadSegment performs the actual NNTP download (Exported for SmartStream)
 func (f *File) DownloadSegment(ctx context.Context, index int) ([]byte, error) {
+	logger.Trace("DownloadSegment start", "index", index)
 	// Optimization: Check single-segment cache first
 	f.mu.Lock()
 	if f.lastSegIndex == index && f.lastSegData != nil {
 		data := f.lastSegData
 		f.mu.Unlock()
+		logger.Trace("DownloadSegment cache hit", "index", index)
 		return data, nil
 	}
 	f.mu.Unlock()
@@ -327,11 +329,11 @@ func (f *File) DownloadSegment(ctx context.Context, index int) ([]byte, error) {
 		}
 
 		// Decode with timeout to prevent indefinite blocking
-		// The connection already has a deadline, but this adds extra safety
 		decodeDone := make(chan struct {
 			frame *decode.Frame
 			err   error
 		}, 1)
+		logger.Trace("DownloadSegment decode start", "index", index)
 		go func() {
 			frame, err := decode.DecodeToBytes(r)
 			decodeDone <- struct {
@@ -343,28 +345,28 @@ func (f *File) DownloadSegment(ctx context.Context, index int) ([]byte, error) {
 		var frame *decode.Frame
 		select {
 		case <-downloadCtx.Done():
-			// We did not consume the body; reusing this client would leave the connection
-			// in a bad state and can cause panics in Group()/ReadCodeLine. Discard it.
+			logger.Trace("DownloadSegment decode timeout/cancel, discarding client", "index", index)
 			pool.Discard(client)
 			return nil, downloadCtx.Err()
 		case result := <-decodeDone:
 			frame = result.frame
 			err = result.err
+			logger.Trace("DownloadSegment decode done", "index", index, "err", err)
 		}
 
 		if err != nil {
-			// Decoding failed (corruption?)
 			pool.Put(client)
 			tried[poolIdx] = true
 			lastErr = err
 			continue
 		}
 
-		// Success!
+		logger.Trace("DownloadSegment success", "index", index)
 		pool.Put(client)
 		return frame.Data, nil
 	}
 
+	logger.Trace("DownloadSegment all pools failed", "index", index, "err", lastErr)
 	// Error handling: If all providers fail, ZERO-FILL to keep stream alive
 	logger.Debug("Segment failed on all providers, zero-filling", "index", index, "err", lastErr)
 
