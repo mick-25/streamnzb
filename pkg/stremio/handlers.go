@@ -254,7 +254,9 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request, device *au
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
+	logger.Trace("stream request start", "type", contentType, "id", id)
 	streams, err := s.searchAndValidate(ctx, contentType, id, device)
+	logger.Trace("stream request searchAndValidate returned", "count", len(streams), "err", err)
 	if err != nil {
 		logger.Error("Error searching for streams", "err", err)
 		streams = []Stream{} // Return empty list on error
@@ -347,6 +349,7 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string, 
 	}
 
 	logger.Debug("Found NZB results", "count", len(searchResp.Channel.Items))
+	logger.Trace("searchAndValidate: starting triage", "items", len(searchResp.Channel.Items))
 
 	// Filter results using Triage Service with device-specific filters if available
 	var candidates []triage.Candidate
@@ -416,6 +419,7 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string, 
 		maxToValidate = 6 // Fallback default
 	}
 	maxAttempts := maxToValidate * 2 // Auto-calculate safety limit
+	logger.Trace("searchAndValidate: launching validators", "candidates", len(candidates), "maxToValidate", maxToValidate, "maxAttempts", maxAttempts)
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -456,6 +460,7 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string, 
 			mu.Unlock()
 
 			// Validate candidate (pass device to include token in URL)
+			logger.Trace("validation goroutine: calling validateCandidate", "title", cand.Result.Title)
 			stream, err := s.validateCandidate(ctx, cand, device)
 			if err == nil {
 				mu.Lock()
@@ -463,6 +468,7 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string, 
 				if validated < maxToValidate {
 					resultChan <- stream
 					validated++ // Only count successful validations
+					logger.Trace("validation goroutine: sent stream", "title", stream.Name, "validated", validated)
 
 					// If we just hit the limit, cancel remaining work
 					if validated >= maxToValidate {
@@ -471,6 +477,8 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string, 
 					}
 				}
 				mu.Unlock()
+			} else {
+				logger.Trace("validation goroutine: validateCandidate failed", "title", cand.Result.Title, "err", err)
 			}
 		}(candidate)
 	}
@@ -500,17 +508,20 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string, 
 		select {
 		case stream, ok := <-resultChan:
 			if !ok {
-				// Channel closed, all results collected
+				logger.Trace("collect loop: channel closed", "total_streams", len(streams))
 				collecting = false
 			} else {
 				streams = append(streams, stream)
+				logger.Trace("collect loop: received stream", "name", stream.Name, "count", len(streams))
 			}
 		case <-timeout:
 			logger.Warn("Stream collection timeout, returning partial results", "count", len(streams))
+			logger.Trace("collect loop: timeout", "count", len(streams))
 			cancel()
 			collecting = false
 		case <-ctx.Done():
 			logger.Debug("Stream collection cancelled, returning partial results", "count", len(streams))
+			logger.Trace("collect loop: ctx.Done", "count", len(streams))
 			cancel()
 			collecting = false
 		}
@@ -537,6 +548,7 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string, 
 // validateCandidate validates a single candidate and returns a stream
 func (s *Server) validateCandidate(ctx context.Context, cand triage.Candidate, device *auth.Device) (Stream, error) {
 	item := cand.Result
+	logger.Trace("validateCandidate start", "title", item.Title)
 
 	// Get indexer name for AvailNZB
 	var indexerName string
@@ -562,7 +574,9 @@ func (s *Server) validateCandidate(ctx context.Context, cand triage.Candidate, d
 			guidToCheck = item.ActualGUID
 		}
 
+		logger.Trace("validateCandidate: CheckPreDownload start", "title", item.Title)
 		nzbID, isHealthy, lastUpdated, _, err := s.availClient.CheckPreDownload(indexerName, guidToCheck, providerHosts)
+		logger.Trace("validateCandidate: CheckPreDownload done", "title", item.Title, "skipValidation", err == nil && nzbID != "" && isHealthy, "err", err)
 		if err == nil && nzbID != "" {
 			if isHealthy {
 				skipValidation = true
@@ -588,6 +602,7 @@ func (s *Server) validateCandidate(ctx context.Context, cand triage.Candidate, d
 		}
 
 		logger.Info("Deferring NZB download (Lazy)", "title", item.Title, "session_id", sessionID)
+		logger.Trace("validateCandidate: CreateDeferredSession start", "title", item.Title)
 
 		_, err := s.sessionManager.CreateDeferredSession(
 			sessionID,
@@ -597,6 +612,7 @@ func (s *Server) validateCandidate(ctx context.Context, cand triage.Candidate, d
 			item.SourceIndexer,
 			item.GUID,
 		)
+		logger.Trace("validateCandidate: CreateDeferredSession done", "title", item.Title, "err", err)
 		if err != nil {
 			return Stream{}, fmt.Errorf("failed to create deferred session: %w", err)
 		}
@@ -628,7 +644,9 @@ func (s *Server) validateCandidate(ctx context.Context, cand triage.Candidate, d
 		sessionID = nzbParsed.Hash()
 
 		// Validate availability
+		logger.Trace("validateCandidate: ValidateNZB start", "title", item.Title)
 		validationResults := s.validator.ValidateNZB(ctx, nzbParsed)
+		logger.Trace("validateCandidate: ValidateNZB done", "title", item.Title, "results", len(validationResults))
 		if len(validationResults) == 0 {
 			return Stream{}, fmt.Errorf("no valid providers")
 		}
@@ -647,7 +665,9 @@ func (s *Server) validateCandidate(ctx context.Context, cand triage.Candidate, d
 		}()
 
 		// Store NZB in session manager
+		logger.Trace("validateCandidate: CreateSession start", "title", item.Title)
 		_, err = s.sessionManager.CreateSession(sessionID, nzbParsed, item.GUID)
+		logger.Trace("validateCandidate: CreateSession done", "title", item.Title, "err", err)
 		if err != nil {
 			return Stream{}, fmt.Errorf("failed to create session: %w", err)
 		}
@@ -943,37 +963,6 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"status": "ok",
 		"addon":  "streamnzb",
 	})
-}
-
-// StreamResponse represents the response to a stream request
-type StreamResponse struct {
-	Streams []Stream `json:"streams"`
-}
-
-// Stream represents a single stream option
-type Stream struct {
-	// URL for direct streaming (HTTP video file)
-	URL string `json:"url,omitempty"`
-
-	// ExternalUrl for external player (alternative to URL)
-	ExternalUrl string `json:"externalUrl,omitempty"`
-
-	// Display name in Stremio
-	Name string `json:"name,omitempty"`
-
-	// Optional metadata (shown in Stremio UI)
-	Title         string         `json:"title,omitempty"`
-	Description   string         `json:"description,omitempty"`
-	BehaviorHints *BehaviorHints `json:"behaviorHints,omitempty"`
-}
-
-// BehaviorHints provides hints to Stremio about stream behavior
-type BehaviorHints struct {
-	NotWebReady      bool     `json:"notWebReady,omitempty"`
-	BingeGroup       string   `json:"bingeGroup,omitempty"`
-	CountryWhitelist []string `json:"countryWhitelist,omitempty"`
-	VideoSize        int64    `json:"videoSize,omitempty"`
-	Filename         string   `json:"filename,omitempty"`
 }
 
 // getQualityScore assigns a score for sorting (higher = better quality)

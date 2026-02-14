@@ -75,9 +75,11 @@ func (c *Checker) ValidateNZB(ctx context.Context, nzbData *nzb.NZB) map[string]
 	cacheKey := nzbData.Hash()
 	if cached := c.cache.Get(cacheKey); cached != nil {
 		logger.Debug("Using cached validation results for NZB")
+		logger.Trace("ValidateNZB: cache hit", "hash", cacheKey)
 		return cached
 	}
-	
+	logger.Trace("ValidateNZB start", "hash", cacheKey)
+
 	// Validate across all providers in parallel
 	c.mu.RLock()
 	providers := c.providers
@@ -105,14 +107,16 @@ func (c *Checker) ValidateNZB(ctx context.Context, nzbData *nzb.NZB) map[string]
 	
 	select {
 	case <-done:
-		// All validations completed
+		logger.Trace("ValidateNZB: all providers done", "results", len(results))
 	case <-ctx.Done():
 		// Context cancelled, return partial results
 		logger.Debug("Validation cancelled, returning partial results")
+		logger.Trace("ValidateNZB: ctx.Done", "partial_results", len(results))
 		return results
 	case <-time.After(30 * time.Second):
 		// Timeout after 30 seconds to prevent hanging
 		logger.Warn("Validation timeout, returning partial results", "providers", len(providers))
+		logger.Trace("ValidateNZB: 30s timeout", "partial_results", len(results))
 		return results
 	}
 
@@ -138,11 +142,14 @@ func (c *Checker) validateProvider(ctx context.Context, nzbData *nzb.NZB, provid
 	result.TotalArticles = len(nzbData.Files[0].Segments)
 	result.CheckedArticles = len(articles)
 
+	logger.Trace("validateProvider: pool.Get start", "provider", providerName)
 	client, err := pool.Get(ctx)
 	if err != nil {
+		logger.Trace("validateProvider: pool.Get failed", "provider", providerName, "err", err)
 		result.Error = fmt.Errorf("failed to get client: %w", err)
 		return result
 	}
+	logger.Trace("validateProvider: pool.Get ok", "provider", providerName)
 	// Only Put back if we finished cleanly; otherwise Discard to avoid poisoning the pool
 	// (errors or ctx cancel can leave the connection in a bad state)
 	releaseAsOk := false
@@ -150,6 +157,7 @@ func (c *Checker) validateProvider(ctx context.Context, nzbData *nzb.NZB, provid
 		if releaseAsOk {
 			pool.Put(client)
 		} else {
+			logger.Trace("validateProvider: defer Discard client", "provider", providerName)
 			pool.Discard(client)
 		}
 	}()
@@ -165,6 +173,7 @@ func (c *Checker) validateProvider(ctx context.Context, nzbData *nzb.NZB, provid
 
 		exists, err := client.StatArticle(articleID)
 		if err != nil {
+			logger.Trace("validateProvider: StatArticle error, discarding client", "provider", providerName, "err", err)
 			// Connection error or timeout; don't reuse this client
 			result.Error = err
 			return result
@@ -179,6 +188,7 @@ func (c *Checker) validateProvider(ctx context.Context, nzbData *nzb.NZB, provid
 	result.Available = missing == 0
 
 	logger.Debug("Provider check", "provider", providerName, "available", result.CheckedArticles-missing, "total", result.CheckedArticles)
+	logger.Trace("validateProvider: done, Put client", "provider", providerName)
 
 	return result
 }
