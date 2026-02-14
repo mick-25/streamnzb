@@ -11,6 +11,8 @@ import (
 	"time"
 )
 
+const dialTimeout = 30 * time.Second
+
 type Client struct {
 	conn    *textproto.Conn
 	netConn net.Conn
@@ -30,9 +32,10 @@ func NewClient(address string, port int, ssl bool) (*Client, error) {
 	var err error
 
 	if ssl {
-		conn, err = tls.Dial("tcp", fullAddr, nil)
+		dialer := &net.Dialer{Timeout: dialTimeout}
+		conn, err = tls.DialWithDialer(dialer, "tcp", fullAddr, nil)
 	} else {
-		conn, err = net.Dial("tcp", fullAddr)
+		conn, err = net.DialTimeout("tcp", fullAddr, dialTimeout)
 	}
 
 	if err != nil {
@@ -230,9 +233,10 @@ func (c *Client) Reconnect() error {
 	var err error
 
 	if c.ssl {
-		conn, err = tls.Dial("tcp", fullAddr, nil)
+		dialer := &net.Dialer{Timeout: dialTimeout}
+		conn, err = tls.DialWithDialer(dialer, "tcp", fullAddr, nil)
 	} else {
-		conn, err = net.Dial("tcp", fullAddr)
+		conn, err = net.DialTimeout("tcp", fullAddr, dialTimeout)
 	}
 
 	if err != nil {

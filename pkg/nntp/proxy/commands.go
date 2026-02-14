@@ -7,6 +7,10 @@ import (
 	"time"
 )
 
+// poolGetTimeout limits how long a proxy command waits for an NNTP connection.
+// Prevents indefinite hang when all pool connections are in use or stuck.
+const poolGetTimeout = 60 * time.Second
+
 // handleQuit handles the QUIT command
 func (s *Session) handleQuit(args []string) error {
 	s.shouldQuit = true
@@ -104,9 +108,10 @@ func (s *Session) handleArticle(args []string) error {
 
 	messageID := args[0]
 
-	// Try each provider until we get the article
+	ctx, cancel := context.WithTimeout(context.Background(), poolGetTimeout)
+	defer cancel()
 	for _, pool := range s.pools {
-		client, err := pool.Get(context.Background())
+		client, err := pool.Get(ctx)
 		if err != nil {
 			continue
 		}
@@ -142,9 +147,10 @@ func (s *Session) handleBody(args []string) error {
 
 	messageID := args[0]
 
-	// Try each provider
+	ctx, cancel := context.WithTimeout(context.Background(), poolGetTimeout)
+	defer cancel()
 	for _, pool := range s.pools {
-		client, err := pool.Get(context.Background())
+		client, err := pool.Get(ctx)
 		if err != nil {
 			continue
 		}
@@ -176,9 +182,10 @@ func (s *Session) handleHead(args []string) error {
 
 	messageID := args[0]
 
-	// Try each provider
+	ctx, cancel := context.WithTimeout(context.Background(), poolGetTimeout)
+	defer cancel()
 	for _, pool := range s.pools {
-		client, err := pool.Get(context.Background())
+		client, err := pool.Get(ctx)
 		if err != nil {
 			continue
 		}
@@ -210,9 +217,10 @@ func (s *Session) handleStat(args []string) error {
 
 	messageID := args[0]
 
-	// Try each provider
+	ctx, cancel := context.WithTimeout(context.Background(), poolGetTimeout)
+	defer cancel()
 	for _, pool := range s.pools {
-		client, err := pool.Get(context.Background())
+		client, err := pool.Get(ctx)
 		if err != nil {
 			continue
 		}

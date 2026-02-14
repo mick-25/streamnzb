@@ -232,8 +232,19 @@ func (s *SmartStream) Close() error {
 
 	s.cancel()
 	s.downloadCond.Broadcast()
-	s.wg.Wait()
-	return nil
+	// Wait for downloadManager and in-flight workers with a cap so Close() cannot hang forever
+	done := make(chan struct{})
+	go func() {
+		s.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-time.After(30 * time.Second):
+		// Workers may still be running (e.g. DownloadSegment with 5-min timeout); don't block forever
+		return nil
+	}
 }
 
 func (s *SmartStream) downloadManager() {
@@ -378,6 +389,8 @@ func (s *SmartStream) downloadManager() {
 						s.segmentCache[idx] = data
 						s.downloadCond.Broadcast() // Wake up reader
 					} else {
+						// Wake download manager so it can re-evaluate (queue more or exit); avoids hanging when all workers fail
+						s.downloadCond.Broadcast()
 						isCanceled := errors.Is(err, context.Canceled) ||
 							err == context.Canceled ||
 							strings.Contains(err.Error(), "canceled") ||

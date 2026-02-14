@@ -863,8 +863,9 @@ func (s *Server) handleDebugPlay(w http.ResponseWriter, r *http.Request, device 
 		// URL - try indexer download first
 		nzbData, err = s.indexer.DownloadNZB(nzbPath)
 		if err != nil {
-			// Fallback to simple HTTP GET
-			resp, httpErr := http.Get(nzbPath)
+			// Fallback to HTTP GET with timeout to avoid hanging on slow/broken URLs
+			httpClient := &http.Client{Timeout: 60 * time.Second}
+			resp, httpErr := httpClient.Get(nzbPath)
 			if httpErr != nil {
 				logger.Error("Failed to download NZB", "url", nzbPath, "err", err, "httpErr", httpErr)
 				http.Error(w, "Failed to download NZB: "+err.Error(), http.StatusInternalServerError)

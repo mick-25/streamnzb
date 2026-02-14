@@ -325,8 +325,11 @@ func (p *ClientPool) reaperLoop() {
 }
 
 // Validate checks if the pool can successfully connect and authenticate.
+// Uses a timeout to avoid blocking config save/validation indefinitely when the pool is exhausted.
 func (p *ClientPool) Validate() error {
-	c, err := p.Get(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	c, err := p.Get(ctx)
 	if err != nil {
 		return err
 	}
