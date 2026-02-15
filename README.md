@@ -105,7 +105,6 @@ StreamNZB can use **[AvailNZB](https://check.snzb.stream)** to speed up stream d
 
 - **What it does**: When enabled, StreamNZB checks AvailNZB for releases that others have already verified, so you can get playable streams without re-validating every release. It also reports success/failure for your providers so the database stays up to date.
 - **Where to find it**: [https://check.snzb.stream](https://check.snzb.stream)
-- **Configuration**: In **Settings**, set the AvailNZB URL and API key (or use `AVAILNZB_URL` and `AVAILNZB_API_KEY` environment variables). If not configured, AvailNZB is simply skipped.
 
 > [!TIP]
 > Use **Device Management** (Settings → Devices) to create separate accounts for different users or Stremio installations. Each device gets its own token and can have custom filters and sorting preferences.
@@ -175,7 +174,7 @@ If you find this project useful and want to support its development, you can buy
 [**Buy Me A Coffee**](https://buymeacoffee.com/gaisberg)
 
 ### 🛡️ Privacy & Community
-When [AvailNZB](https://check.snzb.stream) is configured, StreamNZB can submit availability reports (release URL, provider, success/failure) to the community database to improve global retention accuracy. No personal data is sent. To opt out, leave AvailNZB URL/API key unset or build the binary from source and do not configure AvailNZB.
+[AvailNZB](https://check.snzb.stream) is configured for official releases, to opt out build the binary yourself.
 
 ### 📜 Credits
 
