@@ -692,7 +692,7 @@ func (s *Server) warmAvailNZBCache(ctx context.Context, req indexer.SearchReques
 			logger.Debug("AvailNZB cache warm: report failed", "title", item.Title, "err", err)
 			return
 		}
-		logger.Info("AvailNZB cache warm: reported", "title", item.Title)
+		logger.Debug("AvailNZB cache warm: reported", "title", item.Title)
 		return
 	}
 	logger.Debug("AvailNZB cache warm: no new candidate validated")
@@ -766,7 +766,7 @@ func (s *Server) validateCandidate(ctx context.Context, cand triage.Candidate, d
 		}
 	} else {
 		// IMMEDIATE - Download and validate
-		logger.Info("Downloading NZB for validation", "title", item.Title)
+		logger.Debug("Downloading NZB for validation", "title", item.Title)
 
 		// Download NZB
 		var nzbData []byte

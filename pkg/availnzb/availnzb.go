@@ -66,8 +66,8 @@ type ReleaseItem struct {
 
 // ReleasesResponse is the response from GET /api/v1/releases.
 type ReleasesResponse struct {
-	ImdbID  string        `json:"imdb_id,omitempty"`
-	Count   int           `json:"count"`
+	ImdbID   string        `json:"imdb_id,omitempty"`
+	Count    int           `json:"count"`
 	Releases []ReleaseItem `json:"releases"`
 }
 
@@ -127,7 +127,7 @@ func (c *Client) ReportAvailability(releaseURL string, providerURL string, statu
 		return nil
 	}
 
-	logger.Info("AvailNZB report", "url", releaseURL, "release_name", body.ReleaseName, "provider", providerURL, "status", status, "imdb_id", body.ImdbID, "tvdb_id", body.TvdbID, "season", body.Season, "episode", body.Episode)
+	logger.Debug("AvailNZB report", "url", releaseURL, "release_name", body.ReleaseName, "provider", providerURL, "status", status, "imdb_id", body.ImdbID, "tvdb_id", body.TvdbID, "season", body.Season, "episode", body.Episode)
 
 	reqBody, err := json.Marshal(body)
 	if err != nil {

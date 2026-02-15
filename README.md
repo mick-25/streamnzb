@@ -7,6 +7,7 @@ StreamNZB is a unified **Stremio Addon** and **Usenet Proxy** that pools multipl
 
 ### ✨ Features
 *   **Stremio Integration**: Stream content directly from Usenet with availability caching.
+*   **AvailNZB**: Optional integration with the [AvailNZB](https://check.snzb.stream) community availability database for faster stream discovery and shared health reports.
 *   **Multiple Indexers**: Supports **NZBHydra2** and **Prowlarr** with parallel search aggregation.
 *   **Smart Pooling**: Aggregates connections from multiple Usenet providers.
 *   **Availability Checking**: Verifies article existence before attempting playback.
@@ -98,6 +99,14 @@ Alternatively you can set environment variables to configure the application on 
    - Configure indexers in **Settings → Indexers** (supports NZBHydra2, Prowlarr, and internal indexers)
    - Set global filters and sorting in **Settings → Filters** and **Settings → Sorting**
 
+### 📊 AvailNZB (Community availability database)
+
+StreamNZB can use **[AvailNZB](https://check.snzb.stream)** to speed up stream discovery and contribute to a shared availability database:
+
+- **What it does**: When enabled, StreamNZB checks AvailNZB for releases that others have already verified, so you can get playable streams without re-validating every release. It also reports success/failure for your providers so the database stays up to date.
+- **Where to find it**: [https://check.snzb.stream](https://check.snzb.stream)
+- **Configuration**: In **Settings**, set the AvailNZB URL and API key (or use `AVAILNZB_URL` and `AVAILNZB_API_KEY` environment variables). If not configured, AvailNZB is simply skipped.
+
 > [!TIP]
 > Use **Device Management** (Settings → Devices) to create separate accounts for different users or Stremio installations. Each device gets its own token and can have custom filters and sorting preferences.
 
@@ -166,7 +175,7 @@ If you find this project useful and want to support its development, you can buy
 [**Buy Me A Coffee**](https://buymeacoffee.com/gaisberg)
 
 ### 🛡️ Privacy & Community
-Official builds automatically submit anonymous availability status reports to a community database to help improve global retention accuracy. To opt-out of this reporting, please build the binary from source.
+When [AvailNZB](https://check.snzb.stream) is configured, StreamNZB can submit availability reports (release URL, provider, success/failure) to the community database to improve global retention accuracy. No personal data is sent. To opt out, leave AvailNZB URL/API key unset or build the binary from source and do not configure AvailNZB.
 
 ### 📜 Credits
 

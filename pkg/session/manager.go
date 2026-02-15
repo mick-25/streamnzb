@@ -244,13 +244,14 @@ func (s *Session) GetOrDownloadNZB(manager *Manager) (*nzb.NZB, error) {
 	s.mu.Unlock()
 
 	// Download and parse outside lock so session is not held for I/O duration
-	logger.Info("Lazy Downloading NZB...", "title", itemTitle, "indexer", indexerName)
+	logger.Trace("Lazy Downloading NZB...", "title", itemTitle, "indexer", indexerName, "url", nzbURL)
 	data, err := indexer.DownloadNZB(nzbURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to lazy download NZB: %w", err)
 	}
 	parsedNZB, err := nzb.Parse(bytes.NewReader(data))
 	if err != nil {
+		logger.Trace("Failed to parse lazy downloaded NZB", "url", nzbURL, "err", err)
 		return nil, fmt.Errorf("failed to parse lazy downloaded NZB: %w", err)
 	}
 	contentFiles := parsedNZB.GetContentFiles()
