@@ -153,7 +153,11 @@ type Config struct {
 // applies environment variable overrides once, then saves the merged config.
 // Environment variables are not read again after startup; subsequent reloads
 // use only the saved config.
-// Priority: Environment variables (if not empty) > config.json > defaults
+//
+// Priority: Environment variables (if set) > config.json > defaults.
+// When saving from the UI, values for keys that have an env override are preserved
+// from the current effective config (so the file is not overwritten with form values
+// that would be overridden by env on next restart). See CopyEnvOverridesFrom.
 func Load() (*Config, error) {
 	// 1. Determine config path using common data directory function
 	dataDir := paths.GetDataDir()
@@ -442,7 +446,65 @@ func ApplyEnvOverrides(cfg *Config, o env.ConfigOverrides, keys []string) {
 }
 
 // GetEnvOverrideKeys returns config JSON keys that have environment variable overrides set.
-// These values will be overwritten on next restart. Used by the UI to show warnings.
+// Used by the UI to show "overwritten on restart" warnings and when saving to preserve
+// those values so the file is not overwritten with form data that env would override.
 func GetEnvOverrideKeys() []string {
 	return env.OverrideKeys()
+}
+
+// CopyEnvOverridesFrom copies into dst the effective values for any key that has an
+// environment override (from GetEnvOverrideKeys). Call before saving config from the UI
+// so that env/ldflag-derived values are not overwritten by the form payload; the file
+// then keeps the current effective values for those keys and env still wins on restart.
+func CopyEnvOverridesFrom(src, dst *Config) {
+	if src == nil || dst == nil {
+		return
+	}
+	keys := env.OverrideKeys()
+	for _, k := range keys {
+		switch k {
+		case env.KeyNZBHydraURL:
+			dst.NZBHydra2URL = src.NZBHydra2URL
+		case env.KeyNZBHydraAPIKey:
+			dst.NZBHydra2APIKey = src.NZBHydra2APIKey
+		case env.KeyProwlarrURL:
+			dst.ProwlarrURL = src.ProwlarrURL
+		case env.KeyProwlarrAPIKey:
+			dst.ProwlarrAPIKey = src.ProwlarrAPIKey
+		case env.KeyAddonPort:
+			dst.AddonPort = src.AddonPort
+		case env.KeyAddonBaseURL:
+			dst.AddonBaseURL = src.AddonBaseURL
+		case env.KeyLogLevel:
+			dst.LogLevel = src.LogLevel
+		case env.KeyCacheTTL:
+			dst.CacheTTLSeconds = src.CacheTTLSeconds
+		case env.KeyValidationSize:
+			dst.ValidationSampleSize = src.ValidationSampleSize
+		case env.KeyAvailNZBURL:
+			dst.AvailNZBURL = src.AvailNZBURL
+		case env.KeyAvailNZBAPIKey:
+			dst.AvailNZBAPIKey = src.AvailNZBAPIKey
+		case env.KeyTMDBAPIKey:
+			dst.TMDBAPIKey = src.TMDBAPIKey
+		case env.KeyTVDBAPIKey:
+			dst.TVDBAPIKey = src.TVDBAPIKey
+		case env.KeyProxyEnabled:
+			dst.ProxyEnabled = src.ProxyEnabled
+		case env.KeyProxyPort:
+			dst.ProxyPort = src.ProxyPort
+		case env.KeyProxyHost:
+			dst.ProxyHost = src.ProxyHost
+		case env.KeyProxyAuthUser:
+			dst.ProxyAuthUser = src.ProxyAuthUser
+		case env.KeyProxyAuthPass:
+			dst.ProxyAuthPass = src.ProxyAuthPass
+		case env.KeyProviders:
+			dst.Providers = make([]Provider, len(src.Providers))
+			copy(dst.Providers, src.Providers)
+		case env.KeyIndexers:
+			dst.Indexers = make([]IndexerConfig, len(src.Indexers))
+			copy(dst.Indexers, src.Indexers)
+		}
+	}
 }

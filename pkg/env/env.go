@@ -52,6 +52,10 @@ const (
 	KeyProxyAuthPass  = "proxy_auth_pass"
 	KeyProviders      = "providers"
 	KeyIndexers       = "indexers"
+	KeyAvailNZBURL    = "availnzb_url"
+	KeyAvailNZBAPIKey = "availnzb_api_key"
+	KeyTMDBAPIKey     = "tmdb_api_key"
+	KeyTVDBAPIKey     = "tvdb_api_key"
 )
 
 // TZ returns the TZ environment variable (e.g. for logger timezone).
@@ -160,15 +164,19 @@ func ReadConfigOverrides() (ConfigOverrides, []string) {
 	}
 	if v := os.Getenv(AvailNZBURL); v != "" {
 		o.AvailNZBURL = v
+		keys = append(keys, KeyAvailNZBURL)
 	}
 	if v := os.Getenv(AvailNZBAPIKey); v != "" {
 		o.AvailNZBAPIKey = v
+		keys = append(keys, KeyAvailNZBAPIKey)
 	}
 	if v := os.Getenv(TMDBAPIKey); v != "" {
 		o.TMDBAPIKey = v
+		keys = append(keys, KeyTMDBAPIKey)
 	}
 	if v := os.Getenv(TVDBAPIKey); v != "" {
 		o.TVDBAPIKey = v
+		keys = append(keys, KeyTVDBAPIKey)
 	}
 	if v := os.Getenv(NNTPProxyEnabled); v != "" {
 		o.ProxyEnabled = v == "true" || v == "1"

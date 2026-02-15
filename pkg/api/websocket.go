@@ -309,10 +309,14 @@ func (s *Server) handleSaveConfigWS(conn *websocket.Conn, client *Client, payloa
 			newCfg.NZBHydra2URL = ""
 		}
 
-		// Set LoadedPath so Save() writes to the same path (env vars are not re-applied on save)
+		// Preserve effective values for any key that has an env/ldflag override, so we don't
+		// overwrite them with form data (they would be overridden on next restart anyway).
 		s.mu.RLock()
+		currentCfg := s.config
 		currentLoadedPath := s.config.LoadedPath
 		s.mu.RUnlock()
+		config.CopyEnvOverridesFrom(currentCfg, &newCfg)
+
 		if currentLoadedPath == "" {
 			currentLoadedPath = filepath.Join(paths.GetDataDir(), "config.json")
 		}
