@@ -9,8 +9,10 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -276,312 +278,456 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request, device *au
 	json.NewEncoder(w).Encode(response)
 }
 
+// getIndexerHostnames returns hostnames from config for AvailNZB indexer filter.
+func getIndexerHostnames(cfg *config.Config) []string {
+	if cfg == nil {
+		return nil
+	}
+	var out []string
+	seen := make(map[string]bool)
+	for _, idx := range cfg.Indexers {
+		u, err := url.Parse(idx.URL)
+		if err != nil {
+			continue
+		}
+		host := strings.TrimPrefix(strings.ToLower(u.Hostname()), "api.")
+		if host != "" && !seen[host] {
+			seen[host] = true
+			out = append(out, host)
+		}
+	}
+	return out
+}
+
+// addAPIKeyToDownloadURL appends the matching indexer's API key to the download URL (by host). Returns original if no match.
+// For Newznab t=get URLs, the API expects parameter "id" (see https://inhies.github.io/Newznab-API/functions/#get);
+// if the URL has "guid" but no "id", we set id=guid so indexers that require "id" work.
+func addAPIKeyToDownloadURL(downloadURL string, indexers []config.IndexerConfig) string {
+	if downloadURL == "" || len(indexers) == 0 {
+		return downloadURL
+	}
+	u, err := url.Parse(downloadURL)
+	if err != nil {
+		return downloadURL
+	}
+	q := u.Query()
+	if q.Get("t") == "get" && q.Get("id") == "" && q.Get("guid") != "" {
+		q.Set("id", q.Get("guid"))
+		u.RawQuery = q.Encode()
+	}
+	downloadHost := strings.ToLower(u.Hostname())
+	for _, idx := range indexers {
+		idxU, err := url.Parse(idx.URL)
+		if err != nil || idx.APIKey == "" {
+			continue
+		}
+		idxHost := strings.ToLower(idxU.Hostname())
+		if idxHost == downloadHost ||
+			strings.TrimPrefix(idxHost, "api.") == downloadHost ||
+			strings.TrimPrefix(downloadHost, "api.") == idxHost {
+			q := u.Query()
+			q.Set("apikey", idx.APIKey)
+			u.RawQuery = q.Encode()
+			return u.String()
+		}
+	}
+	return downloadURL
+}
+
+// triageCandidates returns filtered+sorted candidates (device or global triage).
+func (s *Server) triageCandidates(device *auth.Device, items []indexer.Item) []triage.Candidate {
+	if device != nil && device.Username != "admin" &&
+		(len(device.Filters.AllowedQualities) > 0 || device.Filters.MinResolution != "" || len(device.Filters.AllowedCodecs) > 0 ||
+			len(device.Sorting.ResolutionWeights) > 0 || device.Sorting.GrabWeight != 0) {
+		ts := triage.NewService(&device.Filters, device.Sorting)
+		return ts.Filter(items)
+	}
+	return s.triageService.Filter(items)
+}
+
 func (s *Server) searchAndValidate(ctx context.Context, contentType, id string, device *auth.Device) ([]Stream, error) {
-	// Determine search parameters based on ID type
+	maxStreams := s.config.MaxStreams
+	if maxStreams <= 0 {
+		maxStreams = 6
+	}
+
+	// 1. Build search request and content IDs
 	req := indexer.SearchRequest{
 		Limit: 1000,
 	}
 
-	// For series, extract IMDb/TMDB ID and season/episode
 	searchID := id
 	if contentType == "series" && strings.Contains(id, ":") {
 		parts := strings.Split(id, ":")
-		// Handle "tmdb:12345:1:1" format
 		if parts[0] == "tmdb" && len(parts) >= 4 {
 			searchID = parts[1]
-			req.Season = parts[2]
-			req.Episode = parts[3]
+			req.Season, req.Episode = parts[2], parts[3]
 		} else if len(parts) >= 3 {
-			// Standard "tt12345678:1:1" format
 			searchID = parts[0]
-			req.Season = parts[1]
-			req.Episode = parts[2]
+			req.Season, req.Episode = parts[1], parts[2]
 		} else if len(parts) > 0 {
 			searchID = parts[0]
 		}
 	} else if strings.HasPrefix(id, "tmdb:") {
-		// Handle movie "tmdb:12345"
 		searchID = strings.TrimPrefix(id, "tmdb:")
 	}
-
 	if strings.HasPrefix(searchID, "tt") {
 		req.IMDbID = searchID
 	} else {
 		req.TMDBID = searchID
 	}
-
-	// Set category based on content type
 	if contentType == "movie" {
-		req.Cat = "2000" // Movies category
+		req.Cat = "2000"
 	} else {
-		req.Cat = "5000" // TV category
-
-		// Attempt to resolve TVDB ID for better indexer results (TVDB first, TMDB as fallback)
+		req.Cat = "5000"
 		if req.IMDbID != "" && req.TVDBID == "" {
-			var tvdbID string
-			var err error
 			if s.tvdbClient != nil {
-				tvdbID, err = s.tvdbClient.ResolveTVDBID(req.IMDbID)
-				if err != nil {
-					logger.Debug("TVDB failed to resolve TVDB ID, trying TMDB fallback", "imdb", req.IMDbID, "err", err)
+				if tvdbID, err := s.tvdbClient.ResolveTVDBID(req.IMDbID); err == nil && tvdbID != "" {
+					req.TVDBID, req.IMDbID = tvdbID, ""
 				}
 			}
-			if (tvdbID == "" || err != nil) && s.tmdbClient != nil {
-				tvdbID, err = s.tmdbClient.ResolveTVDBID(req.IMDbID)
-				if err != nil {
-					logger.Debug("Failed to resolve TVDB ID", "err", err)
+			if req.TVDBID == "" && s.tmdbClient != nil {
+				if tvdbID, err := s.tmdbClient.ResolveTVDBID(req.IMDbID); err == nil && tvdbID != "" {
+					req.TVDBID, req.IMDbID = tvdbID, ""
 				}
 			}
-			if tvdbID != "" {
-				req.TVDBID = tvdbID
-				req.IMDbID = ""
+		}
+	}
+	seasonNum, _ := strconv.Atoi(req.Season)
+	episodeNum, _ := strconv.Atoi(req.Episode)
+	contentIDs := &session.AvailReportMeta{ImdbID: req.IMDbID, TvdbID: req.TVDBID, Season: seasonNum, Episode: episodeNum}
+	if contentType == "movie" && contentIDs.ImdbID == "" && req.TMDBID != "" && s.tmdbClient != nil {
+		if tmdbIDNum, err := strconv.Atoi(req.TMDBID); err == nil {
+			if extIDs, err := s.tmdbClient.GetExternalIDs(tmdbIDNum, "movie"); err == nil && extIDs.IMDbID != "" {
+				contentIDs.ImdbID = extIDs.IMDbID
+			}
+		}
+	}
+	indexerHostnames := getIndexerHostnames(s.config)
+	logger.Debug("searchAndValidate", "imdb", req.IMDbID, "tvdb", req.TVDBID, "season", req.Season, "ep", req.Episode, "maxStreams", maxStreams)
+
+	var streams []Stream
+
+	// 2. AvailNZB first: get cached releases, triage, validate up to max_streams
+	if s.availClient != nil && s.availClient.BaseURL != "" && (contentIDs.ImdbID != "" || contentIDs.TvdbID != "") {
+		releases, err := s.availClient.GetReleases(contentIDs.ImdbID, contentIDs.TvdbID, contentIDs.Season, contentIDs.Episode, indexerHostnames)
+		if err == nil && releases != nil && len(releases.Releases) > 0 {
+			var availItems []indexer.Item
+			detailsURLToRelease := make(map[string]*availnzb.ReleaseItem)
+			for i := range releases.Releases {
+				r := &releases.Releases[i]
+				if !r.Available || r.DownloadLink == "" {
+					continue
+				}
+				item := indexer.Item{Title: r.ReleaseName, Link: r.DownloadLink, GUID: r.URL, Size: r.Size}
+				if r.URL != "" && strings.Contains(r.URL, "://") {
+					item.ActualGUID = r.URL
+				}
+				availItems = append(availItems, item)
+				detailsURLToRelease[item.ReleaseDetailsURL()] = r
+			}
+			if len(availItems) > 0 {
+				availCandidates := s.triageCandidates(device, availItems)
+				logger.Debug("AvailNZB phase", "releases", len(availItems), "after_triage", len(availCandidates), "max_streams", maxStreams)
+				for _, cand := range availCandidates {
+					if len(streams) >= maxStreams {
+						break
+					}
+					detailsURL := cand.Result.ReleaseDetailsURL()
+					r := detailsURLToRelease[detailsURL]
+					if r == nil {
+						continue
+					}
+					// AvailNZB release: we have triage info and know it's reported good; defer NZB download until play.
+					downloadURL := addAPIKeyToDownloadURL(r.DownloadLink, s.config.Indexers)
+					sessionID := fmt.Sprintf("%x", md5.Sum([]byte(r.URL)))
+					indexerName := r.Indexer
+					if indexerName == "" {
+						indexerName = "AvailNZB"
+					}
+					_, err := s.sessionManager.CreateDeferredSession(
+						sessionID,
+						downloadURL,
+						r.URL,
+						indexerName,
+						r.ReleaseName,
+						s.indexer, // aggregator does HTTP GET; URL already has apikey
+						r.URL,
+						contentIDs,
+						r.Size,
+					)
+					if err != nil {
+						logger.Debug("AvailNZB deferred session failed", "title", r.ReleaseName, "err", err)
+						continue
+					}
+					var streamURL string
+					if device != nil {
+						streamURL = fmt.Sprintf("%s/%s/play/%s", s.baseURL, device.Token, sessionID)
+					}
+					sizeGB := float64(r.Size) / (1024 * 1024 * 1024)
+					title := r.ReleaseName + "\n[AvailNZB]"
+					stream := buildStreamMetadata(streamURL, title, cand, sizeGB, r.Size)
+					streams = append(streams, stream)
+					logger.Debug("Stream from AvailNZB (deferred)", "title", r.ReleaseName, "count", len(streams))
+				}
+				logger.Debug("AvailNZB phase done", "streams", len(streams), "need_more", maxStreams-len(streams))
+				// Grow cache: validate one indexer candidate not already in AvailNZB and report it (background)
+				if len(streams) >= maxStreams {
+					knownURLs := make(map[string]bool)
+					for u := range detailsURLToRelease {
+						knownURLs[u] = true
+					}
+					go s.warmAvailNZBCache(context.Background(), req, contentIDs, knownURLs)
+				}
 			}
 		}
 	}
 
-	// Debug: Log search parameters
-	logger.Debug("Indexer search", "imdb", req.IMDbID, "tvdb", req.TVDBID, "cat", req.Cat, "season", req.Season, "ep", req.Episode)
+	// 3. Indexers: search, triage, validate until we have max_streams
+	if len(streams) >= maxStreams {
+		sort.Slice(streams, func(i, j int) bool { return getQualityScore(streams[i].Name) > getQualityScore(streams[j].Name) })
+		logger.Info("Returning validated streams", "count", len(streams))
+		return streams, nil
+	}
 
-	// Search Indexer
 	searchResp, err := s.indexer.Search(req)
 	if err != nil {
 		return nil, fmt.Errorf("indexer search failed: %w", err)
 	}
+	candidates := s.triageCandidates(device, searchResp.Channel.Items)
+	logger.Debug("Indexer candidates after triage", "count", len(candidates))
 
-	logger.Debug("Found NZB results", "count", len(searchResp.Channel.Items))
-	logger.Trace("searchAndValidate: starting triage", "items", len(searchResp.Channel.Items))
-
-	// Filter results using Triage Service with device-specific filters if available
-	var candidates []triage.Candidate
-	if device != nil && device.Username != "admin" {
-		// Check if device has custom filters/sorting
-		hasCustomFilters := len(device.Filters.AllowedQualities) > 0 ||
-			len(device.Filters.BlockedQualities) > 0 ||
-			device.Filters.MinResolution != "" ||
-			device.Filters.MaxResolution != "" ||
-			len(device.Filters.AllowedCodecs) > 0 ||
-			len(device.Filters.BlockedCodecs) > 0 ||
-			len(device.Filters.RequiredAudio) > 0 ||
-			len(device.Filters.AllowedAudio) > 0 ||
-			device.Filters.MinChannels != "" ||
-			device.Filters.RequireHDR ||
-			len(device.Filters.AllowedHDR) > 0 ||
-			len(device.Filters.BlockedHDR) > 0 ||
-			device.Filters.BlockSDR ||
-			len(device.Filters.RequiredLanguages) > 0 ||
-			len(device.Filters.AllowedLanguages) > 0 ||
-			device.Filters.BlockDubbed ||
-			device.Filters.BlockCam ||
-			device.Filters.RequireProper ||
-			!device.Filters.AllowRepack ||
-			device.Filters.BlockHardcoded ||
-			device.Filters.MinBitDepth != "" ||
-			device.Filters.MinSizeGB > 0 ||
-			device.Filters.MaxSizeGB > 0 ||
-			len(device.Filters.BlockedGroups) > 0
-
-		hasCustomSorting := len(device.Sorting.ResolutionWeights) > 0 ||
-			len(device.Sorting.CodecWeights) > 0 ||
-			len(device.Sorting.AudioWeights) > 0 ||
-			len(device.Sorting.QualityWeights) > 0 ||
-			len(device.Sorting.VisualTagWeights) > 0 ||
-			device.Sorting.GrabWeight != 0 ||
-			device.Sorting.AgeWeight != 0 ||
-			len(device.Sorting.PreferredGroups) > 0 ||
-			len(device.Sorting.PreferredLanguages) > 0
-
-		if hasCustomFilters || hasCustomSorting {
-			// Use device's custom filters/sorting
-			deviceTriageService := triage.NewService(&device.Filters, device.Sorting)
-			candidates = deviceTriageService.Filter(searchResp.Channel.Items)
-			logger.Debug("Selected candidates after device-specific triage", "count", len(candidates), "device", device.Username)
-		} else {
-			// Device has no custom config, use global defaults
-			candidates = s.triageService.Filter(searchResp.Channel.Items)
-			logger.Debug("Selected candidates after triage (using global config)", "count", len(candidates), "device", device.Username)
+	if s.availClient != nil && s.availClient.BaseURL != "" && (contentIDs.ImdbID != "" || contentIDs.TvdbID != "") {
+		releases, _ := s.availClient.GetReleases(contentIDs.ImdbID, contentIDs.TvdbID, contentIDs.Season, contentIDs.Episode, indexerHostnames)
+		if releases != nil && len(releases.Releases) > 0 {
+			ourProviders := make(map[string]bool)
+			for _, h := range s.validator.GetProviderHosts() {
+				ourProviders[strings.ToLower(h)] = true
+			}
+			cachedAvailable := make(map[string]bool)
+			cachedUnhealthyForUs := make(map[string]bool)
+			for _, r := range releases.Releases {
+				if r.Available {
+					cachedAvailable[r.URL] = true
+				} else if len(ourProviders) > 0 && len(r.Summary) > 0 {
+					// Only treat as unhealthy if it's unhealthy for OUR providers (per Summary)
+					ourReported := 0
+					ourHealthy := 0
+					for host, status := range r.Summary {
+						if ourProviders[strings.ToLower(host)] {
+							ourReported++
+							if status.Healthy {
+								ourHealthy++
+							}
+						}
+					}
+					if ourReported > 0 && ourHealthy == 0 {
+						cachedUnhealthyForUs[r.URL] = true
+					}
+				}
+			}
+			// Filter out indexer candidates that AvailNZB marks as unhealthy for our providers
+			if len(cachedUnhealthyForUs) > 0 {
+				before := len(candidates)
+				filtered := candidates[:0]
+				for _, c := range candidates {
+					if !cachedUnhealthyForUs[c.Result.ReleaseDetailsURL()] {
+						filtered = append(filtered, c)
+					}
+				}
+				candidates = filtered
+				logger.Debug("Filtered candidates by AvailNZB unhealthy (our providers)", "removed", before-len(candidates), "remaining", len(candidates))
+			}
+			if len(cachedAvailable) > 0 {
+				sort.SliceStable(candidates, func(i, j int) bool {
+					ci := cachedAvailable[candidates[i].Result.ReleaseDetailsURL()]
+					cj := cachedAvailable[candidates[j].Result.ReleaseDetailsURL()]
+					return ci && !cj
+				})
+			}
 		}
-	} else {
-		// Use default triage service (global config)
-		candidates = s.triageService.Filter(searchResp.Channel.Items)
-		logger.Debug("Selected candidates after triage", "count", len(candidates))
 	}
 
-	// Single semaphore with 6 concurrent slots (API-friendly)
+	remaining := maxStreams - len(streams)
+	maxAttempts := remaining * 2
+	if maxAttempts < 6 {
+		maxAttempts = 6
+	}
 	sem := make(chan struct{}, 6)
 	resultChan := make(chan Stream, len(candidates))
-
-	// Track validation progress
 	var mu sync.Mutex
-	validated := 0 // Successful validations
-	attempted := 0 // Total validation attempts
-	maxToValidate := s.config.MaxStreams
-	if maxToValidate <= 0 {
-		maxToValidate = 6 // Fallback default
-	}
-	maxAttempts := maxToValidate * 2 // Auto-calculate safety limit
-	logger.Trace("searchAndValidate: launching validators", "candidates", len(candidates), "maxToValidate", maxToValidate, "maxAttempts", maxAttempts)
-
+	validated, attempted := 0, 0
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-
 	var wg sync.WaitGroup
 
 	for _, candidate := range candidates {
-		// Pre-check: stop launching new goroutines if we've already hit attempt limit
 		mu.Lock()
-		if attempted >= maxAttempts {
+		if attempted >= maxAttempts || validated >= remaining {
 			mu.Unlock()
-			logger.Debug("Hit attempt limit, stopping launch", "attempted", attempted, "maxAttempts", maxAttempts)
 			break
 		}
-		attempted++ // Count this attempt
+		attempted++
 		mu.Unlock()
 
 		wg.Add(1)
 		go func(cand triage.Candidate) {
 			defer wg.Done()
-
-			// Acquire semaphore (respect context)
 			select {
 			case sem <- struct{}{}:
 				defer func() { <-sem }()
 			case <-ctx.Done():
 				return
 			}
-
-			// Check if we've already hit the validated limit (after acquiring semaphore)
 			mu.Lock()
-			if validated >= maxToValidate {
+			if validated >= remaining {
 				mu.Unlock()
-				logger.Debug("Already hit validation limit, skipping", "validated", validated, "maxToValidate", maxToValidate)
-				cancel() // Cancel remaining goroutines
 				return
 			}
 			mu.Unlock()
 
-			// Validate candidate (pass device to include token in URL)
-			logger.Trace("validation goroutine: calling validateCandidate", "title", cand.Result.Title)
-			stream, err := s.validateCandidate(ctx, cand, device)
-			if err == nil {
-				mu.Lock()
-				// Double-check limit before adding (in case multiple goroutines validated simultaneously)
-				if validated < maxToValidate {
-					resultChan <- stream
-					validated++ // Only count successful validations
-					logger.Trace("validation goroutine: sent stream", "title", stream.Name, "validated", validated)
-
-					// If we just hit the limit, cancel remaining work
-					if validated >= maxToValidate {
-						logger.Debug("Hit validation limit, canceling remaining", "validated", validated, "maxToValidate", maxToValidate)
-						cancel()
-					}
-				}
-				mu.Unlock()
-			} else {
-				logger.Trace("validation goroutine: validateCandidate failed", "title", cand.Result.Title, "err", err)
+			stream, err := s.validateCandidate(ctx, cand, device, contentIDs)
+			if err != nil {
+				logger.Trace("validateCandidate failed", "title", cand.Result.Title, "err", err)
+				return
 			}
+			mu.Lock()
+			if validated < remaining {
+				resultChan <- stream
+				validated++
+				if validated >= remaining {
+					cancel()
+				}
+			}
+			mu.Unlock()
 		}(candidate)
 	}
 
-	// Close result channel when all goroutines finish (with timeout to prevent hanging)
 	done := make(chan struct{})
-	channelClosed := false
-	var channelMu sync.Mutex
-
 	go func() {
 		wg.Wait()
-		channelMu.Lock()
-		if !channelClosed {
-			close(resultChan) // Close channel when all goroutines finish
-			channelClosed = true
-		}
-		channelMu.Unlock()
+		close(resultChan)
 		close(done)
 	}()
 
-	// Collect all successful results with timeout
-	var streams []Stream
 	timeout := time.After(60 * time.Second)
-
-	collecting := true
-	for collecting {
+	for {
 		select {
 		case stream, ok := <-resultChan:
 			if !ok {
-				logger.Trace("collect loop: channel closed", "total_streams", len(streams))
-				collecting = false
-			} else {
-				streams = append(streams, stream)
-				logger.Trace("collect loop: received stream", "name", stream.Name, "count", len(streams))
+				goto doneCollect
+			}
+			streams = append(streams, stream)
+			if len(streams) >= maxStreams {
+				goto doneCollect
 			}
 		case <-timeout:
-			logger.Warn("Stream collection timeout, returning partial results", "count", len(streams))
-			logger.Trace("collect loop: timeout", "count", len(streams))
 			cancel()
-			collecting = false
+			goto doneCollect
 		case <-ctx.Done():
-			logger.Debug("Stream collection cancelled, returning partial results", "count", len(streams))
-			logger.Trace("collect loop: ctx.Done", "count", len(streams))
-			cancel()
-			collecting = false
+			goto doneCollect
 		}
 	}
+doneCollect:
 
-	// Wait briefly for goroutines to finish (non-blocking)
 	select {
 	case <-done:
-		// All goroutines finished
 	case <-time.After(1 * time.Second):
-		// Don't wait forever, just log warning
 		logger.Warn("Some validation goroutines may still be running")
 	}
 
-	// Sort by quality score for display
 	sort.Slice(streams, func(i, j int) bool {
 		return getQualityScore(streams[i].Name) > getQualityScore(streams[j].Name)
 	})
-
 	logger.Info("Returning validated streams", "count", len(streams))
 	return streams, nil
 }
 
+// warmAvailNZBCache validates one indexer candidate that is not already in knownURLs and reports it to AvailNZB.
+// Called in a goroutine when we already have enough streams from AvailNZB, to grow the cache for future requests.
+func (s *Server) warmAvailNZBCache(ctx context.Context, req indexer.SearchRequest, contentIDs *session.AvailReportMeta, knownURLs map[string]bool) {
+	if s.availClient == nil || s.availClient.BaseURL == "" || (contentIDs.ImdbID == "" && contentIDs.TvdbID == "") {
+		return
+	}
+	searchResp, err := s.indexer.Search(req)
+	if err != nil {
+		logger.Debug("AvailNZB cache warm: search failed", "err", err)
+		return
+	}
+	candidates := s.triageCandidates(nil, searchResp.Channel.Items)
+	for _, cand := range candidates {
+		detailsURL := cand.Result.ReleaseDetailsURL()
+		if detailsURL == "" || knownURLs[detailsURL] {
+			continue
+		}
+		item := cand.Result
+		var nzbData []byte
+		if item.SourceIndexer != nil {
+			nzbData, err = item.SourceIndexer.DownloadNZB(item.Link)
+		} else {
+			nzbData, err = s.indexer.DownloadNZB(item.Link)
+		}
+		if err != nil {
+			continue
+		}
+		nzbParsed, err := nzb.Parse(bytes.NewReader(nzbData))
+		if err != nil {
+			continue
+		}
+		validationResults := s.validator.ValidateNZB(ctx, nzbParsed)
+		if len(validationResults) == 0 {
+			continue
+		}
+		bestResult := validation.GetBestProvider(validationResults)
+		if bestResult == nil {
+			continue
+		}
+		streamSize := nzbParsed.TotalSize()
+		meta := availnzb.ReportMeta{ReleaseName: item.Title, Size: streamSize}
+		meta.ImdbID = contentIDs.ImdbID
+		meta.TvdbID = contentIDs.TvdbID
+		meta.Season = contentIDs.Season
+		meta.Episode = contentIDs.Episode
+		if err := s.availClient.ReportAvailability(detailsURL, bestResult.Host, true, meta); err != nil {
+			logger.Debug("AvailNZB cache warm: report failed", "title", item.Title, "err", err)
+			return
+		}
+		logger.Info("AvailNZB cache warm: reported", "title", item.Title)
+		return
+	}
+	logger.Debug("AvailNZB cache warm: no new candidate validated")
+}
+
 // validateCandidate validates a single candidate and returns a stream
-func (s *Server) validateCandidate(ctx context.Context, cand triage.Candidate, device *auth.Device) (Stream, error) {
+func (s *Server) validateCandidate(ctx context.Context, cand triage.Candidate, device *auth.Device, contentIDs *session.AvailReportMeta) (Stream, error) {
 	item := cand.Result
 	logger.Trace("validateCandidate start", "title", item.Title)
 
-	// Get indexer name for AvailNZB
+	// Get indexer name for logging / reporting
 	var indexerName string
 	if item.SourceIndexer != nil {
 		if item.ActualIndexer != "" {
 			indexerName = item.ActualIndexer
 		} else {
 			indexerName = item.SourceIndexer.Name()
-			// Prowlarr indexers are often named "Prowlarr: IndexerName"
 			if strings.HasPrefix(indexerName, "Prowlarr:") {
 				indexerName = strings.TrimSpace(strings.TrimPrefix(indexerName, "Prowlarr:"))
 			}
 		}
 	}
 
-	// Check AvailNZB for pre-download validation
+	// Check AvailNZB for pre-download validation (GET /api/v1/status?url=...) using details URL
 	skipValidation := false
 	providerHosts := s.validator.GetProviderHosts()
-
-	if indexerName != "" && len(providerHosts) > 0 {
-		guidToCheck := item.GUID
-		if item.ActualGUID != "" {
-			guidToCheck = item.ActualGUID
-		}
-
+	releaseDetailsURL := item.ReleaseDetailsURL()
+	if releaseDetailsURL != "" && len(providerHosts) > 0 && s.availClient != nil && s.availClient.BaseURL != "" {
 		logger.Trace("validateCandidate: CheckPreDownload start", "title", item.Title)
-		nzbID, isHealthy, lastUpdated, _, err := s.availClient.CheckPreDownload(indexerName, guidToCheck, providerHosts)
-		logger.Trace("validateCandidate: CheckPreDownload done", "title", item.Title, "skipValidation", err == nil && nzbID != "" && isHealthy, "err", err)
-		if err == nil && nzbID != "" {
+		isHealthy, lastUpdated, _, err := s.availClient.CheckPreDownload(releaseDetailsURL, providerHosts)
+		logger.Trace("validateCandidate: CheckPreDownload done", "title", item.Title, "skipValidation", err == nil && isHealthy, "err", err)
+		if err == nil {
 			if isHealthy {
 				skipValidation = true
 			} else {
-				// Skip if recently reported as unhealthy
 				if time.Since(lastUpdated) <= 24*time.Hour {
 					return Stream{}, fmt.Errorf("recently reported unhealthy")
 				}
@@ -593,7 +739,6 @@ func (s *Server) validateCandidate(ctx context.Context, cand triage.Candidate, d
 	var streamSize int64
 
 	if skipValidation {
-		// DEFERRED (Lazy) - Trust AvailNZB
 		sessionID = fmt.Sprintf("%x", md5.Sum([]byte(item.GUID)))
 		streamSize = item.Size
 
@@ -606,11 +751,14 @@ func (s *Server) validateCandidate(ctx context.Context, cand triage.Candidate, d
 
 		_, err := s.sessionManager.CreateDeferredSession(
 			sessionID,
-			item.Link,
+			item.Link,                // NZB download URL for lazy fetch
+			item.ReleaseDetailsURL(), // details URL for AvailNZB reporting
 			indexerName,
 			item.Title,
 			item.SourceIndexer,
 			item.GUID,
+			contentIDs,
+			item.Size, // 0 if unknown
 		)
 		logger.Trace("validateCandidate: CreateDeferredSession done", "title", item.Title, "err", err)
 		if err != nil {
@@ -656,17 +804,27 @@ func (s *Server) validateCandidate(ctx context.Context, cand triage.Candidate, d
 			return Stream{}, fmt.Errorf("no best provider")
 		}
 
-		// Async report to AvailNZB
+		// Async report to AvailNZB (POST /api/v1/report); report no longer includes download_link
 		go func() {
-			nzbID := nzbParsed.CalculateID()
-			if nzbID != "" {
-				_ = s.availClient.ReportAvailability(nzbID, bestResult.Host, true, indexerName, item.GUID)
+			meta := availnzb.ReportMeta{ReleaseName: item.Title, Size: item.Size}
+			if contentIDs != nil {
+				meta.ImdbID = contentIDs.ImdbID
+				meta.TvdbID = contentIDs.TvdbID
+				meta.Season = contentIDs.Season
+				meta.Episode = contentIDs.Episode
+			}
+			if meta.ImdbID == "" && meta.TvdbID == "" {
+				logger.Debug("AvailNZB report skipped (good): no imdb_id or tvdb_id for this content", "url", item.ReleaseDetailsURL())
+				return
+			}
+			if err := s.availClient.ReportAvailability(item.ReleaseDetailsURL(), bestResult.Host, true, meta); err != nil {
+				logger.Debug("AvailNZB report failed", "err", err, "url", item.ReleaseDetailsURL())
 			}
 		}()
 
 		// Store NZB in session manager
 		logger.Trace("validateCandidate: CreateSession start", "title", item.Title)
-		_, err = s.sessionManager.CreateSession(sessionID, nzbParsed, item.GUID)
+		_, err = s.sessionManager.CreateSession(sessionID, nzbParsed, item.GUID, item.ReleaseDetailsURL(), contentIDs, item.Title, item.Link, item.Size)
 		logger.Trace("validateCandidate: CreateSession done", "title", item.Title, "err", err)
 		if err != nil {
 			return Stream{}, fmt.Errorf("failed to create session: %w", err)
@@ -765,15 +923,32 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 		if strings.Contains(err.Error(), "compressed") || strings.Contains(err.Error(), "encrypted") || strings.Contains(err.Error(), "EOF") {
 			logger.Info("Reporting bad/unstreamable release to AvailNZB", "id", sessionID, "reason", err.Error())
 			go func() {
-				// We need NZB ID for reporting.
-				var nzbID string
-				if sess.NZB != nil {
-					nzbID = sess.NZB.CalculateID()
+				releaseURL := sess.ReleaseURL
+				if releaseURL == "" {
+					releaseURL = sess.NZBURL
 				}
-
-				if nzbID != "" && sess.GUID != "" {
-					_ = s.availClient.ReportAvailability(nzbID, "ALL", false, sess.IndexerName, sess.GUID)
+				if releaseURL == "" {
+					return
 				}
+				meta := availnzb.ReportMeta{ReleaseName: sess.ReportReleaseName, Size: sess.ReportSize}
+				if sess.ReportImdbID != "" {
+					meta.ImdbID = sess.ReportImdbID
+				} else if sess.ReportTvdbID != "" {
+					meta.TvdbID = sess.ReportTvdbID
+					meta.Season = sess.ReportSeason
+					meta.Episode = sess.ReportEpisode
+				}
+				if meta.ImdbID == "" && meta.TvdbID == "" {
+					return // API requires movie or TV IDs
+				}
+				if meta.ReleaseName == "" {
+					return // API requires release_name
+				}
+				providerURL := "ALL"
+				if hosts := s.validator.GetProviderHosts(); len(hosts) > 0 {
+					providerURL = hosts[0]
+				}
+				_ = s.availClient.ReportAvailability(releaseURL, providerURL, false, meta)
 			}()
 		}
 
@@ -902,8 +1077,8 @@ func (s *Server) handleDebugPlay(w http.ResponseWriter, r *http.Request, device 
 	// Or use NZB hash
 	// sessionID := nzbParsed.Hash()
 
-	// Create/Get Session
-	sess, err := s.sessionManager.CreateSession(sessionID, nzbParsed, "")
+	// Create/Get Session (no release URL or report meta for debug upload path)
+	sess, err := s.sessionManager.CreateSession(sessionID, nzbParsed, "", "", nil, "", "", 0)
 	if err != nil {
 		logger.Error("Failed to create session", "err", err)
 		http.Error(w, "Failed to create session", http.StatusInternalServerError)
