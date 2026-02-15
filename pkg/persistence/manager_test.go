@@ -40,6 +40,11 @@ func TestStateManager(t *testing.T) {
 		t.Errorf("expected bar, got %s", retrieved["foo"])
 	}
 
+	// Flush so debounced save runs before we reload (Set() schedules save after 2s)
+	if err := mgr.Flush(); err != nil {
+		t.Fatalf("failed to flush: %v", err)
+	}
+
 	// Test Persistence
 	globalManager = nil // Reset global for reload
 	mgr2, err := GetManager(tempDir)

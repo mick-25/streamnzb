@@ -39,6 +39,18 @@ type Session struct {
 	ItemTitle   string          // Used for logging
 	Indexer     indexer.Indexer // Interface to download
 	GUID        string          // External ID for reporting
+
+	// ReleaseURL is the indexer release URL (e.g. item.Link) for AvailNZB reporting
+	ReleaseURL string
+
+	// AvailNZB report meta (optional); set when creating session so bad reports can include content IDs
+	ReportReleaseName  string
+	ReportDownloadLink string // NZB download URL for report (apikey stripped by client)
+	ReportSize         int64  // File size in bytes for report (required by API)
+	ReportImdbID       string
+	ReportTvdbID       string
+	ReportSeason       int
+	ReportEpisode      int
 }
 
 // Manager manages active streaming sessions
@@ -72,10 +84,20 @@ func NewManager(pools []*nntp.ClientPool, ttl time.Duration) *Manager {
 	return m
 }
 
+// AvailReportMeta holds optional content IDs for availability reporting (movie or TV).
+type AvailReportMeta struct {
+	ImdbID  string
+	TvdbID  string
+	Season  int
+	Episode int
+}
+
 // CreateSession creates a new session for the given NZB.
+// releaseURL is the indexer details URL for availability reporting. releaseName, downloadLink, and reportSize are for AvailNZB reports.
+// reportMeta is optional; when set, bad-playback reports can include content IDs.
 // Heavy work (GetContentFiles, NewFile) is done outside the manager lock so
 // GetActiveSessions (e.g. from WebSocket collectStats) is not blocked.
-func (m *Manager) CreateSession(sessionID string, nzbData *nzb.NZB, guid string) (*Session, error) {
+func (m *Manager) CreateSession(sessionID string, nzbData *nzb.NZB, guid string, releaseURL string, reportMeta *AvailReportMeta, releaseName string, downloadLink string, reportSize int64) (*Session, error) {
 	logger.Trace("session CreateSession start", "id", sessionID)
 	m.mu.Lock()
 	if existing, ok := m.sessions[sessionID]; ok {
@@ -116,8 +138,18 @@ func (m *Manager) CreateSession(sessionID string, nzbData *nzb.NZB, guid string)
 		LastAccess: time.Now(),
 		Clients:    make(map[string]time.Time),
 		GUID:       guid,
+		ReleaseURL: releaseURL,
 		ctx:        ctx,
 		cancel:     cancel,
+	}
+	session.ReportReleaseName = releaseName
+	session.ReportDownloadLink = downloadLink
+	session.ReportSize = reportSize
+	if reportMeta != nil {
+		session.ReportImdbID = reportMeta.ImdbID
+		session.ReportTvdbID = reportMeta.TvdbID
+		session.ReportSeason = reportMeta.Season
+		session.ReportEpisode = reportMeta.Episode
 	}
 
 	logger.Trace("session CreateSession insert", "id", sessionID)
@@ -134,8 +166,11 @@ func (m *Manager) CreateSession(sessionID string, nzbData *nzb.NZB, guid string)
 	return session, nil
 }
 
-// CreateDeferredSession creates a session placeholder without downloading the NZB yet
-func (m *Manager) CreateDeferredSession(sessionID, nzbURL, indexerName, itemTitle string, idx indexer.Indexer, guid string) (*Session, error) {
+// CreateDeferredSession creates a session placeholder without downloading the NZB yet.
+// nzbURL is the download URL for lazy fetch (include apikey if required); releaseDetailsURL is the indexer details URL for AvailNZB (if empty, nzbURL is used).
+// reportSize is the known size in bytes for reporting (e.g. from AvailNZB); 0 if unknown.
+// reportMeta is optional; when set, bad-playback reports can include content IDs.
+func (m *Manager) CreateDeferredSession(sessionID, nzbURL, releaseDetailsURL, indexerName, itemTitle string, idx indexer.Indexer, guid string, reportMeta *AvailReportMeta, reportSize int64) (*Session, error) {
 	logger.Trace("session CreateDeferredSession start", "id", sessionID)
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -149,6 +184,10 @@ func (m *Manager) CreateDeferredSession(sessionID, nzbURL, indexerName, itemTitl
 		return existing, nil
 	}
 
+	if releaseDetailsURL == "" {
+		releaseDetailsURL = nzbURL
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 
 	session := &Session{
@@ -159,12 +198,22 @@ func (m *Manager) CreateDeferredSession(sessionID, nzbURL, indexerName, itemTitl
 		Clients:     make(map[string]time.Time),
 		// Deferred fields
 		NZBURL:      nzbURL,
+		ReleaseURL:  releaseDetailsURL,
 		IndexerName: indexerName,
 		ItemTitle:   itemTitle,
 		Indexer:     idx,
 		GUID:        guid,
 		ctx:         ctx,
 		cancel:      cancel,
+	}
+	session.ReportReleaseName = itemTitle
+	session.ReportDownloadLink = nzbURL
+	session.ReportSize = reportSize
+	if reportMeta != nil {
+		session.ReportImdbID = reportMeta.ImdbID
+		session.ReportTvdbID = reportMeta.TvdbID
+		session.ReportSeason = reportMeta.Season
+		session.ReportEpisode = reportMeta.Episode
 	}
 
 	m.sessions[sessionID] = session
@@ -229,6 +278,9 @@ func (s *Session) GetOrDownloadNZB(manager *Manager) (*nzb.NZB, error) {
 	s.NZB = parsedNZB
 	s.Files = loaderFiles
 	s.File = loaderFiles[0]
+	if s.ReportSize == 0 {
+		s.ReportSize = parsedNZB.TotalSize()
+	}
 	return s.NZB, nil
 }
 

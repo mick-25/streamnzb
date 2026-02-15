@@ -1,6 +1,9 @@
 package indexer
 
-import "encoding/xml"
+import (
+	"encoding/xml"
+	"strings"
+)
 
 // Indexer defines the interface for interacting with Usenet indexers
 type Indexer interface {
@@ -97,4 +100,16 @@ func (i *Item) GetAttribute(name string) string {
 		}
 	}
 	return ""
+}
+
+// ReleaseDetailsURL returns the stable indexer details URL for this release (for AvailNZB and reporting).
+// Most indexers use GUID or details_link for the details page; Link is typically the NZB download URL.
+func (i *Item) ReleaseDetailsURL() string {
+	if i.ActualGUID != "" && strings.Contains(i.ActualGUID, "://") {
+		return i.ActualGUID
+	}
+	if i.GUID != "" && strings.Contains(i.GUID, "://") {
+		return i.GUID
+	}
+	return i.Link
 }
