@@ -122,7 +122,8 @@ func (s *Server) SetProxyServer(p *proxy.Server) {
 
 // Reload updates the server components at runtime
 func (s *Server) Reload(cfg *config.Config, pools map[string]*nntp.ClientPool, indexers indexer.Indexer,
-	validator *validation.Checker, triage *triage.Service, avail *availnzb.Client, tmdbClient *tmdb.Client, tvdbClient *tvdb.Client) {
+	validator *validation.Checker, triage *triage.Service, avail *availnzb.Client, availNZBIndexerHosts []string,
+	tmdbClient *tmdb.Client, tvdbClient *tvdb.Client) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -158,7 +159,7 @@ func (s *Server) Reload(cfg *config.Config, pools map[string]*nntp.ClientPool, i
 	s.sessionMgr.UpdatePools(newStreamingPools)
 
 	if s.strmServer != nil {
-		s.strmServer.Reload(cfg.AddonBaseURL, indexers, validator, triage, avail, tmdbClient, tvdbClient, s.deviceManager)
+		s.strmServer.Reload(cfg.AddonBaseURL, indexers, validator, triage, avail, availNZBIndexerHosts, tmdbClient, tvdbClient, s.deviceManager)
 	}
 
 	// 5. Restart Proxy if enabled

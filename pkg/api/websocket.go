@@ -353,7 +353,7 @@ func (s *Server) handleSaveConfigWS(conn *websocket.Conn, client *Client, payloa
 			}
 			tvdbClient := tvdb.NewClient(comp.Config.TVDBAPIKey, dataDir)
 
-			s.Reload(comp.Config, comp.ProviderPools, comp.Indexer, validator, triageService, availClient, tmdbClient, tvdbClient)
+			s.Reload(comp.Config, comp.ProviderPools, comp.Indexer, validator, triageService, availClient, comp.AvailNZBIndexerHosts, tmdbClient, tvdbClient)
 			log.Printf("[Reload] Configuration reloaded successfully")
 		}()
 
@@ -694,7 +694,7 @@ func (s *Server) validateConfig(cfg *config.Config) map[string]string {
 		go func() {
 			defer wg.Done()
 			// Fetch indexers to verify connectivity AND API Key
-			indexers, err := prowlarr.GetConfiguredIndexers(cfg.ProwlarrURL, cfg.ProwlarrAPIKey, nil)
+			indexers, _, err := prowlarr.GetConfiguredIndexers(cfg.ProwlarrURL, cfg.ProwlarrAPIKey, nil)
 			if err != nil {
 				mu.Lock()
 				errStr := err.Error()

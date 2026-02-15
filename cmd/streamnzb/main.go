@@ -121,7 +121,7 @@ func main() {
 
 	// Initialize Stremio addon server
 	stremioServer, err := stremio.NewServer(cfg, cfg.AddonBaseURL, cfg.AddonPort, comp.Indexer, validator,
-		sessionManager, triageService, availClient, tmdbClient, tvdbClient, deviceManager, Version)
+		sessionManager, triageService, availClient, comp.AvailNZBIndexerHosts, tmdbClient, tvdbClient, deviceManager, Version)
 	if err != nil {
 		initialization.WaitForInputAndExit(fmt.Errorf("Failed to initialize Stremio server: %v", err))
 	}

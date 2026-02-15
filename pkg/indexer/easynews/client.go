@@ -42,6 +42,9 @@ type Client struct {
 	mu                sync.RWMutex
 }
 
+// Ensure Client implements indexer.Indexer at compile time.
+var _ indexer.Indexer = (*Client)(nil)
+
 // NewClient creates a new Easynews client
 func NewClient(username, password, name string, downloadBase string, apiLimit, downloadLimit int, um *indexer.UsageManager) (*Client, error) {
 	if username == "" || password == "" {

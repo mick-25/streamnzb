@@ -171,12 +171,14 @@ func (a *Aggregator) Search(req SearchRequest) (*SearchResponse, error) {
 		return uniqueItems[i].Size > uniqueItems[j].Size
 	})
 
-	return &SearchResponse{
+	resp := &SearchResponse{
 		XMLName: xml.Name{Local: "rss"},
 		Channel: Channel{
 			Items: uniqueItems,
 		},
-	}, nil
+	}
+	NormalizeSearchResponse(resp)
+	return resp, nil
 }
 
 // normalizeURL normalizes a URL for deduplication by removing query params and fragments

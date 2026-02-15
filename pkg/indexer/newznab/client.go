@@ -35,6 +35,9 @@ type Client struct {
 	mu                sync.RWMutex
 }
 
+// Ensure Client implements indexer.Indexer at compile time.
+var _ indexer.Indexer = (*Client)(nil)
+
 // APIError represents a Newznab API error response
 type APIError struct {
 	XMLName     xml.Name `xml:"error"`

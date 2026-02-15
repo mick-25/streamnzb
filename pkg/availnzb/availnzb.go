@@ -226,7 +226,7 @@ func (c *Client) GetReleases(imdbID string, tvdbID string, season, episode int, 
 	}
 	reqURL := c.BaseURL + apiPath + "/releases?" + params.Encode()
 
-	logger.Debug("AvailNZB GetReleases", "imdb_id", imdbID, "tvdb_id", tvdbID, "season", season, "episode", episode, "indexers", len(indexers))
+	logger.Debug("AvailNZB GetReleases", "imdb_id", imdbID, "tvdb_id", tvdbID, "season", season, "episode", episode, "indexer_filter", len(indexers))
 
 	resp, err := c.HTTP.Get(reqURL)
 	if err != nil {

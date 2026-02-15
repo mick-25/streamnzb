@@ -2,7 +2,9 @@ package initialization
 
 import (
 	"fmt"
+	"net/url"
 	"os"
+	"strings"
 	"streamnzb/pkg/config"
 	"streamnzb/pkg/indexer"
 	"streamnzb/pkg/indexer/easynews"
@@ -17,10 +19,11 @@ import (
 
 // InitializedComponents holds all the components initialized during bootstrap
 type InitializedComponents struct {
-	Config         *config.Config
-	Indexer        indexer.Indexer
-	ProviderPools  map[string]*nntp.ClientPool
-	StreamingPools []*nntp.ClientPool
+	Config                *config.Config
+	Indexer               indexer.Indexer
+	ProviderPools         map[string]*nntp.ClientPool
+	StreamingPools        []*nntp.ClientPool
+	AvailNZBIndexerHosts  []string // Underlying indexer hostnames for AvailNZB GetReleases filter (e.g. nzbgeek.info)
 }
 
 // WaitForInputAndExit prints an error and waits for user input before exiting
@@ -43,10 +46,22 @@ func Bootstrap() (*InitializedComponents, error) {
 	return BuildComponents(cfg)
 }
 
+// hostFromIndexerURL returns hostname for AvailNZB (lowercase, no api. prefix).
+func hostFromIndexerURL(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return ""
+	}
+	h := strings.ToLower(strings.TrimSpace(u.Hostname()))
+	return strings.TrimPrefix(h, "api.")
+}
+
 // BuildComponents builds all system modules from the provided configuration
 func BuildComponents(cfg *config.Config) (*InitializedComponents, error) {
 	// 2. Initialize Indexers
 	var indexers []indexer.Indexer
+	var availNzbHosts []string
+	seenHost := make(map[string]bool)
 
 	// Initialize State Manager
 	dataDir := paths.GetDataDir()
@@ -75,7 +90,7 @@ func BuildComponents(cfg *config.Config) (*InitializedComponents, error) {
 		switch indexerType {
 		case "nzbhydra":
 			// Try to discover individual indexers first
-			discovered, err := nzbhydra.GetConfiguredIndexers(idxCfg.URL, idxCfg.APIKey, usageMgr)
+			discovered, hydraHosts, err := nzbhydra.GetConfiguredIndexers(idxCfg.URL, idxCfg.APIKey, usageMgr)
 			if err != nil {
 				// Fall back to single aggregated client if discovery fails
 				logger.Debug("NZBHydra2 indexer discovery failed, using aggregated client", "err", err)
@@ -85,11 +100,22 @@ func BuildComponents(cfg *config.Config) (*InitializedComponents, error) {
 				} else {
 					indexers = append(indexers, hydraClient)
 					logger.Info("Initialized NZBHydra2 aggregated client", "name", idxCfg.Name)
+					// Fallback: use Hydra host so AvailNZB may still return something
+					if h := hostFromIndexerURL(idxCfg.URL); h != "" && !seenHost[h] {
+						seenHost[h] = true
+						availNzbHosts = append(availNzbHosts, h)
+					}
 				}
 			} else {
 				if len(discovered) > 0 {
 					indexers = append(indexers, discovered...)
 					logger.Info("Initialized NZBHydra2 indexers from discovery", "name", idxCfg.Name, "count", len(discovered))
+					for _, h := range hydraHosts {
+						if h != "" && !seenHost[h] {
+							seenHost[h] = true
+							availNzbHosts = append(availNzbHosts, h)
+						}
+					}
 				} else {
 					// Fall back to aggregated client if no indexers discovered
 					hydraClient, err := nzbhydra.NewClient(idxCfg.URL, idxCfg.APIKey, idxCfg.Name, usageMgr)
@@ -98,17 +124,34 @@ func BuildComponents(cfg *config.Config) (*InitializedComponents, error) {
 					} else {
 						indexers = append(indexers, hydraClient)
 						logger.Info("Initialized NZBHydra2 aggregated client (no indexers discovered)", "name", idxCfg.Name)
+						if h := hostFromIndexerURL(idxCfg.URL); h != "" && !seenHost[h] {
+							seenHost[h] = true
+							availNzbHosts = append(availNzbHosts, h)
+						}
 					}
 				}
 			}
 		case "prowlarr":
-			discovered, err := prowlarr.GetConfiguredIndexers(idxCfg.URL, idxCfg.APIKey, usageMgr)
+			discovered, prowlarrHosts, err := prowlarr.GetConfiguredIndexers(idxCfg.URL, idxCfg.APIKey, usageMgr)
 			if err != nil {
 				logger.Error("Failed to initialize Prowlarr from indexer list", "name", idxCfg.Name, "err", err)
 			} else {
 				if len(discovered) > 0 {
 					indexers = append(indexers, discovered...)
 					logger.Info("Initialized Prowlarr from indexer list", "name", idxCfg.Name, "count", len(discovered))
+				}
+				for _, h := range prowlarrHosts {
+					if h != "" && !seenHost[h] {
+						seenHost[h] = true
+						availNzbHosts = append(availNzbHosts, h)
+					}
+				}
+				// Fallback if API didn't return IndexerUrls
+				if len(prowlarrHosts) == 0 {
+					if h := hostFromIndexerURL(idxCfg.URL); h != "" && !seenHost[h] {
+						seenHost[h] = true
+						availNzbHosts = append(availNzbHosts, h)
+					}
 				}
 			}
 		case "easynews":
@@ -129,10 +172,18 @@ func BuildComponents(cfg *config.Config) (*InitializedComponents, error) {
 				indexers = append(indexers, easynewsClient)
 				logger.Info("Initialized Easynews indexer", "name", idxCfg.Name)
 			}
+			if h := "members.easynews.com"; !seenHost[h] {
+				seenHost[h] = true
+				availNzbHosts = append(availNzbHosts, h)
+			}
 		default: // newznab
 			client := newznab.NewClient(idxCfg, usageMgr)
 			indexers = append(indexers, client)
 			logger.Info("Initialized Newznab indexer", "name", idxCfg.Name, "url", idxCfg.URL)
+			if h := hostFromIndexerURL(idxCfg.URL); h != "" && !seenHost[h] {
+				seenHost[h] = true
+				availNzbHosts = append(availNzbHosts, h)
+			}
 		}
 	}
 
@@ -197,9 +248,10 @@ func BuildComponents(cfg *config.Config) (*InitializedComponents, error) {
 	}
 
 	return &InitializedComponents{
-		Config:         cfg,
-		Indexer:        aggregator,
-		ProviderPools:  providerPools,
-		StreamingPools: streamingPools,
+		Config:               cfg,
+		Indexer:              aggregator,
+		ProviderPools:        providerPools,
+		StreamingPools:       streamingPools,
+		AvailNZBIndexerHosts: availNzbHosts,
 	}, nil
 }

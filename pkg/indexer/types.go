@@ -2,6 +2,8 @@ package indexer
 
 import (
 	"encoding/xml"
+	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -36,7 +38,8 @@ type SearchRequest struct {
 	Episode string // Episode number for TV searches
 }
 
-// SearchResponse represents the Newznab XML response
+// SearchResponse represents the Newznab XML response. After aggregation, items are normalized
+// (NormalizeSearchResponse) so Link and Size are populated from Enclosure/attributes when missing.
 type SearchResponse struct {
 	XMLName xml.Name `xml:"rss"`
 	Channel Channel  `xml:"channel"`
@@ -54,7 +57,8 @@ type Channel struct {
 	Items    []Item          `xml:"item"`
 }
 
-// Item represents a single NZB result
+// Item represents a single NZB result. After normalization, Link (or Enclosure.URL) is the NZB
+// download URL and Size is set from enclosure length or size attribute when present.
 type Item struct {
 	Title       string      `xml:"title"`
 	Link        string      `xml:"link"`
@@ -73,7 +77,7 @@ type Item struct {
 	// ActualIndexer is the real indexer name when using meta-indexers like NZBHydra2
 	// This is populated from Newznab attributes and not part of the XML
 	ActualIndexer string `xml:"-"`
-	
+
 	// ActualGUID is the real indexer GUID when using meta-indexers like NZBHydra2
 	// This is extracted from the link field and not part of the XML
 	ActualGUID string `xml:"-"`
@@ -112,4 +116,53 @@ func (i *Item) ReleaseDetailsURL() string {
 		return i.GUID
 	}
 	return i.Link
+}
+
+// NormalizeItem fills Link and Size from Enclosure or attributes when missing, so all indexers
+// produce a consistent Item shape regardless of backend XML differences (e.g. NZBHydra2 vs Prowlarr).
+// Call this after parsing search results so downstream code can rely on Link and Size.
+func NormalizeItem(item *Item) {
+	if item == nil {
+		return
+	}
+	if item.Link == "" && item.Enclosure.URL != "" {
+		item.Link = item.Enclosure.URL
+	}
+	if item.Size <= 0 {
+		if item.Enclosure.Length > 0 {
+			item.Size = item.Enclosure.Length
+		} else if s := item.GetAttribute("size"); s != "" {
+			if n, err := strconv.ParseInt(s, 10, 64); err == nil {
+				item.Size = n
+			}
+		}
+	}
+}
+
+// NormalizeSearchResponse runs NormalizeItem on every item in the response.
+func NormalizeSearchResponse(resp *SearchResponse) {
+	if resp == nil {
+		return
+	}
+	for i := range resp.Channel.Items {
+		NormalizeItem(&resp.Channel.Items[i])
+	}
+}
+
+// ValidateItem returns an error if the item does not meet the minimum contract (Title and download URL).
+func ValidateItem(item *Item) error {
+	if item == nil {
+		return fmt.Errorf("item is nil")
+	}
+	if strings.TrimSpace(item.Title) == "" {
+		return fmt.Errorf("item missing title")
+	}
+	link := item.Link
+	if link == "" {
+		link = item.Enclosure.URL
+	}
+	if link == "" {
+		return fmt.Errorf("item missing link and enclosure URL")
+	}
+	return nil
 }

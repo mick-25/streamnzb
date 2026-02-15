@@ -8,10 +8,6 @@ import { PasswordInput } from "@/components/ui/password-input"
 import { Trash2, Plus } from "lucide-react"
 
 const INDEXER_PRESETS = [
-    { name: 'Custom Newznab', url: '', api_path: '/api', type: 'newznab' },
-    { name: 'Prowlarr', url: '', api_path: '/api', type: 'prowlarr' },
-    { name: 'NZBHydra2', url: '', api_path: '/api', type: 'nzbhydra' },
-    // { name: 'Easynews (Experimental)', url: '', api_path: '/api', type: 'easynews' },
     { name: 'abNZB', url: 'https://abnzb.com', api_path: '/api', type: 'newznab' },
     { name: 'altHUB', url: 'https://api.althub.co.za', api_path: '/api', type: 'newznab' },
     { name: 'AnimeTosho (Usenet)', url: 'https://feed.animetosho.org', api_path: '/api', type: 'newznab' },
@@ -31,7 +27,11 @@ const INDEXER_PRESETS = [
     { name: 'NZBStars', url: 'https://nzbstars.com', api_path: '/api', type: 'newznab' },
     { name: 'SceneNZBs', url: 'https://scenenzbs.com', api_path: '/api', type: 'newznab' },
     { name: 'Tabula Rasa', url: 'https://www.tabula-rasa.pw', api_path: '/api/v1', type: 'newznab' },
-    { name: 'Usenet Crawler', url: 'https://www.usenet-crawler.com', api_path: '/api', type: 'newznab' }
+    { name: 'Usenet Crawler', url: 'https://www.usenet-crawler.com', api_path: '/api', type: 'newznab' },
+    { name: 'Prowlarr', url: '', api_path: '/api', type: 'prowlarr' },
+    { name: 'NZBHydra2', url: '', api_path: '/api', type: 'nzbhydra' },
+    //{ name: 'Easynews (Experimental)', url: '', api_path: '/api', type: 'easynews' },
+    { name: 'Custom Newznab', url: '', api_path: '/api', type: 'newznab' }
 ]
 
 export function IndexerSettings({ control, indexerFields, appendIndexer, removeIndexer, watch, setValue }) {
@@ -73,7 +73,7 @@ export function IndexerSettings({ control, indexerFields, appendIndexer, removeI
                                             setValue(`indexers.${index}.type`, preset.type);
                                         }
                                     }}
-                                    value={INDEXER_PRESETS.find(p => p.name === watch(`indexers.${index}.name`))?.name || (watch(`indexers.${index}.type`) === 'prowlarr' ? 'Prowlarr' : 'Custom Newznab')}
+                                    value={INDEXER_PRESETS.find(p => p.name === watch(`indexers.${index}.name`))?.name || (watch(`indexers.${index}.type`) === 'prowlarr' ? 'Prowlarr' : watch(`indexers.${index}.type`) === 'nzbhydra' ? 'NZBHydra2' : watch(`indexers.${index}.type`) === 'easynews' ? 'Easynews (Experimental)' : 'Custom Newznab')}
                                 >
                                     {INDEXER_PRESETS.map(preset => (
                                         <option key={preset.name} value={preset.name}>{preset.name}</option>

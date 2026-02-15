@@ -35,6 +35,9 @@ type Client struct {
 	mu                sync.RWMutex
 }
 
+// Ensure Client implements indexer.Indexer at compile time.
+var _ indexer.Indexer = (*Client)(nil)
+
 // checkAPILimit returns error if API limit is reached
 func (c *Client) checkAPILimit() error {
 	c.mu.RLock()

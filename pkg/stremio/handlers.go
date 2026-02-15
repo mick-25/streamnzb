@@ -39,39 +39,43 @@ type Server struct {
 	version        string // raw version for API/frontend (e.g. dev-9a3e479)
 	baseURL        string
 	config         *config.Config
-	indexer        indexer.Indexer
-	validator      *validation.Checker
-	sessionManager *session.Manager
-	triageService  *triage.Service
-	availClient    *availnzb.Client
-	tmdbClient     *tmdb.Client
-	tvdbClient     *tvdb.Client
-	deviceManager  *auth.DeviceManager
-	webHandler     http.Handler
-	apiHandler     http.Handler
+	indexer             indexer.Indexer
+	validator           *validation.Checker
+	sessionManager      *session.Manager
+	triageService       *triage.Service
+	availClient         *availnzb.Client
+	availNZBIndexerHosts []string // Underlying indexer hostnames for AvailNZB GetReleases (e.g. nzbgeek.info from NZBHydra)
+	tmdbClient          *tmdb.Client
+	tvdbClient          *tvdb.Client
+	deviceManager       *auth.DeviceManager
+	webHandler          http.Handler
+	apiHandler          http.Handler
 }
 
-// NewServer creates a new Stremio addon server
+// NewServer creates a new Stremio addon server.
+// availNZBIndexerHosts is used to filter AvailNZB GetReleases by indexer; pass nil to get all releases.
 func NewServer(cfg *config.Config, baseURL string, port int, indexer indexer.Indexer, validator *validation.Checker,
 	sessionMgr *session.Manager, triageService *triage.Service, availClient *availnzb.Client,
+	availNZBIndexerHosts []string,
 	tmdbClient *tmdb.Client, tvdbClient *tvdb.Client, deviceManager *auth.DeviceManager, version string) (*Server, error) {
 
 	if version == "" {
 		version = "dev"
 	}
 	s := &Server{
-		manifest:       NewManifest(version),
-		version:        version,
-		baseURL:        baseURL,
-		config:         cfg,
-		indexer:        indexer,
-		validator:      validator,
-		sessionManager: sessionMgr,
-		triageService:  triageService,
-		availClient:    availClient,
-		tmdbClient:     tmdbClient,
-		tvdbClient:     tvdbClient,
-		deviceManager:  deviceManager,
+		manifest:            NewManifest(version),
+		version:             version,
+		baseURL:             baseURL,
+		config:              cfg,
+		indexer:             indexer,
+		validator:           validator,
+		sessionManager:      sessionMgr,
+		triageService:       triageService,
+		availClient:         availClient,
+		availNZBIndexerHosts: availNZBIndexerHosts,
+		tmdbClient:          tmdbClient,
+		tvdbClient:          tvdbClient,
+		deviceManager:       deviceManager,
 	}
 
 	if err := s.CheckPort(port); err != nil {
@@ -253,7 +257,10 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request, device *au
 		return "legacy"
 	}())
 
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	// Allow time for indexer search (e.g. NZBHydra/Prowlarr) plus NNTP validation across providers.
+	// 5s was too short: slow indexers + validation often exceeded it and returned 0 streams.
+	const streamRequestTimeout = 15 * time.Second
+	ctx, cancel := context.WithTimeout(r.Context(), streamRequestTimeout)
 	defer cancel()
 
 	logger.Trace("stream request start", "type", contentType, "id", id)
@@ -276,27 +283,6 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request, device *au
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 
 	json.NewEncoder(w).Encode(response)
-}
-
-// getIndexerHostnames returns hostnames from config for AvailNZB indexer filter.
-func getIndexerHostnames(cfg *config.Config) []string {
-	if cfg == nil {
-		return nil
-	}
-	var out []string
-	seen := make(map[string]bool)
-	for _, idx := range cfg.Indexers {
-		u, err := url.Parse(idx.URL)
-		if err != nil {
-			continue
-		}
-		host := strings.TrimPrefix(strings.ToLower(u.Hostname()), "api.")
-		if host != "" && !seen[host] {
-			seen[host] = true
-			out = append(out, host)
-		}
-	}
-	return out
 }
 
 // addAPIKeyToDownloadURL appends the matching indexer's API key to the download URL (by host). Returns original if no match.
@@ -403,14 +389,15 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string, 
 			}
 		}
 	}
-	indexerHostnames := getIndexerHostnames(s.config)
+	// AvailNZB indexer filter: use underlying hostnames (e.g. nzbgeek.info from NZBHydra) so GetReleases returns matches
+	availIndexers := s.availNZBIndexerHosts
 	logger.Debug("searchAndValidate", "imdb", req.IMDbID, "tvdb", req.TVDBID, "season", req.Season, "ep", req.Episode, "maxStreams", maxStreams)
 
 	var streams []Stream
 
 	// 2. AvailNZB first: get cached releases, triage, validate up to max_streams
 	if s.availClient != nil && s.availClient.BaseURL != "" && (contentIDs.ImdbID != "" || contentIDs.TvdbID != "") {
-		releases, err := s.availClient.GetReleases(contentIDs.ImdbID, contentIDs.TvdbID, contentIDs.Season, contentIDs.Episode, indexerHostnames)
+		releases, err := s.availClient.GetReleases(contentIDs.ImdbID, contentIDs.TvdbID, contentIDs.Season, contentIDs.Episode, availIndexers)
 		if err == nil && releases != nil && len(releases.Releases) > 0 {
 			var availItems []indexer.Item
 			detailsURLToRelease := make(map[string]*availnzb.ReleaseItem)
@@ -498,7 +485,7 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string, 
 	logger.Debug("Indexer candidates after triage", "count", len(candidates))
 
 	if s.availClient != nil && s.availClient.BaseURL != "" && (contentIDs.ImdbID != "" || contentIDs.TvdbID != "") {
-		releases, _ := s.availClient.GetReleases(contentIDs.ImdbID, contentIDs.TvdbID, contentIDs.Season, contentIDs.Episode, indexerHostnames)
+		releases, _ := s.availClient.GetReleases(contentIDs.ImdbID, contentIDs.TvdbID, contentIDs.Season, contentIDs.Episode, availIndexers)
 		if releases != nil && len(releases.Releases) > 0 {
 			ourProviders := make(map[string]bool)
 			for _, h := range s.validator.GetProviderHosts() {
@@ -1197,7 +1184,8 @@ func forceDisconnect(w http.ResponseWriter, baseURL string) {
 
 // Reload updates the server components at runtime
 func (s *Server) Reload(baseURL string, indexer indexer.Indexer, validator *validation.Checker,
-	triage *triage.Service, avail *availnzb.Client, tmdbClient *tmdb.Client, tvdbClient *tvdb.Client, deviceManager *auth.DeviceManager) {
+	triage *triage.Service, avail *availnzb.Client, availNZBIndexerHosts []string,
+	tmdbClient *tmdb.Client, tvdbClient *tvdb.Client, deviceManager *auth.DeviceManager) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -1206,6 +1194,7 @@ func (s *Server) Reload(baseURL string, indexer indexer.Indexer, validator *vali
 	s.validator = validator
 	s.triageService = triage
 	s.availClient = avail
+	s.availNZBIndexerHosts = availNZBIndexerHosts
 	s.tmdbClient = tmdbClient
 	s.tvdbClient = tvdbClient
 	s.deviceManager = deviceManager
