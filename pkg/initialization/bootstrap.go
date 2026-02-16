@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"sort"
 	"strings"
 	"streamnzb/pkg/config"
 	"streamnzb/pkg/indexer"
@@ -207,7 +208,29 @@ func BuildComponents(cfg *config.Config) (*InitializedComponents, error) {
 		}
 	}
 
-	for _, provider := range cfg.Providers {
+	// Sort providers by priority (lower number = higher priority) and filter disabled ones
+	// Note: Migration from old config format happens in config.Load(), not here
+	providers := make([]config.Provider, 0, len(cfg.Providers))
+	for _, p := range cfg.Providers {
+		// Only include enabled providers (check pointer)
+		if p.Enabled != nil && *p.Enabled {
+			providers = append(providers, p)
+		}
+	}
+	// Sort by priority (ascending: 1, 2, 3...)
+	sort.Slice(providers, func(i, j int) bool {
+		priI := 999
+		priJ := 999
+		if providers[i].Priority != nil {
+			priI = *providers[i].Priority
+		}
+		if providers[j].Priority != nil {
+			priJ = *providers[j].Priority
+		}
+		return priI < priJ
+	})
+
+	for _, provider := range providers {
 		logger.Info("Initializing NNTP pool", "provider", provider.Name, "host", provider.Host, "conns", provider.Connections)
 
 		pool := nntp.NewClientPool(

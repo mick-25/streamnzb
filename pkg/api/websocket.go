@@ -317,6 +317,10 @@ func (s *Server) handleSaveConfigWS(conn *websocket.Conn, client *Client, payloa
 		newCfg.AdminToken = currentCfg.AdminToken
 		newCfg.AdminMustChangePassword = currentCfg.AdminMustChangePassword
 
+		// Apply provider defaults migration (only for old configs with priority=0)
+		// This ensures old configs get migrated when saving from UI
+		newCfg.ApplyProviderDefaults()
+
 		if currentLoadedPath == "" {
 			currentLoadedPath = filepath.Join(paths.GetDataDir(), "config.json")
 		}
@@ -599,10 +603,9 @@ func (s *Server) handleUpdatePasswordWS(client *Client, payload json.RawMessage)
 		return
 	}
 
-	if req.Username != s.config.GetAdminUsername() {
-		trySendWS(client, WSMessage{Type: "user_action_response", Payload: json.RawMessage(`{"error":"Only admin user can change password"}`)})
-		return
-	}
+	// Note: We've already verified the client is authenticated as admin (line 592).
+	// The username in the request may be the new username if both username and password are being changed.
+	// Since this endpoint only updates the admin password, we allow the change regardless of the username value.
 
 	// Update admin password in config (not state)
 	newHash := auth.HashPassword(req.Password)

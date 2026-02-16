@@ -83,6 +83,8 @@ type Provider struct {
 	Password    string
 	Connections int
 	UseSSL      bool
+	Priority    *int
+	Enabled     *bool
 }
 
 type Indexer struct {
@@ -222,6 +224,8 @@ func readProvidersFromEnv() []Provider {
 		if host == "" {
 			continue
 		}
+		priority := getEnvInt(prefix+"PRIORITY", i) // Default priority matches provider number
+		enabled := getEnvBool(prefix+"ENABLED", true) // Default to enabled
 		list = append(list, Provider{
 			Name:        getEnv(prefix+"NAME", fmt.Sprintf("Provider %d", i)),
 			Host:        host,
@@ -230,6 +234,8 @@ func readProvidersFromEnv() []Provider {
 			Password:    os.Getenv(prefix + "PASSWORD"),
 			Connections: getEnvInt(prefix+"CONNECTIONS", 10),
 			UseSSL:      getEnvBool(prefix+"SSL", true),
+			Priority:    &priority,
+			Enabled:     &enabled,
 		})
 	}
 	return list

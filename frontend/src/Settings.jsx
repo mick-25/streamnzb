@@ -235,8 +235,10 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, onClose, a
         cache_ttl_seconds: Number(initialConfig.cache_ttl_seconds),
         validation_sample_size: Number(initialConfig.validation_sample_size),
         max_concurrent_validations: Number(initialConfig.max_concurrent_validations),
-        providers: initialConfig.providers?.map(p => ({
+        providers: initialConfig.providers?.map((p, index) => ({
           ...p,
+          priority: p.priority != null ? p.priority : index + 1, // Default to index+1 if null/undefined (old config)
+          enabled: p.enabled != null ? p.enabled : true, // Default to enabled if null/undefined (old config)
           port: Number(p.port),
           connections: Number(p.connections)
         })) || [],

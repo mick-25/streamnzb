@@ -26,6 +26,8 @@ type Provider struct {
 	Password    string `json:"password"`
 	Connections int    `json:"connections"`
 	UseSSL      bool   `json:"use_ssl"`
+	Priority    *int   `json:"priority,omitempty"`    // Lower number = higher priority (1 = first, 2 = backup, etc.). nil = not set (old config)
+	Enabled     *bool  `json:"enabled,omitempty"`     // Whether this provider is enabled. nil = not set (old config)
 }
 
 // FilterConfig holds user filtering preferences for PTT-based release filtering
@@ -262,8 +264,10 @@ func Load() (*Config, error) {
 	// 4. Migrate legacy indexers
 	cfg.MigrateLegacyIndexers()
 
+	// 4.3. Apply provider defaults (priority and enabled)
+	needSave := cfg.ApplyProviderDefaults()
+
 	// 4.5. Ensure admin token and password hash defaults (do not overwrite if already set)
-	needSave := false
 	if cfg.AdminToken == "" {
 		bytes := make([]byte, 32)
 		if _, err := rand.Read(bytes); err == nil {
@@ -308,6 +312,31 @@ func (c *Config) LoadFile(path string) error {
 		return err
 	}
 	return nil
+}
+
+// ApplyProviderDefaults migrates old provider configs to new format (priority and enabled).
+// This is a one-time migration: if priority is nil (not set), treat as old config and set defaults.
+// Returns true if any changes were made (indicating config should be saved).
+func (c *Config) ApplyProviderDefaults() bool {
+	changed := false
+	for i := range c.Providers {
+		p := &c.Providers[i]
+		// Migration: if priority is nil (not set in JSON), it's an old config - migrate to new format
+		if p.Priority == nil {
+			priority := i + 1
+			p.Priority = &priority
+			enabled := true
+			p.Enabled = &enabled
+			changed = true
+		} else if p.Enabled == nil {
+			// Priority was set but enabled is nil - also migrate enabled
+			enabled := true
+			p.Enabled = &enabled
+			changed = true
+		}
+		// If both priority and enabled are set, it's already migrated - respect values as-is
+	}
+	return changed
 }
 
 // MigrateLegacyIndexers moves old Prowlarr/Hydra settings into the unified Indexers list
@@ -452,6 +481,14 @@ func ApplyEnvOverrides(cfg *Config, o env.ConfigOverrides, keys []string) {
 	if keySet(keys, env.KeyProviders) {
 		cfg.Providers = make([]Provider, len(o.Providers))
 		for i, p := range o.Providers {
+			var priority *int
+			var enabled *bool
+			if p.Priority != nil {
+				priority = p.Priority
+			}
+			if p.Enabled != nil {
+				enabled = p.Enabled
+			}
 			cfg.Providers[i] = Provider{
 				Name:        p.Name,
 				Host:        p.Host,
@@ -460,6 +497,8 @@ func ApplyEnvOverrides(cfg *Config, o env.ConfigOverrides, keys []string) {
 				Password:    p.Password,
 				Connections: p.Connections,
 				UseSSL:      p.UseSSL,
+				Priority:    priority,
+				Enabled:     enabled,
 			}
 		}
 	}
@@ -535,7 +574,29 @@ func CopyEnvOverridesFrom(src, dst *Config) {
 			dst.AdminUsername = src.AdminUsername
 		case env.KeyProviders:
 			dst.Providers = make([]Provider, len(src.Providers))
-			copy(dst.Providers, src.Providers)
+			for i, p := range src.Providers {
+				var priority *int
+				var enabled *bool
+				if p.Priority != nil {
+					priorityVal := *p.Priority
+					priority = &priorityVal
+				}
+				if p.Enabled != nil {
+					enabledVal := *p.Enabled
+					enabled = &enabledVal
+				}
+				dst.Providers[i] = Provider{
+					Name:        p.Name,
+					Host:        p.Host,
+					Port:        p.Port,
+					Username:    p.Username,
+					Password:    p.Password,
+					Connections: p.Connections,
+					UseSSL:      p.UseSSL,
+					Priority:    priority,
+					Enabled:     enabled,
+				}
+			}
 		case env.KeyIndexers:
 			dst.Indexers = make([]IndexerConfig, len(src.Indexers))
 			copy(dst.Indexers, src.Indexers)
