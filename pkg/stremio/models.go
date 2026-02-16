@@ -20,6 +20,7 @@ type Stream struct {
 	Title         string         `json:"title,omitempty"`
 	Description   string         `json:"description,omitempty"`
 	BehaviorHints *BehaviorHints `json:"behaviorHints,omitempty"`
+	StreamType    string         `json:"streamType,omitempty"`
 }
 
 // BehaviorHints provides hints to Stremio about stream behavior

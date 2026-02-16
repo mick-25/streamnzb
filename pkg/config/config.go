@@ -121,10 +121,10 @@ type Config struct {
 	LogLevel     string `json:"log_level"`
 
 	// Dashboard admin: stored in config.json (never send hash/token to frontend)
-	AdminUsername         string `json:"admin_username"`
-	AdminPasswordHash     string `json:"admin_password_hash"`     // SHA256 hash; do not send to API clients
-	AdminMustChangePassword bool `json:"admin_must_change_password"`
-	AdminToken            string `json:"admin_token"`            // Single token for dashboard + streaming; do not send to API clients
+	AdminUsername           string `json:"admin_username"`
+	AdminPasswordHash       string `json:"admin_password_hash"` // SHA256 hash; do not send to API clients
+	AdminMustChangePassword bool   `json:"admin_must_change_password"`
+	AdminToken              string `json:"admin_token"` // Single token for dashboard + streaming; do not send to API clients
 
 	// Validation settings
 	CacheTTLSeconds      int `json:"cache_ttl_seconds"`
@@ -431,18 +431,6 @@ func ApplyEnvOverrides(cfg *Config, o env.ConfigOverrides, keys []string) {
 	if keySet(keys, env.KeyValidationSize) {
 		cfg.ValidationSampleSize = o.ValidationSampleSize
 	}
-	if o.AvailNZBURL != "" {
-		cfg.AvailNZBURL = o.AvailNZBURL
-	}
-	if o.AvailNZBAPIKey != "" {
-		cfg.AvailNZBAPIKey = o.AvailNZBAPIKey
-	}
-	if o.TMDBAPIKey != "" {
-		cfg.TMDBAPIKey = o.TMDBAPIKey
-	}
-	if o.TVDBAPIKey != "" {
-		cfg.TVDBAPIKey = o.TVDBAPIKey
-	}
 	if keySet(keys, env.KeyProxyEnabled) {
 		cfg.ProxyEnabled = o.ProxyEnabled
 	}
@@ -533,14 +521,6 @@ func CopyEnvOverridesFrom(src, dst *Config) {
 			dst.CacheTTLSeconds = src.CacheTTLSeconds
 		case env.KeyValidationSize:
 			dst.ValidationSampleSize = src.ValidationSampleSize
-		case env.KeyAvailNZBURL:
-			dst.AvailNZBURL = src.AvailNZBURL
-		case env.KeyAvailNZBAPIKey:
-			dst.AvailNZBAPIKey = src.AvailNZBAPIKey
-		case env.KeyTMDBAPIKey:
-			dst.TMDBAPIKey = src.TMDBAPIKey
-		case env.KeyTVDBAPIKey:
-			dst.TVDBAPIKey = src.TVDBAPIKey
 		case env.KeyProxyEnabled:
 			dst.ProxyEnabled = src.ProxyEnabled
 		case env.KeyProxyPort:

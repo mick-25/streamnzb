@@ -303,8 +303,10 @@ func (s *Server) handleSaveConfigWS(conn *websocket.Conn, client *Client, payloa
 			newCfg.NZBHydra2URL = ""
 		}
 
-		// Preserve effective values for any key that has an env/ldflag override, so we don't
+		// Preserve effective values for any key that has an env override, so we don't
 		// overwrite them with form data (they would be overridden on next restart anyway).
+		// Note: ldflags variables are never part of config - they're build-time constants
+		// used directly in main.go and cannot be overridden.
 		s.mu.RLock()
 		currentCfg := s.config
 		currentLoadedPath := s.config.LoadedPath
@@ -343,13 +345,20 @@ func (s *Server) handleSaveConfigWS(conn *websocket.Conn, client *Client, payloa
 				&comp.Config.Filters,
 				comp.Config.Sorting,
 			)
-			availClient := availnzb.NewClient(comp.Config.AvailNZBURL, comp.Config.AvailNZBAPIKey)
-			tmdbClient := tmdb.NewClient(comp.Config.TMDBAPIKey)
+			s.mu.RLock()
+			availNZBURL := s.availNZBURL
+			availNZBAPIKey := s.availNZBAPIKey
+			tmdbAPIKey := s.tmdbAPIKey
+			tvdbAPIKey := s.tvdbAPIKey
+			s.mu.RUnlock()
+
+			availClient := availnzb.NewClient(availNZBURL, availNZBAPIKey)
+			tmdbClient := tmdb.NewClient(tmdbAPIKey)
 			dataDir := filepath.Dir(comp.Config.LoadedPath)
 			if dataDir == "" {
 				dataDir, _ = os.Getwd()
 			}
-			tvdbClient := tvdb.NewClient(comp.Config.TVDBAPIKey, dataDir)
+			tvdbClient := tvdb.NewClient(tvdbAPIKey, dataDir)
 
 			s.Reload(comp.Config, comp.ProviderPools, comp.Indexer, validator, triageService, availClient, comp.AvailNZBIndexerHosts, tmdbClient, tvdbClient)
 			log.Printf("[Reload] Configuration reloaded successfully")

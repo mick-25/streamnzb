@@ -19,8 +19,8 @@ import (
 	"streamnzb/pkg/session"
 	"streamnzb/pkg/stremio"
 	"streamnzb/pkg/tmdb"
-	"streamnzb/pkg/tvdb"
 	"streamnzb/pkg/triage"
+	"streamnzb/pkg/tvdb"
 	"streamnzb/pkg/validation"
 )
 
@@ -35,6 +35,11 @@ type Server struct {
 	proxyServer    *proxy.Server
 	indexer        indexer.Indexer
 	deviceManager  *auth.DeviceManager
+
+	availNZBURL    string
+	availNZBAPIKey string
+	tmdbAPIKey     string
+	tvdbAPIKey     string
 
 	// WebSocket Client Registry
 	clients   map[*Client]bool
@@ -51,7 +56,7 @@ type Client struct {
 }
 
 // NewServer creates a new API server
-func NewServer(cfg *config.Config, pools map[string]*nntp.ClientPool, sessMgr *session.Manager, strmServer *stremio.Server, indexer indexer.Indexer, deviceManager *auth.DeviceManager) *Server {
+func NewServer(cfg *config.Config, pools map[string]*nntp.ClientPool, sessMgr *session.Manager, strmServer *stremio.Server, indexer indexer.Indexer, deviceManager *auth.DeviceManager, availNZBURL, availNZBAPIKey, tmdbAPIKey, tvdbAPIKey string) *Server {
 	// Build streaming pools list from map (initial)
 	var list []*nntp.ClientPool
 	for _, p := range pools {
@@ -66,6 +71,10 @@ func NewServer(cfg *config.Config, pools map[string]*nntp.ClientPool, sessMgr *s
 		strmServer:     strmServer,
 		indexer:        indexer,
 		deviceManager:  deviceManager,
+		availNZBURL:    availNZBURL,
+		availNZBAPIKey: availNZBAPIKey,
+		tmdbAPIKey:     tmdbAPIKey,
+		tvdbAPIKey:     tvdbAPIKey,
 		clients:        make(map[*Client]bool),
 		logCh:          make(chan string, 100),
 	}

@@ -31,6 +31,7 @@ func buildStreamMetadata(url, filename string, cand triage.Candidate, sizeGB flo
 		Name:          name,
 		Description:   description,
 		BehaviorHints: hints,
+		StreamType:    "usenet",
 	}
 }
 

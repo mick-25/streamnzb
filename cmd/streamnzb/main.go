@@ -60,6 +60,23 @@ func main() {
 	cfg := comp.Config
 	logger.SetLevel(cfg.LogLevel)
 
+	availNZBUrl := os.Getenv(env.AvailNZBURL)
+	if availNZBUrl == "" {
+		availNZBUrl = AvailNZBURL
+	}
+	availNZBAPIKey := os.Getenv(env.AvailNZBAPIKey)
+	if availNZBAPIKey == "" {
+		availNZBAPIKey = AvailNZBAPIKey
+	}
+	tmdbKey := os.Getenv(env.TMDBAPIKey)
+	if tmdbKey == "" {
+		tmdbKey = TMDBKey
+	}
+	tvdbKey := os.Getenv(env.TVDBAPIKey)
+	if tvdbKey == "" {
+		tvdbKey = TVDBKey
+	}
+
 	// Initialize article validator
 	cacheTTL := time.Duration(cfg.CacheTTLSeconds) * time.Second
 	validator := validation.NewChecker(
@@ -80,16 +97,6 @@ func main() {
 		cfg.Sorting,
 	)
 
-	availNZBUrl := cfg.AvailNZBURL
-	if availNZBUrl == "" {
-		availNZBUrl = AvailNZBURL
-	}
-
-	availNZBAPIKey := cfg.AvailNZBAPIKey
-	if availNZBAPIKey == "" {
-		availNZBAPIKey = AvailNZBAPIKey
-	}
-
 	// Initialize AvailNZB client
 	availClient := availnzb.NewClient(availNZBUrl, availNZBAPIKey)
 
@@ -102,7 +109,7 @@ func main() {
 	// Migrate admin from state.json to config.json (one-time)
 	if stateMgr, err := persistence.GetManager(dataDir); err == nil {
 		var stateAdmin struct {
-			PasswordHash      string `json:"password_hash"`
+			PasswordHash       string `json:"password_hash"`
 			MustChangePassword bool   `json:"must_change_password"`
 		}
 		if found, _ := stateMgr.Get("admin", &stateAdmin); found {
@@ -124,19 +131,7 @@ func main() {
 		}
 	}
 
-	// Initialize TMDB client
-	// Prefer Env Var, fallback to ldflag
-	tmdbKey := cfg.TMDBAPIKey
-	if tmdbKey == "" {
-		tmdbKey = TMDBKey
-	}
 	tmdbClient := tmdb.NewClient(tmdbKey)
-
-	// Initialize TVDB client (fallback for TMDB when resolving IMDb -> TVDB ID)
-	tvdbKey := cfg.TVDBAPIKey
-	if tvdbKey == "" {
-		tvdbKey = TVDBKey
-	}
 	tvdbClient := tvdb.NewClient(tvdbKey, dataDir)
 
 	// Initialize User Manager (needed before Stremio server)
@@ -152,8 +147,7 @@ func main() {
 		initialization.WaitForInputAndExit(fmt.Errorf("Failed to initialize Stremio server: %v", err))
 	}
 
-	// Initialize API Server
-	apiServer := api.NewServer(cfg, comp.ProviderPools, sessionManager, stremioServer, comp.Indexer, deviceManager)
+	apiServer := api.NewServer(cfg, comp.ProviderPools, sessionManager, stremioServer, comp.Indexer, deviceManager, availNZBUrl, availNZBAPIKey, tmdbKey, tvdbKey)
 
 	// Set embedded web handler
 	stremioServer.SetWebHandler(web.Handler())

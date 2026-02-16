@@ -166,22 +166,8 @@ func ReadConfigOverrides() (ConfigOverrides, []string) {
 			keys = append(keys, KeyValidationSize)
 		}
 	}
-	if v := os.Getenv(AvailNZBURL); v != "" {
-		o.AvailNZBURL = v
-		keys = append(keys, KeyAvailNZBURL)
-	}
-	if v := os.Getenv(AvailNZBAPIKey); v != "" {
-		o.AvailNZBAPIKey = v
-		keys = append(keys, KeyAvailNZBAPIKey)
-	}
-	if v := os.Getenv(TMDBAPIKey); v != "" {
-		o.TMDBAPIKey = v
-		keys = append(keys, KeyTMDBAPIKey)
-	}
-	if v := os.Getenv(TVDBAPIKey); v != "" {
-		o.TVDBAPIKey = v
-		keys = append(keys, KeyTVDBAPIKey)
-	}
+	// Note: AvailNZBURL, AvailNZBAPIKey, TMDBAPIKey, TVDBAPIKey are not read from env vars.
+	// They are build-time constants set via ldflags and should never be modifiable at runtime.
 	if v := os.Getenv(NNTPProxyEnabled); v != "" {
 		o.ProxyEnabled = v == "true" || v == "1"
 		keys = append(keys, KeyProxyEnabled)
