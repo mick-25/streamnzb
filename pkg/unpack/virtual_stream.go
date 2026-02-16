@@ -22,6 +22,7 @@ type VirtualStream struct {
 	totalSize int64
 
 	currentOffset int64
+	mu            sync.Mutex // Protects currentOffset, currentBuf, bufOffset, bufferedStart, bufferedEnd
 
 	dataChan  chan []byte
 	errChan   chan error
@@ -33,6 +34,10 @@ type VirtualStream struct {
 
 	currentReader  io.ReadCloser
 	currentPartIdx int
+
+	// Buffer tracking for smart seek optimization
+	bufferedStart int64 // Start of currently buffered range
+	bufferedEnd   int64 // End of currently buffered range
 
 	workerOnce sync.Once
 }
@@ -46,9 +51,31 @@ func NewVirtualStream(parts []virtualPart, totalSize int64, startOffset int64) *
 		closeChan:      make(chan struct{}),
 		seekChan:       make(chan int64),
 		currentPartIdx: -1,
+		bufferedStart:   -1,
+		bufferedEnd:     -1,
 	}
 	go vs.worker(startOffset)
 	return vs
+}
+
+// findPart uses binary search to find the part containing the given offset
+// Returns (part pointer, part index) or (nil, -1) if not found
+func (s *VirtualStream) findPart(offset int64) (*virtualPart, int) {
+	// Binary search since parts are sorted by VirtualStart
+	left, right := 0, len(s.parts)-1
+	for left <= right {
+		mid := (left + right) / 2
+		part := &s.parts[mid]
+		if offset >= part.VirtualStart && offset < part.VirtualEnd {
+			return part, mid
+		}
+		if offset < part.VirtualStart {
+			right = mid - 1
+		} else {
+			left = mid + 1
+		}
+	}
+	return nil, -1
 }
 
 func (s *VirtualStream) worker(initialOffset int64) {
@@ -79,15 +106,8 @@ func (s *VirtualStream) worker(initialOffset int64) {
 			continue
 		}
 
-		var activePart *virtualPart
-		var partIdx int
-		for i := range s.parts {
-			if currentOffset >= s.parts[i].VirtualStart && currentOffset < s.parts[i].VirtualEnd {
-				activePart = &s.parts[i]
-				partIdx = i
-				break
-			}
-		}
+		// Binary search for part lookup (O(log n) instead of O(n))
+		activePart, partIdx := s.findPart(currentOffset)
 
 		if activePart == nil {
 			logger.Error("VirtualStream: offset not mapped", "offset", currentOffset, "totalSize", s.totalSize, "parts", len(s.parts))
@@ -97,6 +117,7 @@ func (s *VirtualStream) worker(initialOffset int64) {
 			case <-s.closeChan:
 				return
 			}
+			continue
 		}
 
 		remaining := activePart.VirtualEnd - currentOffset
@@ -138,6 +159,15 @@ func (s *VirtualStream) worker(initialOffset int64) {
 		n, err := s.currentReader.Read(buf)
 
 		if n > 0 {
+			// Update buffered range tracking atomically
+			// Track the range of data we're about to send
+			s.mu.Lock()
+			if s.bufferedStart == -1 {
+				s.bufferedStart = currentOffset
+			}
+			s.bufferedEnd = currentOffset + int64(n)
+			s.mu.Unlock()
+			
 			// Send data
 			select {
 			case s.dataChan <- buf[:n]:
@@ -148,6 +178,11 @@ func (s *VirtualStream) worker(initialOffset int64) {
 				currentOffset = off
 				s.currentReader.Close()
 				s.currentReader = nil
+				// Reset buffer tracking on seek
+				s.mu.Lock()
+				s.bufferedStart = -1
+				s.bufferedEnd = -1
+				s.mu.Unlock()
 				continue
 			}
 			currentOffset += int64(n)
@@ -178,16 +213,21 @@ func (s *VirtualStream) worker(initialOffset int64) {
 }
 
 func (s *VirtualStream) Read(p []byte) (n int, err error) {
+	s.mu.Lock()
 	if len(s.currentBuf) == 0 {
+		s.mu.Unlock()
 		select {
 		case buf := <-s.dataChan:
+			s.mu.Lock()
 			s.currentBuf = buf
 			s.bufOffset = 0
+			s.mu.Unlock()
 		case err := <-s.errChan:
 			return 0, err
 		case <-s.closeChan:
 			return 0, io.ErrClosedPipe
 		}
+		s.mu.Lock()
 	}
 
 	available := len(s.currentBuf) - s.bufOffset
@@ -203,11 +243,13 @@ func (s *VirtualStream) Read(p []byte) (n int, err error) {
 	if s.bufOffset >= len(s.currentBuf) {
 		s.currentBuf = nil
 	}
+	s.mu.Unlock()
 
 	return toCopy, nil
 }
 
 func (s *VirtualStream) Seek(offset int64, whence int) (int64, error) {
+	s.mu.Lock()
 	var target int64
 	switch whence {
 	case io.SeekStart:
@@ -219,11 +261,54 @@ func (s *VirtualStream) Seek(offset int64, whence int) (int64, error) {
 	}
 
 	if target < 0 || target > s.totalSize {
+		s.mu.Unlock()
 		return 0, errors.New("seek out of bounds")
 	}
 
+	// Optimization: If seeking to current position, do nothing
+	if target == s.currentOffset {
+		s.mu.Unlock()
+		return target, nil
+	}
+
+	currentOffset := s.currentOffset
+	bufferedEnd := s.bufferedEnd
+	s.mu.Unlock()
+
+	// Optimization: If seeking forward within buffered range, just update offset
+	// This avoids restarting the worker and discarding buffered data
+	if target > currentOffset && bufferedEnd > 0 && target <= bufferedEnd {
+		s.mu.Lock()
+		skipBytes := target - s.currentOffset
+		if skipBytes <= int64(len(s.currentBuf)-s.bufOffset) {
+			// Can skip within current buffer
+			s.bufOffset += int(skipBytes)
+			s.currentOffset = target
+			if s.bufOffset >= len(s.currentBuf) {
+				s.currentBuf = nil
+				s.bufOffset = 0
+			}
+			s.mu.Unlock()
+			logger.Debug("VirtualStream: fast forward seek within buffer", "target", target, "skipped", skipBytes)
+			return target, nil
+		}
+		// Need to skip more than current buffer, but still within buffered range
+		// Drain current buffer and continue reading
+		s.currentBuf = nil
+		s.bufOffset = 0
+		s.currentOffset = target
+		s.mu.Unlock()
+		logger.Debug("VirtualStream: forward seek within buffered range", "target", target)
+		return target, nil
+	}
+
+	// Full seek - reset buffer and notify worker
+	s.mu.Lock()
 	s.currentBuf = nil
 	s.bufOffset = 0
+	s.bufferedStart = -1
+	s.bufferedEnd = -1
+	s.mu.Unlock()
 
 	select {
 	case s.seekChan <- target:
@@ -231,6 +316,7 @@ func (s *VirtualStream) Seek(offset int64, whence int) (int64, error) {
 		return 0, io.ErrClosedPipe
 	}
 
+	// Drain buffered data to ensure clean state
 Loop:
 	for {
 		select {
@@ -241,8 +327,11 @@ Loop:
 		}
 	}
 
-	logger.Debug("VirtualStream: seek complete", "target", target, "whence", whence)
+	s.mu.Lock()
 	s.currentOffset = target
+	s.mu.Unlock()
+
+	logger.Debug("VirtualStream: seek complete", "target", target, "whence", whence)
 	return target, nil
 }
 

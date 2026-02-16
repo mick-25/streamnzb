@@ -66,6 +66,21 @@ func (s *BufferedStream) Seek(offset int64, whence int) (int64, error) {
 		return newOffset, nil
 	}
 
+	// Optimization: For small forward seeks, try to read and discard instead of restarting
+	// This is beneficial if the data is already downloaded in SmartStream's buffer
+	// Threshold: if seeking forward less than 1MB, try reading first
+	if newOffset > s.offset && (newOffset-s.offset) < 1024*1024 {
+		// Try to read forward - SmartStream may have this data buffered
+		skipBytes := newOffset - s.offset
+		discarded, err := io.CopyN(io.Discard, s.currentStream, skipBytes)
+		if err == nil && discarded == skipBytes {
+			// Successfully skipped forward without restarting stream
+			s.offset = newOffset
+			return newOffset, nil
+		}
+		// If read failed or didn't get enough bytes, fall through to restart
+	}
+
 	// Close existing stream
 	s.currentStream.Close()
 
