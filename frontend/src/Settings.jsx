@@ -61,6 +61,7 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, onClose, a
       cache_ttl_seconds: 300,
       validation_sample_size: 5,
       max_streams: 6,
+      max_streams_per_resolution: 0,
       providers: [],
       indexers: [],
       filters: {
@@ -235,6 +236,7 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, onClose, a
         cache_ttl_seconds: Number(initialConfig.cache_ttl_seconds),
         validation_sample_size: Number(initialConfig.validation_sample_size),
         max_concurrent_validations: Number(initialConfig.max_concurrent_validations),
+        max_streams_per_resolution: Number(initialConfig.max_streams_per_resolution || 0),
         providers: initialConfig.providers?.map((p, index) => ({
           ...p,
           priority: p.priority != null ? p.priority : index + 1, // Default to index+1 if null/undefined (old config)
@@ -805,6 +807,35 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, onClose, a
                                                 </FormControl>
                                                 <FormDescription>
                                                     Number of streams to return (default: 6)
+                                                </FormDescription>
+                                                <FormMessage />
+                                            </FormItem>
+                                        )}
+                                    />
+
+                                    <FormField
+                                        control={control}
+                                        name="max_streams_per_resolution"
+                                        render={({ field }) => (
+                                            <FormItem>
+                                                <FormLabel className="flex items-center gap-2">
+                                                    Max Streams per Resolution
+                                                    <TooltipProvider>
+                                                        <Tooltip>
+                                                            <TooltipTrigger asChild>
+                                                                <Info className="h-4 w-4 text-muted-foreground cursor-help" />
+                                                            </TooltipTrigger>
+                                                            <TooltipContent className="max-w-xs">
+                                                                <p>Limit the number of streams returned per resolution (4K, 1080p, 720p, SD). Set to 0 to disable and use Max Streams behavior instead. Useful when you want multiple resolution options but don't want all streams at the highest resolution.</p>
+                                                            </TooltipContent>
+                                                        </Tooltip>
+                                                    </TooltipProvider>
+                                                </FormLabel>
+                                                <FormControl>
+                                                    <Input type="number" min="0" max="10" {...field} onChange={e => field.onChange(e.target.valueAsNumber)} />
+                                                </FormControl>
+                                                <FormDescription>
+                                                    Max streams per resolution (0 = disabled, default: 0)
                                                 </FormDescription>
                                                 <FormMessage />
                                             </FormItem>

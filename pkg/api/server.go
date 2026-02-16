@@ -168,7 +168,7 @@ func (s *Server) Reload(cfg *config.Config, pools map[string]*nntp.ClientPool, i
 	s.sessionMgr.UpdatePools(newStreamingPools)
 
 	if s.strmServer != nil {
-		s.strmServer.Reload(cfg.AddonBaseURL, indexers, validator, triage, avail, availNZBIndexerHosts, tmdbClient, tvdbClient, s.deviceManager)
+		s.strmServer.Reload(cfg, cfg.AddonBaseURL, indexers, validator, triage, avail, availNZBIndexerHosts, tmdbClient, tvdbClient, s.deviceManager)
 	}
 
 	// 5. Restart Proxy if enabled

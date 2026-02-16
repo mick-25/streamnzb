@@ -129,9 +129,10 @@ type Config struct {
 	AdminToken              string `json:"admin_token"` // Single token for dashboard + streaming; do not send to API clients
 
 	// Validation settings
-	CacheTTLSeconds      int `json:"cache_ttl_seconds"`
-	ValidationSampleSize int `json:"validation_sample_size"`
-	MaxStreams           int `json:"max_streams"` // Max successful streams to return per search
+	CacheTTLSeconds          int `json:"cache_ttl_seconds"`
+	ValidationSampleSize     int `json:"validation_sample_size"`
+	MaxStreams               int `json:"max_streams"`               // Max successful streams to return per search
+	MaxStreamsPerResolution  int `json:"max_streams_per_resolution"` // Max streams per resolution (0 = disabled, use MaxStreams behavior)
 
 	// NNTP Providers
 	Providers []Provider `json:"providers"`
@@ -199,7 +200,8 @@ func Load() (*Config, error) {
 		AdminUsername:        "admin",
 		CacheTTLSeconds:      300,
 		ValidationSampleSize: 5,
-		MaxStreams:           6,
+		MaxStreams:              6,
+		MaxStreamsPerResolution: 0, // 0 = disabled
 		ProxyPort:            119,
 		ProxyHost:            "0.0.0.0",
 		Sorting: SortConfig{

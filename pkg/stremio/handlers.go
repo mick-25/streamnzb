@@ -323,7 +323,7 @@ func addAPIKeyToDownloadURL(downloadURL string, indexers []config.IndexerConfig)
 // triageCandidates returns filtered+sorted candidates (device or global triage).
 func (s *Server) triageCandidates(device *auth.Device, items []indexer.Item) []triage.Candidate {
 	if device != nil && device.Username != s.config.GetAdminUsername() &&
-		(len(device.Filters.AllowedQualities) > 0 || device.Filters.MinResolution != "" || len(device.Filters.AllowedCodecs) > 0 ||
+		(len(device.Filters.AllowedQualities) > 0 || device.Filters.MinResolution != "" || device.Filters.MaxResolution != "" || len(device.Filters.AllowedCodecs) > 0 ||
 			len(device.Sorting.ResolutionWeights) > 0 || device.Sorting.GrabWeight != 0) {
 		ts := triage.NewService(&device.Filters, device.Sorting)
 		return ts.Filter(items)
@@ -395,7 +395,33 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string, 
 
 	var streams []Stream
 
-	// 2. AvailNZB first: get cached releases, triage, validate up to max_streams
+	// Helper function to check if we have enough streams
+	// - If per-resolution limiting is disabled (0): only check if we have maxStreams total
+	// - If per-resolution limiting is enabled (>0): check if we have enough variety across resolutions
+	// Note: streams should be sorted by quality before calling this function
+	hasEnoughStreams := func(currentStreams []Stream) bool {
+		if len(currentStreams) < maxStreams {
+			return false
+		}
+		// Only check for resolution variety if per-resolution limiting is enabled
+		if s.config.MaxStreamsPerResolution > 0 {
+			// Make a copy and sort to ensure quality order (limitStreamsPerResolution expects sorted input)
+			sorted := make([]Stream, len(currentStreams))
+			copy(sorted, currentStreams)
+			sort.Slice(sorted, func(i, j int) bool {
+				return getQualityScore(sorted[i].Name) > getQualityScore(sorted[j].Name)
+			})
+			limited := limitStreamsPerResolution(sorted, s.config.MaxStreamsPerResolution, maxStreams)
+			// If limiting reduces the count below maxStreams, we need more streams for variety
+			if len(limited) < maxStreams {
+				return false
+			}
+		}
+		// When disabled: we have enough if we have maxStreams total (no resolution variety check)
+		return true
+	}
+
+	// 2. AvailNZB first: get all cached releases, filter per configuration, check limits
 	if s.availClient != nil && s.availClient.BaseURL != "" && (contentIDs.ImdbID != "" || contentIDs.TvdbID != "") {
 		releases, err := s.availClient.GetReleases(contentIDs.ImdbID, contentIDs.TvdbID, contentIDs.Season, contentIDs.Episode, availIndexers)
 		if err == nil && releases != nil && len(releases.Releases) > 0 {
@@ -414,12 +440,12 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string, 
 				detailsURLToRelease[item.ReleaseDetailsURL()] = r
 			}
 			if len(availItems) > 0 {
+				// Filter per configuration (triage)
 				availCandidates := s.triageCandidates(device, availItems)
-				logger.Debug("AvailNZB phase", "releases", len(availItems), "after_triage", len(availCandidates), "max_streams", maxStreams)
+				logger.Debug("AvailNZB phase", "releases", len(availItems), "after_triage", len(availCandidates))
+				
+				// Collect all AvailNZB candidates
 				for _, cand := range availCandidates {
-					if len(streams) >= maxStreams {
-						break
-					}
 					detailsURL := cand.Result.ReleaseDetailsURL()
 					r := detailsURLToRelease[detailsURL]
 					if r == nil {
@@ -455,11 +481,17 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string, 
 					title := r.ReleaseName + "\n[AvailNZB]"
 					stream := buildStreamMetadata(streamURL, title, cand, sizeGB, r.Size)
 					streams = append(streams, stream)
-					logger.Debug("Stream from AvailNZB (deferred)", "title", r.ReleaseName, "count", len(streams))
 				}
-				logger.Debug("AvailNZB phase done", "streams", len(streams), "need_more", maxStreams-len(streams))
-				// Grow cache: validate one indexer candidate not already in AvailNZB and report it (background)
-				if len(streams) >= maxStreams {
+				logger.Debug("AvailNZB phase done", "streams", len(streams))
+				
+				// Sort AvailNZB streams by quality before checking if we have enough
+				sort.Slice(streams, func(i, j int) bool {
+					return getQualityScore(streams[i].Name) > getQualityScore(streams[j].Name)
+				})
+				
+				// Check if we have enough streams (max streams + per-resolution limits)
+				if hasEnoughStreams(streams) {
+					// Grow cache: validate one indexer candidate not already in AvailNZB and report it (background)
 					knownURLs := make(map[string]bool)
 					for u := range detailsURLToRelease {
 						knownURLs[u] = true
@@ -470,12 +502,8 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string, 
 		}
 	}
 
-	// 3. Indexers: search, triage, validate until we have max_streams
-	if len(streams) >= maxStreams {
-		sort.Slice(streams, func(i, j int) bool { return getQualityScore(streams[i].Name) > getQualityScore(streams[j].Name) })
-		logger.Info("Returning validated streams", "count", len(streams))
-		return streams, nil
-	}
+	// 3. Indexers: search, triage, validate until we have enough streams
+	if !hasEnoughStreams(streams) {
 
 	searchResp, err := s.indexer.Search(req)
 	if err != nil {
@@ -535,97 +563,146 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string, 
 		}
 	}
 
-	remaining := maxStreams - len(streams)
-	maxAttempts := remaining * 2
-	if maxAttempts < 6 {
-		maxAttempts = 6
-	}
-	sem := make(chan struct{}, 6)
-	resultChan := make(chan Stream, len(candidates))
-	var mu sync.Mutex
-	validated, attempted := 0, 0
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	var wg sync.WaitGroup
-
-	for _, candidate := range candidates {
-		mu.Lock()
-		if attempted >= maxAttempts || validated >= remaining {
-			mu.Unlock()
-			break
+		// Validate candidates in parallel until we have enough streams
+		// Limit validation attempts to maxStreams * 2 to avoid excessive downloads
+		maxAttempts := maxStreams * 2
+		if maxAttempts < 6 {
+			maxAttempts = 6
 		}
-		attempted++
-		mu.Unlock()
+		if maxAttempts > len(candidates) {
+			maxAttempts = len(candidates)
+		}
+		
+		sem := make(chan struct{}, 6)
+		resultChan := make(chan Stream, maxAttempts)
+		var mu sync.Mutex
+		attempted := 0
+		validationCtx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		var wg sync.WaitGroup
 
-		wg.Add(1)
-		go func(cand triage.Candidate) {
-			defer wg.Done()
-			select {
-			case sem <- struct{}{}:
-				defer func() { <-sem }()
-			case <-ctx.Done():
-				return
-			}
+		for _, candidate := range candidates {
 			mu.Lock()
-			if validated >= remaining {
+			if attempted >= maxAttempts {
 				mu.Unlock()
-				return
+				break
 			}
+			attempted++
 			mu.Unlock()
 
-			stream, err := s.validateCandidate(ctx, cand, device, contentIDs)
-			if err != nil {
-				logger.Trace("validateCandidate failed", "title", cand.Result.Title, "err", err)
-				return
-			}
-			mu.Lock()
-			if validated < remaining {
+			wg.Add(1)
+			go func(cand triage.Candidate) {
+				defer wg.Done()
+				select {
+				case sem <- struct{}{}:
+					defer func() { <-sem }()
+				case <-validationCtx.Done():
+					return
+				}
+
+				stream, err := s.validateCandidate(validationCtx, cand, device, contentIDs)
+				if err != nil {
+					logger.Trace("validateCandidate failed", "title", cand.Result.Title, "err", err)
+					return
+				}
 				resultChan <- stream
-				validated++
-				if validated >= remaining {
-					cancel()
+			}(candidate)
+		}
+
+		done := make(chan struct{})
+		go func() {
+			wg.Wait()
+			close(resultChan)
+			close(done)
+		}()
+
+		timeout := time.After(60 * time.Second)
+		for {
+			select {
+			case stream, ok := <-resultChan:
+				if !ok {
+					goto doneCollect
+				}
+				streams = append(streams, stream)
+				// Sort streams by quality before checking (limitStreamsPerResolution expects sorted input)
+				// Note: This is a bit inefficient but ensures correctness during progressive collection
+				sort.Slice(streams, func(i, j int) bool {
+					return getQualityScore(streams[i].Name) > getQualityScore(streams[j].Name)
+				})
+				// Check if we have enough streams after each addition
+				if hasEnoughStreams(streams) {
+					cancel() // Stop validating more, but collect what's already validated
+					// Drain remaining streams
+					for {
+						select {
+						case stream, ok := <-resultChan:
+							if !ok {
+								goto doneCollect
+							}
+							streams = append(streams, stream)
+						default:
+							goto doneCollect
+						}
+					}
+				}
+			case <-timeout:
+				cancel()
+				// Drain remaining streams
+				for {
+					select {
+					case stream, ok := <-resultChan:
+						if !ok {
+							goto doneCollect
+						}
+						streams = append(streams, stream)
+					default:
+						goto doneCollect
+					}
+				}
+			case <-validationCtx.Done():
+				// Drain remaining streams
+				for {
+					select {
+					case stream, ok := <-resultChan:
+						if !ok {
+							goto doneCollect
+						}
+						streams = append(streams, stream)
+					default:
+						goto doneCollect
+					}
 				}
 			}
-			mu.Unlock()
-		}(candidate)
-	}
-
-	done := make(chan struct{})
-	go func() {
-		wg.Wait()
-		close(resultChan)
-		close(done)
-	}()
-
-	timeout := time.After(60 * time.Second)
-	for {
-		select {
-		case stream, ok := <-resultChan:
-			if !ok {
-				goto doneCollect
-			}
-			streams = append(streams, stream)
-			if len(streams) >= maxStreams {
-				goto doneCollect
-			}
-		case <-timeout:
-			cancel()
-			goto doneCollect
-		case <-ctx.Done():
-			goto doneCollect
 		}
-	}
-doneCollect:
+	doneCollect:
 
-	select {
-	case <-done:
-	case <-time.After(1 * time.Second):
-		logger.Warn("Some validation goroutines may still be running")
+		select {
+		case <-done:
+		case <-time.After(1 * time.Second):
+			logger.Warn("Some validation goroutines may still be running")
+		}
+		
 	}
 
+	// Final sort all streams by quality before limiting (ensures best quality first)
 	sort.Slice(streams, func(i, j int) bool {
 		return getQualityScore(streams[i].Name) > getQualityScore(streams[j].Name)
 	})
+
+	// Apply limiting once at the end: per-resolution limiting if enabled, otherwise just cap at maxStreams
+	logger.Debug("Before limiting", "total_streams", len(streams), "maxStreamsPerResolution", s.config.MaxStreamsPerResolution, "maxStreams", maxStreams)
+	// Only apply per-resolution limiting if explicitly enabled (value > 0)
+	// When 0 (disabled), just take the best maxStreams streams regardless of resolution
+	if s.config.MaxStreamsPerResolution > 0 {
+		streams = limitStreamsPerResolution(streams, s.config.MaxStreamsPerResolution, maxStreams)
+		logger.Debug("After per-resolution limiting", "count", len(streams))
+	} else {
+		// Feature disabled: just cap at maxStreams, no resolution variety requirement
+		if len(streams) > maxStreams {
+			streams = streams[:maxStreams]
+		}
+		logger.Debug("After maxStreams capping (per-resolution disabled)", "count", len(streams))
+	}
 	logger.Info("Returning validated streams", "count", len(streams))
 	return streams, nil
 }
@@ -1171,6 +1248,110 @@ func getQualityScore(name string) int {
 	return score
 }
 
+// extractResolutionGroup extracts the resolution group (4k, 1080p, 720p) from stream name
+// Returns empty string for resolutions that don't match these groups (e.g., SD)
+func extractResolutionGroup(name string) string {
+	nameLower := strings.ToLower(name)
+	if strings.Contains(nameLower, "4k") || strings.Contains(nameLower, "2160p") {
+		return "4k"
+	} else if strings.Contains(nameLower, "1080p") {
+		return "1080p"
+	} else if strings.Contains(nameLower, "720p") {
+		return "720p"
+	}
+	return "" // SD or unknown resolutions - not limited
+}
+
+// limitStreamsPerResolution limits streams per resolution group if MaxStreamsPerResolution is enabled
+// Returns limited streams, still sorted by quality score, filling up to maxTotal if possible
+func limitStreamsPerResolution(streams []Stream, maxPerResolution int, maxTotal int) []Stream {
+	if maxPerResolution <= 0 {
+		// Feature disabled - just cap at maxTotal
+		if len(streams) > maxTotal {
+			return streams[:maxTotal]
+		}
+		return streams
+	}
+
+	// Group streams by resolution (already sorted by quality)
+	resolutionGroups := make(map[string][]Stream)
+	for _, stream := range streams {
+		resolution := extractResolutionGroup(stream.Name)
+		resolutionGroups[resolution] = append(resolutionGroups[resolution], stream)
+		logger.Debug("Grouping stream by resolution", "name", stream.Name, "resolution", resolution)
+	}
+	logger.Debug("Resolution groups", "4k", len(resolutionGroups["4k"]), "1080p", len(resolutionGroups["1080p"]), "720p", len(resolutionGroups["720p"]), "sd", len(resolutionGroups[""]))
+
+	// First pass: take up to maxPerResolution from each resolution (skip empty string = SD/unknown)
+	result := make([]Stream, 0, maxTotal)
+	takenPerResolution := make(map[string]int)
+	
+	// Process resolutions in a deterministic order to ensure consistent behavior
+	resolutionOrder := []string{"4k", "1080p", "720p"}
+	for _, resolution := range resolutionOrder {
+		groupStreams := resolutionGroups[resolution]
+		if len(groupStreams) == 0 {
+			continue
+		}
+		limit := maxPerResolution
+		if limit > len(groupStreams) {
+			limit = len(groupStreams)
+		}
+		takenPerResolution[resolution] = limit
+		result = append(result, groupStreams[:limit]...)
+		logger.Debug("Limited streams per resolution (first pass)", "resolution", resolution, "total", len(groupStreams), "kept", limit, "result_count", len(result))
+	}
+
+	// Second pass: if we haven't reached maxTotal, fill remaining slots by rotating through resolutions
+	// This ensures we get variety across resolutions while still respecting per-resolution limits
+	if len(result) < maxTotal {
+		remaining := maxTotal - len(result)
+		resolutionOrder := []string{"4k", "1080p", "720p"}
+		
+		// Round-robin through resolutions to fill remaining slots
+		for remaining > 0 {
+			added := false
+			for _, resolution := range resolutionOrder {
+				if remaining <= 0 {
+					break
+				}
+				groupStreams := resolutionGroups[resolution]
+				taken := takenPerResolution[resolution]
+				// Check if we can take more from this resolution (respecting maxPerResolution limit)
+				// taken must be strictly less than maxPerResolution to take another one
+				if taken < len(groupStreams) && taken < maxPerResolution {
+					result = append(result, groupStreams[taken])
+					takenPerResolution[resolution]++
+					remaining--
+					added = true
+				}
+			}
+			if !added {
+				// No more streams available from any resolution (all at their limits or exhausted)
+				break
+			}
+		}
+		
+		// If still haven't reached maxTotal, add unlimited resolutions (SD/unknown) if available
+		if len(result) < maxTotal && len(resolutionGroups[""]) > 0 {
+			unlimitedStreams := resolutionGroups[""]
+			remaining := maxTotal - len(result)
+			if remaining > len(unlimitedStreams) {
+				remaining = len(unlimitedStreams)
+			}
+			result = append(result, unlimitedStreams[:remaining]...)
+		}
+	}
+
+	// Final sort by quality score to maintain overall quality order
+	sort.Slice(result, func(i, j int) bool {
+		return getQualityScore(result[i].Name) > getQualityScore(result[j].Name)
+	})
+
+	logger.Debug("Limited streams per resolution (final)", "total", len(result), "maxPerResolution", maxPerResolution, "maxTotal", maxTotal)
+	return result
+}
+
 // forceDisconnect redirects to the embedded failure video when streaming is unavailable.
 // The video is packaged with the binary and served from /error/failure.mp4.
 func forceDisconnect(w http.ResponseWriter, baseURL string) {
@@ -1183,12 +1364,13 @@ func forceDisconnect(w http.ResponseWriter, baseURL string) {
 }
 
 // Reload updates the server components at runtime
-func (s *Server) Reload(baseURL string, indexer indexer.Indexer, validator *validation.Checker,
+func (s *Server) Reload(cfg *config.Config, baseURL string, indexer indexer.Indexer, validator *validation.Checker,
 	triage *triage.Service, avail *availnzb.Client, availNZBIndexerHosts []string,
 	tmdbClient *tmdb.Client, tvdbClient *tvdb.Client, deviceManager *auth.DeviceManager) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	s.config = cfg // Update config so MaxStreamsPerResolution and other settings are hot-reloaded
 	s.baseURL = baseURL
 	s.indexer = indexer
 	s.validator = validator
