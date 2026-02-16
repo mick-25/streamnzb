@@ -1,6 +1,7 @@
 package indexer
 
 import (
+	"context"
 	"encoding/xml"
 	"fmt"
 	"net/url"
@@ -65,18 +66,52 @@ func (a *Aggregator) Ping() error {
 	return nil
 }
 
-// DownloadNZB attempts to download using specific logic if needed,
-// but usually just passes through to the first capable indexer or generic HTTP
-// For now, we'll try the first indexer that can handle it or just a simple GET
-// Actually, since interfaces don't have "Download" as common beyond HTTP GET usually,
-// we just pick the first indexer to perform the download as they are all HTTP clients.
+// DownloadNZB attempts to download using the first indexer; when nzbURL is a proxy link,
+// the indexer that owns that host should be used—we try each indexer until one succeeds.
 func (a *Aggregator) DownloadNZB(nzbURL string) ([]byte, error) {
 	if len(a.Indexers) == 0 {
 		return nil, fmt.Errorf("no indexers configured")
 	}
-	// Just use the first one, as they all share similar download logic (HTTP GET)
-	// In the future, we might route based on domain if needed.
-	return a.Indexers[0].DownloadNZB(nzbURL)
+	var lastErr error
+	for _, idx := range a.Indexers {
+		data, err := idx.DownloadNZB(nzbURL)
+		if err == nil {
+			return data, nil
+		}
+		lastErr = err
+	}
+	return nil, lastErr
+}
+
+// ResolveDownloadURL searches all indexers by title and returns the first matching item's Link
+// (e.g. Prowlarr proxy URL) so DownloadNZB works for direct indexer URLs from AvailNZB.
+func (a *Aggregator) ResolveDownloadURL(ctx context.Context, directURL, title string, size int64) (string, error) {
+	if title == "" {
+		return "", fmt.Errorf("title required to resolve download URL")
+	}
+	req := SearchRequest{Query: title, Limit: 30}
+	resp, err := a.Search(req)
+	if err != nil {
+		return "", fmt.Errorf("search for resolve: %w", err)
+	}
+	if resp == nil || len(resp.Channel.Items) == 0 {
+		return "", fmt.Errorf("no search results for title")
+	}
+	normTitle := strings.ToLower(strings.TrimSpace(title))
+	for _, item := range resp.Channel.Items {
+		itemNorm := strings.ToLower(strings.TrimSpace(item.Title))
+		if itemNorm != normTitle {
+			continue
+		}
+		if size > 0 && item.Size > 0 && item.Size != size {
+			continue
+		}
+		if item.Link == "" {
+			continue
+		}
+		return item.Link, nil
+	}
+	return "", fmt.Errorf("no matching release for title in search results")
 }
 
 // Search queries all indexers in parallel and merges results

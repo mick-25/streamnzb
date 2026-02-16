@@ -237,15 +237,26 @@ func (s *Session) GetOrDownloadNZB(manager *Manager) (*nzb.NZB, error) {
 		return nil, fmt.Errorf("session has no NZB and no deferred download info")
 	}
 	nzbURL := s.NZBURL
-	indexer := s.Indexer
+	idx := s.Indexer
 	itemTitle := s.ItemTitle
 	indexerName := s.IndexerName
+	reportSize := s.ReportSize
 	ctx := s.ctx
 	s.mu.Unlock()
 
+	// When the URL is a direct indexer link (e.g. from AvailNZB), resolve to proxy URL via search
+	// so Prowlarr (and similar) can serve the download without "Failed to normalize" errors.
+	if res, ok := idx.(indexer.IndexerWithResolve); ok {
+		resolved, err := res.ResolveDownloadURL(ctx, nzbURL, itemTitle, reportSize)
+		if err == nil && resolved != "" {
+			logger.Debug("Resolved direct indexer URL to proxy URL via search", "title", itemTitle)
+			nzbURL = resolved
+		}
+	}
+
 	// Download and parse outside lock so session is not held for I/O duration
 	logger.Trace("Lazy Downloading NZB...", "title", itemTitle, "indexer", indexerName, "url", nzbURL)
-	data, err := indexer.DownloadNZB(nzbURL)
+	data, err := idx.DownloadNZB(nzbURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to lazy download NZB: %w", err)
 	}

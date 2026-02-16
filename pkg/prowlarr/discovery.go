@@ -3,6 +3,7 @@ package prowlarr
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -18,7 +19,7 @@ type IndexerDefinition struct {
 	Name        string   `json:"name"`
 	Protocol    string   `json:"protocol"`
 	Enable      bool     `json:"enable"`
-	IndexerUrls []string `json:"indexerUrls,omitempty"` // Base URLs for this indexer (e.g. https://api.nzbgeek.info)
+	IndexerUrls []string `json:"indexerUrls,omitempty"`
 }
 
 // hostFromIndexerURL returns hostname for AvailNZB (lowercase, no api. prefix, no port).
@@ -49,9 +50,28 @@ func GetConfiguredIndexers(baseURL, apiKey string, um *indexer.UsageManager) ([]
 		return nil, nil, fmt.Errorf("Prowlarr returned status %d", resp.StatusCode)
 	}
 
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to read Prowlarr response: %w", err)
+	}
+
 	var definitions []IndexerDefinition
-	if err := json.NewDecoder(resp.Body).Decode(&definitions); err != nil {
-		return nil, nil, fmt.Errorf("failed to decode Prowlarr indexers: %w", err)
+	if err := json.Unmarshal(body, &definitions); err != nil {
+		// Try wrapper format in case API returns { "records": [...] } or similar
+		var wrapped struct {
+			Records  []IndexerDefinition `json:"records"`
+			Indexers []IndexerDefinition `json:"indexers"`
+		}
+		if wrapErr := json.Unmarshal(body, &wrapped); wrapErr == nil {
+			if len(wrapped.Records) > 0 {
+				definitions = wrapped.Records
+			} else if len(wrapped.Indexers) > 0 {
+				definitions = wrapped.Indexers
+			}
+		}
+		if len(definitions) == 0 {
+			return nil, nil, fmt.Errorf("failed to decode Prowlarr indexers: %w", err)
+		}
 	}
 
 	var indexers []indexer.Indexer
@@ -59,7 +79,7 @@ func GetConfiguredIndexers(baseURL, apiKey string, um *indexer.UsageManager) ([]
 	seenHost := make(map[string]bool)
 
 	for _, def := range definitions {
-		if def.Enable && def.Protocol == "usenet" {
+		if def.Enable && strings.EqualFold(strings.TrimSpace(def.Protocol), "usenet") {
 			for _, u := range def.IndexerUrls {
 				if h := hostFromIndexerURL(u); h != "" && !seenHost[h] {
 					seenHost[h] = true

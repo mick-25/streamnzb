@@ -44,14 +44,12 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, onClose, a
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
   const [initialFormValues, setInitialFormValues] = useState(null)
   const deviceManagementRef = useRef(null)
-  const [adminPassword, setAdminPassword] = useState('')
-  const [adminPasswordError, setAdminPasswordError] = useState('')
-  const [adminPasswordSuccess, setAdminPasswordSuccess] = useState('')
-  const [adminPasswordLoading, setAdminPasswordLoading] = useState(false)
-  const [copiedManifestUrl, setCopiedManifestUrl] = useState(false)
+  const pendingSaveAfterPasswordRef = useRef(null)
 
   const form = useForm({
     defaultValues: {
+      admin_username: 'admin',
+      admin_password: '',
       addon_port: 7000,
       addon_base_url: '',
       log_level: 'INFO',
@@ -230,6 +228,8 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, onClose, a
       const { env_overrides: _envOverrides, ...configForForm } = initialConfig
       const formattedData = {
         ...configForForm,
+        admin_username: initialConfig.admin_username || 'admin',
+        admin_password: '', // Never sent from server; leave blank on load
         addon_port: Number(initialConfig.addon_port),
         proxy_port: Number(initialConfig.proxy_port),
         cache_ttl_seconds: Number(initialConfig.cache_ttl_seconds),
@@ -332,8 +332,9 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, onClose, a
         if (Object.keys(deviceConfigs).length > 0) {
           // Filter out admin and prepare configs for WebSocket
           const configsToSave = {}
+          const adminUsername = data.admin_username || 'admin'
           for (const [username, deviceConfig] of Object.entries(deviceConfigs)) {
-            if (username === 'admin' || !deviceConfig) continue
+            if (username === adminUsername || !deviceConfig) continue
             configsToSave[username] = {
               filters: deviceConfig.filters || {},
               sorting: deviceConfig.sorting || {}
@@ -367,12 +368,41 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, onClose, a
       };
 
       const trimmedData = trimData(data);
+      const newPassword = trimmedData.admin_password
+      delete trimmedData.admin_password
+
+      if (newPassword) {
+        pendingSaveAfterPasswordRef.current = trimmedData
+        const prevCb = window.deviceActionCallback
+        window.deviceActionCallback = (payload) => {
+          const isPasswordResponse = payload.success !== undefined || (payload.error && !payload.token && !payload.user)
+          if (isPasswordResponse) {
+            if (prevCb) prevCb(payload)
+            if (payload.error) {
+              setError('admin_password', { type: 'server', message: payload.error })
+            } else {
+              setValue('admin_password', '')
+              sendCommand('save_config', pendingSaveAfterPasswordRef.current)
+              setHasUnsavedChanges(false)
+              setInitialFormValues(JSON.stringify(pendingSaveAfterPasswordRef.current))
+            }
+            pendingSaveAfterPasswordRef.current = null
+            window.deviceActionCallback = prevCb || undefined
+            if (!prevCb) delete window.deviceActionCallback
+            return
+          }
+          if (prevCb) prevCb(payload)
+        }
+        sendCommand('update_password', { username: trimmedData.admin_username || 'admin', password: newPassword })
+        return
+      }
+
       sendCommand('save_config', trimmedData)
       setHasUnsavedChanges(false)
       setInitialFormValues(JSON.stringify(trimmedData))
     } catch (error) {
       console.error('Error saving configuration:', error)
-      setError('Failed to save configuration: ' + error.message)
+      setError('root', { message: 'Failed to save configuration: ' + error.message })
     }
   }
 
@@ -446,165 +476,101 @@ function Settings({ initialConfig, sendCommand, saveStatus, isSaving, onClose, a
                 <form onSubmit={handleSubmit(onSubmit)}>
                   <TabsContent value="general" className="space-y-6 mt-0">
                                 {/* Addon Settings */}
-                                <Card>
-                                    <CardHeader>
-                                        <CardTitle className="text-lg">Addon Settings</CardTitle>
-                                        <CardDescription>Configure how the Stremio addon listens and is accessed.</CardDescription>
+                                <Card className="border-border/80 shadow-sm">
+                                    <CardHeader className="pb-4">
+                                        <CardTitle className="text-xl font-semibold tracking-tight">Addon Settings</CardTitle>
+                                        <CardDescription className="text-muted-foreground mt-1">
+                                            Configure how the Stremio addon listens and is accessed.
+                                        </CardDescription>
                                     </CardHeader>
-                                    <CardContent className="grid gap-4">
+                                    <CardContent className="space-y-6">
                                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                            <FormField
-                                                control={control}
-                                                name="addon_base_url"
-                                                render={({ field }) => (
-                                                    <FormItem>
-                                                        <FormLabel>Base URL</FormLabel>
-                                                        <FormControl>
-                                                            <Input placeholder="http://localhost:7000" {...field} />
-                                                        </FormControl>
-                                                        <FormMessage />
-                                                        <EnvOverrideNote show={envOverrides.includes('addon_base_url')} />
-                                                    </FormItem>
-                                                )}
-                                            />
-                                            <FormField
-                                                control={control}
-                                                name="addon_port"
-                                                render={({ field }) => (
-                                                    <FormItem>
-                                                        <FormLabel>Port (Requires Restart)</FormLabel>
-                                                        <FormControl>
-                                                            <Input type="number" {...field} onChange={e => field.onChange(e.target.valueAsNumber)} />
-                                                        </FormControl>
-                                                        <FormMessage />
-                                                        <EnvOverrideNote show={envOverrides.includes('addon_port')} />
-                                                    </FormItem>
-                                                )}
-                                            />
-                                        </div>
-                                        
-                                        {/* Admin Manifest URL */}
-                                        {adminToken && (() => {
-                                            const baseUrl = watch('addon_base_url') || initialConfig?.addon_base_url || window.location.origin
-                                            const cleanBaseUrl = baseUrl.replace(/\/$/, '')
-                                            const manifestUrl = `${cleanBaseUrl}/${adminToken}/manifest.json`
-                                            
-                                            return (
-                                                <div className="space-y-2">
-                                                    <Label>Admin Stremio URL</Label>
-                                                    <div className="flex items-center gap-2">
-                                                        <code className="text-xs bg-muted px-2 py-1 rounded flex-1 truncate">
-                                                            {manifestUrl}
-                                                        </code>
-                                                        <Button
-                                                            type="button"
-                                                            variant="ghost"
-                                                            size="sm"
-                                                            onClick={() => {
-                                                                navigator.clipboard.writeText(manifestUrl)
-                                                                setCopiedManifestUrl(true)
-                                                                setTimeout(() => setCopiedManifestUrl(false), 2000)
-                                                            }}
-                                                            className="h-7"
-                                                            title="Copy manifest URL"
-                                                        >
-                                                            {copiedManifestUrl ? (
-                                                                <Check className="h-3 w-3" />
-                                                            ) : (
-                                                                <Copy className="h-3 w-3" />
-                                                            )}
-                                                        </Button>
-                                                    </div>
-                                                </div>
-                                            )
-                                        })()}
-                                        
-                                        <div className="space-y-2">
-                                            <Label>Admin Password</Label>
-                                            <div className="flex gap-2">
-                                                <Input
-                                                    type="password"
-                                                    placeholder="Enter new admin password"
-                                                    value={adminPassword}
-                                                    onChange={(e) => {
-                                                        setAdminPassword(e.target.value)
-                                                        setAdminPasswordError('')
-                                                        setAdminPasswordSuccess('')
-                                                    }}
-                                                    disabled={adminPasswordLoading}
-                                                />
-                                                <Button
-                                                    type="button"
-                                                    onClick={() => {
-                                                        if (!adminPassword) {
-                                                            setAdminPasswordError('Password cannot be empty')
-                                                            return
-                                                        }
-                                                        
-                                                        setAdminPasswordError('')
-                                                        setAdminPasswordSuccess('')
-                                                        setAdminPasswordLoading(true)
-
-                                                        // Store previous callback to restore if needed
-                                                        const previousCallback = window.deviceActionCallback
-
-                                                        // Set our callback
-                                                        window.deviceActionCallback = (payload) => {
-                                                            // Check if this looks like a password update response
-                                                            // Password update has 'success' or 'error', device actions have 'token' or 'user'
-                                                            const isPasswordResponse = payload.success !== undefined || 
-                                                                                          (payload.error && !payload.token && !payload.user)
-                                                            
-                                                            if (isPasswordResponse) {
-                                                                setAdminPasswordLoading(false)
-                                                                if (payload.error) {
-                                                                    setAdminPasswordError(payload.error)
-                                                                } else {
-                                                                    setAdminPasswordSuccess('Password updated successfully')
-                                                                    setAdminPassword('')
-                                                                    setTimeout(() => setAdminPasswordSuccess(''), 3000)
-                                                                }
-                                                                // Restore previous callback if it existed
-                                                                if (previousCallback) {
-                                                                    window.deviceActionCallback = previousCallback
-                                                                } else {
-                                                                    delete window.deviceActionCallback
-                                                                }
-                                                            } else if (previousCallback) {
-                                                                // Not our response, pass to previous callback
-                                                                previousCallback(payload)
-                                                            }
-                                                        }
-
-                                                        sendCommand('update_password', { username: 'admin', password: adminPassword })
-                                                    }}
-                                                    disabled={adminPasswordLoading || !adminPassword}
-                                                >
-                                                    {adminPasswordLoading ? (
-                                                        <>
-                                                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                                                            Updating...
-                                                        </>
-                                                    ) : (
-                                                        <>
-                                                            <Key className="mr-2 h-4 w-4" />
-                                                            Change Password
-                                                        </>
+                                                <FormField
+                                                    control={control}
+                                                    name="addon_base_url"
+                                                    render={({ field }) => (
+                                                        <FormItem className="space-y-2">
+                                                            <FormLabel className="text-sm font-medium">Base URL</FormLabel>
+                                                            <FormControl>
+                                                                <Input
+                                                                    placeholder="http://localhost:7000"
+                                                                    className="h-10 bg-muted/30 border-border/80 focus-visible:ring-2 focus-visible:ring-ring/50"
+                                                                    {...field}
+                                                                />
+                                                            </FormControl>
+                                                            <FormMessage />
+                                                            <EnvOverrideNote show={envOverrides.includes('addon_base_url')} />
+                                                        </FormItem>
                                                     )}
-                                                </Button>
+                                                />
+                                                <FormField
+                                                    control={control}
+                                                    name="addon_port"
+                                                    render={({ field }) => (
+                                                        <FormItem className="space-y-2">
+                                                            <FormLabel className="text-sm font-medium">Port (Requires Restart)</FormLabel>
+                                                            <FormControl>
+                                                                <Input
+                                                                    type="number"
+                                                                    className="h-10 bg-muted/30 border-border/80 focus-visible:ring-2 focus-visible:ring-ring/50"
+                                                                    {...field}
+                                                                    onChange={e => field.onChange(e.target.valueAsNumber)}
+                                                                />
+                                                            </FormControl>
+                                                            <FormMessage />
+                                                            <EnvOverrideNote show={envOverrides.includes('addon_port')} />
+                                                        </FormItem>
+                                                    )}
+                                                />
+                                        </div>
+
+                                        <Separator className="my-6" />
+
+                                        <div className="rounded-lg border border-border/60 bg-muted/20 p-4 space-y-4">
+                                            <div>
+                                                <h4 className="text-sm font-medium mb-1">Dashboard credentials</h4>
+                                                <p className="text-xs text-muted-foreground">
+                                                    Username and password to log in to this dashboard. Save changes to apply. Leave password blank to keep the current one.
+                                                </p>
                                             </div>
-                                            {adminPasswordError && (
-                                                <div className="flex items-center gap-2 p-2 text-sm text-destructive bg-destructive/10 rounded-md">
-                                                    <AlertCircle className="h-4 w-4" />
-                                                    <span>{adminPasswordError}</span>
-                                                </div>
-                                            )}
-                                            {adminPasswordSuccess && (
-                                                <div className="flex items-center gap-2 p-2 text-sm text-green-600 bg-green-50 rounded-md">
-                                                    <Check className="h-4 w-4" />
-                                                    <span>{adminPasswordSuccess}</span>
-                                                </div>
-                                            )}
+                                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                                <FormField
+                                                    control={control}
+                                                    name="admin_username"
+                                                    render={({ field }) => (
+                                                        <FormItem className="space-y-2">
+                                                            <FormLabel className="text-sm font-medium">Username</FormLabel>
+                                                            <FormControl>
+                                                                <Input
+                                                                    placeholder="admin"
+                                                                    className="h-10 bg-muted/30 border-border/80 focus-visible:ring-2 focus-visible:ring-ring/50"
+                                                                    {...field}
+                                                                />
+                                                            </FormControl>
+                                                            <FormMessage />
+                                                            <EnvOverrideNote show={envOverrides.includes('admin_username')} />
+                                                        </FormItem>
+                                                    )}
+                                                />
+                                                <FormField
+                                                    control={control}
+                                                    name="admin_password"
+                                                    render={({ field }) => (
+                                                        <FormItem className="space-y-2">
+                                                            <FormLabel className="text-sm font-medium">New password</FormLabel>
+                                                            <FormControl>
+                                                                <Input
+                                                                    type="password"
+                                                                    placeholder="Leave blank to keep current"
+                                                                    className="h-10 bg-muted/30 border-border/80 focus-visible:ring-2 focus-visible:ring-ring/50"
+                                                                    {...field}
+                                                                />
+                                                            </FormControl>
+                                                            <FormMessage />
+                                                        </FormItem>
+                                                    )}
+                                                />
+                                            </div>
                                         </div>
                                     </CardContent>
                                 </Card>

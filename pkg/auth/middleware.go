@@ -32,18 +32,26 @@ func ContextWithDevice(ctx context.Context, device *Device) context.Context {
 	return context.WithValue(ctx, userContextKey, device)
 }
 
-// AuthMiddleware handles authentication for API routes
-// Supports both session-based (cookie) and token-based (header) auth
-func AuthMiddleware(deviceManager *DeviceManager) func(http.Handler) http.Handler {
+// AuthMiddleware handles authentication for API routes.
+// getAdminUsername and getAdminToken return the configured admin username and single admin token (from config).
+func AuthMiddleware(deviceManager *DeviceManager, getAdminUsername, getAdminToken func() string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			adminUsername := ""
+			if getAdminUsername != nil {
+				adminUsername = getAdminUsername()
+			}
+			adminToken := ""
+			if getAdminToken != nil {
+				adminToken = getAdminToken()
+			}
 			var device *Device
 			var err error
 
 			// Try session cookie first
 			cookie, err := r.Cookie("auth_session")
 			if err == nil && cookie != nil {
-				device, err = deviceManager.AuthenticateToken(cookie.Value)
+				device, err = deviceManager.AuthenticateToken(cookie.Value, adminUsername, adminToken)
 				if err == nil {
 					ctx := context.WithValue(r.Context(), userContextKey, device)
 					next.ServeHTTP(w, r.WithContext(ctx))
@@ -57,7 +65,7 @@ func AuthMiddleware(deviceManager *DeviceManager) func(http.Handler) http.Handle
 				parts := strings.SplitN(authHeader, " ", 2)
 				if len(parts) == 2 && parts[0] == "Bearer" {
 					token := parts[1]
-					device, err = deviceManager.AuthenticateToken(token)
+					device, err = deviceManager.AuthenticateToken(token, adminUsername, adminToken)
 					if err == nil {
 						ctx := context.WithValue(r.Context(), userContextKey, device)
 						next.ServeHTTP(w, r.WithContext(ctx))
@@ -69,7 +77,7 @@ func AuthMiddleware(deviceManager *DeviceManager) func(http.Handler) http.Handle
 			// Try query parameter token (for backwards compatibility)
 			token := r.URL.Query().Get("token")
 			if token != "" {
-				device, err = deviceManager.AuthenticateToken(token)
+				device, err = deviceManager.AuthenticateToken(token, adminUsername, adminToken)
 				if err == nil {
 					ctx := context.WithValue(r.Context(), userContextKey, device)
 					next.ServeHTTP(w, r.WithContext(ctx))
@@ -87,8 +95,8 @@ func AuthMiddleware(deviceManager *DeviceManager) func(http.Handler) http.Handle
 	}
 }
 
-// RequireAuth wraps a handler to require authentication
-func RequireAuth(deviceManager *DeviceManager, handler http.HandlerFunc) http.HandlerFunc {
-	middleware := AuthMiddleware(deviceManager)
+// RequireAuth wraps a handler to require authentication.
+func RequireAuth(deviceManager *DeviceManager, getAdminUsername, getAdminToken func() string, handler http.HandlerFunc) http.HandlerFunc {
+	middleware := AuthMiddleware(deviceManager, getAdminUsername, getAdminToken)
 	return middleware(handler).ServeHTTP
 }

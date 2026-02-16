@@ -14,6 +14,7 @@ import (
 	"streamnzb/pkg/initialization"
 	"streamnzb/pkg/logger"
 	"streamnzb/pkg/nntp/proxy"
+	"streamnzb/pkg/persistence"
 	"streamnzb/pkg/session"
 	"streamnzb/pkg/stremio"
 	"streamnzb/pkg/tmdb"
@@ -96,6 +97,31 @@ func main() {
 	dataDir := filepath.Dir(cfg.LoadedPath)
 	if dataDir == "" || dataDir == "." {
 		dataDir, _ = os.Getwd()
+	}
+
+	// Migrate admin from state.json to config.json (one-time)
+	if stateMgr, err := persistence.GetManager(dataDir); err == nil {
+		var stateAdmin struct {
+			PasswordHash      string `json:"password_hash"`
+			MustChangePassword bool   `json:"must_change_password"`
+		}
+		if found, _ := stateMgr.Get("admin", &stateAdmin); found {
+			cfg.AdminPasswordHash = stateAdmin.PasswordHash
+			cfg.AdminMustChangePassword = stateAdmin.MustChangePassword
+			if cfg.AdminToken == "" {
+				if tok, err := auth.GenerateToken(); err == nil {
+					cfg.AdminToken = tok
+				}
+			}
+			if err := cfg.Save(); err != nil {
+				logger.Warn("Failed to save config after admin migration", "err", err)
+			} else {
+				stateMgr.Delete("admin")
+				stateMgr.Delete("admin_sessions")
+				_ = stateMgr.Flush()
+				logger.Info("Migrated admin credentials from state.json to config.json")
+			}
+		}
 	}
 
 	// Initialize TMDB client

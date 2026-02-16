@@ -48,7 +48,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		// Try cookie fallback
 		cookie, err := r.Cookie("auth_session")
 		if err == nil && cookie != nil {
-			device, err = s.deviceManager.AuthenticateToken(cookie.Value)
+			device, err = s.deviceManager.AuthenticateToken(cookie.Value, s.config.GetAdminUsername(), s.config.AdminToken)
 			if err != nil {
 				http.Error(w, "Unauthorized", http.StatusUnauthorized)
 				return
@@ -106,11 +106,8 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 		// Send auth info on connect (replaces /api/auth/check)
 		var mustChangePassword bool
-		if client.device != nil && client.device.Username == "admin" {
-			adminCreds, err := s.deviceManager.GetAdminCredentials()
-			if err == nil {
-				mustChangePassword = adminCreds.MustChangePassword
-			}
+		if client.device != nil && client.device.Username == s.config.GetAdminUsername() {
+			mustChangePassword = s.config.AdminMustChangePassword
 		}
 		authInfo := map[string]interface{}{
 			"authenticated":        true,
@@ -220,28 +217,25 @@ type configPayload struct {
 }
 
 func (s *Server) sendConfig(client *Client) {
-	// Admin always gets global config, devices get merged config
+	// Admin always gets global config, devices get merged config. Never send admin hash/token to client.
 	var cfg config.Config
-	if client.device != nil && client.device.Username == "admin" {
-		// Admin gets global config
-		cfg = *s.config
+	if client.device != nil && client.device.Username == s.config.GetAdminUsername() {
+		cfg = s.config.RedactForAPI()
 	} else if client.device != nil {
-		// Regular devices get global config merged with their custom filters/sorting (if any)
 		cfg = *s.config
-		// Only override if device has custom config
-		// Use helper functions from auth.go
 		if hasCustomFilters(client.device.Filters) {
 			cfg.Filters = client.device.Filters
 		}
 		if hasCustomSorting(client.device.Sorting) {
 			cfg.Sorting = client.device.Sorting
 		}
+		cfg = cfg.RedactForAPI()
 	} else {
-		cfg = *s.config
+		cfg = s.config.RedactForAPI()
 	}
 
 	var payload []byte
-	if client.device != nil && client.device.Username == "admin" {
+	if client.device != nil && client.device.Username == s.config.GetAdminUsername() {
 		envKeys := config.GetEnvOverrideKeys()
 		pl := configPayload{Config: cfg, EnvOverrides: envKeys}
 		payload, _ = json.Marshal(pl)
@@ -267,7 +261,7 @@ func (s *Server) handleSaveConfigWS(conn *websocket.Conn, client *Client, payloa
 	}
 
 	// Admin saves to global config, regular devices don't save via this endpoint
-	if client.device != nil && client.device.Username == "admin" {
+	if client.device != nil && client.device.Username == s.config.GetAdminUsername() {
 		// Validate settings before saving
 		fieldErrors := s.validateConfig(&newCfg)
 		if len(fieldErrors) > 0 {
@@ -316,6 +310,10 @@ func (s *Server) handleSaveConfigWS(conn *websocket.Conn, client *Client, payloa
 		currentLoadedPath := s.config.LoadedPath
 		s.mu.RUnlock()
 		config.CopyEnvOverridesFrom(currentCfg, &newCfg)
+		// Admin credentials and token are never sent from the UI; preserve from current config.
+		newCfg.AdminPasswordHash = currentCfg.AdminPasswordHash
+		newCfg.AdminToken = currentCfg.AdminToken
+		newCfg.AdminMustChangePassword = currentCfg.AdminMustChangePassword
 
 		if currentLoadedPath == "" {
 			currentLoadedPath = filepath.Join(paths.GetDataDir(), "config.json")
@@ -369,7 +367,7 @@ func (s *Server) handleSaveConfigWS(conn *websocket.Conn, client *Client, payloa
 
 func (s *Server) handleSaveUserConfigsWS(conn *websocket.Conn, client *Client, payload json.RawMessage) {
 	// Only admin can save device configs
-	if client.device == nil || client.device.Username != "admin" {
+	if client.device == nil || client.device.Username != s.config.GetAdminUsername() {
 		trySendWS(client, WSMessage{Type: "save_status", Payload: json.RawMessage(`{"status":"error","message":"Only admin can save device configurations"}`)})
 		return
 	}
@@ -386,7 +384,7 @@ func (s *Server) handleSaveUserConfigsWS(conn *websocket.Conn, client *Client, p
 	// Save each device's config
 	var errors []string
 	for username, deviceConfig := range deviceConfigs {
-		if username == "admin" {
+		if username == s.config.GetAdminUsername() {
 			continue // Skip admin
 		}
 
@@ -416,7 +414,7 @@ func (s *Server) handleSaveUserConfigsWS(conn *websocket.Conn, client *Client, p
 
 func (s *Server) handleGetDevicesWS(client *Client) {
 	// Only admin can get devices list
-	if client.device == nil || client.device.Username != "admin" {
+	if client.device == nil || client.device.Username != s.config.GetAdminUsername() {
 		trySendWS(client, WSMessage{Type: "users_response", Payload: json.RawMessage(`{"error":"Only admin can access devices list"}`)})
 		return
 	}
@@ -440,7 +438,7 @@ func (s *Server) handleGetDevicesWS(client *Client) {
 
 func (s *Server) handleGetDeviceWS(client *Client, payload json.RawMessage) {
 	// Only admin can get user details
-	if client.device == nil || client.device.Username != "admin" {
+	if client.device == nil || client.device.Username != s.config.GetAdminUsername() {
 		trySendWS(client, WSMessage{Type: "user_response", Payload: json.RawMessage(`{"error":"Only admin can access user details"}`)})
 		return
 	}
@@ -453,7 +451,7 @@ func (s *Server) handleGetDeviceWS(client *Client, payload json.RawMessage) {
 		return
 	}
 
-	device, err := s.deviceManager.GetDevice(req.Username)
+	device, err := s.deviceManager.GetDevice(req.Username, s.config.GetAdminUsername())
 	if err != nil {
 		errorPayload, _ := json.Marshal(map[string]string{"error": err.Error()})
 		trySendWS(client, WSMessage{Type: "user_response", Payload: errorPayload})
@@ -473,7 +471,7 @@ func (s *Server) handleGetDeviceWS(client *Client, payload json.RawMessage) {
 
 func (s *Server) handleCreateDeviceWS(client *Client, payload json.RawMessage) {
 	// Only admin can create users
-	if client.device == nil || client.device.Username != "admin" {
+	if client.device == nil || client.device.Username != s.config.GetAdminUsername() {
 		trySendWS(client, WSMessage{Type: "user_action_response", Payload: json.RawMessage(`{"error":"Only admin can create users"}`)})
 		return
 	}
@@ -487,7 +485,7 @@ func (s *Server) handleCreateDeviceWS(client *Client, payload json.RawMessage) {
 	}
 
 	// Create user without password (empty string)
-	device, err := s.deviceManager.CreateDevice(req.Username, "")
+	device, err := s.deviceManager.CreateDevice(req.Username, "", s.config.GetAdminUsername())
 	if err != nil {
 		errorPayload, _ := json.Marshal(map[string]string{"error": err.Error()})
 		trySendWS(client, WSMessage{Type: "user_action_response", Payload: errorPayload})
@@ -511,7 +509,7 @@ func (s *Server) handleCreateDeviceWS(client *Client, payload json.RawMessage) {
 
 func (s *Server) handleDeleteDeviceWS(client *Client, payload json.RawMessage) {
 	// Only admin can delete users
-	if client.device == nil || client.device.Username != "admin" {
+	if client.device == nil || client.device.Username != s.config.GetAdminUsername() {
 		trySendWS(client, WSMessage{Type: "user_action_response", Payload: json.RawMessage(`{"error":"Only admin can delete users"}`)})
 		return
 	}
@@ -544,7 +542,7 @@ func (s *Server) handleDeleteDeviceWS(client *Client, payload json.RawMessage) {
 
 func (s *Server) handleRegenerateTokenWS(client *Client, payload json.RawMessage) {
 	// Only admin can regenerate tokens
-	if client.device == nil || client.device.Username != "admin" {
+	if client.device == nil || client.device.Username != s.config.GetAdminUsername() {
 		trySendWS(client, WSMessage{Type: "user_action_response", Payload: json.RawMessage(`{"error":"Only admin can regenerate tokens"}`)})
 		return
 	}
@@ -578,7 +576,7 @@ func (s *Server) handleRegenerateTokenWS(client *Client, payload json.RawMessage
 
 func (s *Server) handleUpdatePasswordWS(client *Client, payload json.RawMessage) {
 	// Only admin can update password
-	if client.device == nil || client.device.Username != "admin" {
+	if client.device == nil || client.device.Username != s.config.GetAdminUsername() {
 		trySendWS(client, WSMessage{Type: "user_action_response", Payload: json.RawMessage(`{"error":"Only admin can update password"}`)})
 		return
 	}
@@ -592,12 +590,18 @@ func (s *Server) handleUpdatePasswordWS(client *Client, payload json.RawMessage)
 		return
 	}
 
-	if req.Username != "admin" {
+	if req.Username != s.config.GetAdminUsername() {
 		trySendWS(client, WSMessage{Type: "user_action_response", Payload: json.RawMessage(`{"error":"Only admin user can change password"}`)})
 		return
 	}
 
-	if err := s.deviceManager.UpdateUser(req.Username, req.Password); err != nil {
+	// Update admin password in config (not state)
+	newHash := auth.HashPassword(req.Password)
+	s.mu.Lock()
+	s.config.AdminPasswordHash = newHash
+	s.config.AdminMustChangePassword = false
+	s.mu.Unlock()
+	if err := s.config.Save(); err != nil {
 		errorPayload, _ := json.Marshal(map[string]string{"error": err.Error()})
 		trySendWS(client, WSMessage{Type: "user_action_response", Payload: errorPayload})
 		return
@@ -632,7 +636,7 @@ func (s *Server) broadcastUsersList() {
 	s.clientsMu.Lock()
 	defer s.clientsMu.Unlock()
 	for client := range s.clients {
-		if client.device != nil && client.device.Username == "admin" {
+		if client.device != nil && client.device.Username == s.config.GetAdminUsername() {
 			select {
 			case client.send <- WSMessage{Type: "users_response", Payload: payload}:
 			default:

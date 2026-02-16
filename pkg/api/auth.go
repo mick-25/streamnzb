@@ -34,18 +34,18 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Only allow admin user to log in
-	if req.Username != "admin" {
+	adminUsername := s.config.GetAdminUsername()
+	if req.Username != adminUsername {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusUnauthorized)
 		json.NewEncoder(w).Encode(LoginResponse{
 			Success: false,
-			Error:   "Only admin user can log in",
+			Error:   "Invalid credentials",
 		})
 		return
 	}
 
-	device, err := s.deviceManager.Authenticate(req.Username, req.Password)
+	device, err := s.deviceManager.Authenticate(req.Username, req.Password, adminUsername, s.config.AdminPasswordHash, s.config.AdminToken)
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusUnauthorized)
@@ -67,15 +67,10 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		MaxAge:   86400 * 7, // 7 days
 	})
 
-	// Get admin credentials to check must_change_password
 	var mustChangePassword bool
-	if device.Username == "admin" {
-		adminCreds, err := s.deviceManager.GetAdminCredentials()
-		if err == nil {
-			mustChangePassword = adminCreds.MustChangePassword
-		}
+	if device.Username == s.config.GetAdminUsername() {
+		mustChangePassword = s.config.AdminMustChangePassword
 	}
-	// Regular users don't have passwords, so mustChangePassword is always false
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(LoginResponse{
@@ -107,7 +102,7 @@ func (s *Server) handleAuthCheck(w http.ResponseWriter, r *http.Request) {
 		// Try cookie
 		cookie, err := r.Cookie("auth_session")
 		if err == nil && cookie != nil {
-			device, err = s.deviceManager.AuthenticateToken(cookie.Value)
+			device, err = s.deviceManager.AuthenticateToken(cookie.Value, s.config.GetAdminUsername(), s.config.AdminToken)
 			if err == nil {
 				ok = true
 			}
@@ -115,15 +110,10 @@ func (s *Server) handleAuthCheck(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if ok {
-		// Get admin credentials to check must_change_password
 		var mustChangePassword bool
-		if device.Username == "admin" {
-			adminCreds, err := s.deviceManager.GetAdminCredentials()
-			if err == nil {
-				mustChangePassword = adminCreds.MustChangePassword
-			}
+		if device.Username == s.config.GetAdminUsername() {
+			mustChangePassword = s.config.AdminMustChangePassword
 		}
-		// Regular users don't have passwords, so mustChangePassword is always false
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{

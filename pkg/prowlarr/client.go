@@ -3,6 +3,7 @@ package prowlarr
 import (
 	"context"
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/xml"
 	"fmt"
 	"io"
@@ -18,8 +19,8 @@ import (
 
 // Client represents a Prowlarr Newznab API client
 type Client struct {
-	baseURL   string // Base Prowlarr URL (e.g., http://192.168.1.10:9696)
-	indexerID int    // Prowlarr indexer ID
+	baseURL   string
+	indexerID int
 	apiKey    string
 	name      string
 	client    *http.Client
@@ -35,8 +36,9 @@ type Client struct {
 	mu                sync.RWMutex
 }
 
-// Ensure Client implements indexer.Indexer at compile time.
+// Ensure Client implements indexer.Indexer and indexer.IndexerWithResolve at compile time.
 var _ indexer.Indexer = (*Client)(nil)
+var _ indexer.IndexerWithResolve = (*Client)(nil)
 
 // checkAPILimit returns error if API limit is reached
 func (c *Client) checkAPILimit() error {
@@ -82,9 +84,8 @@ func (c *Client) GetUsage() indexer.Usage {
 	}
 }
 
-// NewClient creates a new Prowlarr client and verifies connectivity
+// NewClient creates a new Prowlarr client.
 func NewClient(baseURL string, indexerID int, apiKey, name string, um *indexer.UsageManager) (*Client, error) {
-	// Create HTTP client with TLS skip verify for self-signed certs
 	transport := &http.Transport{
 		TLSClientConfig: &tls.Config{
 			InsecureSkipVerify: true,
@@ -253,11 +254,83 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 	return &result, nil
 }
 
-// DownloadNZB downloads an NZB file by URL
+// ResolveDownloadURL finds the same release via Prowlarr search and returns the result's Link
+// (proxy URL) so DownloadNZB works when the original URL is a direct indexer URL from AvailNZB.
+func (c *Client) ResolveDownloadURL(ctx context.Context, directURL, title string, size int64) (string, error) {
+	if title == "" {
+		return "", fmt.Errorf("title required to resolve download URL")
+	}
+	req := indexer.SearchRequest{Query: title, Limit: 30}
+	resp, err := c.Search(req)
+	if err != nil {
+		return "", fmt.Errorf("search for resolve: %w", err)
+	}
+	if resp == nil || len(resp.Channel.Items) == 0 {
+		return "", fmt.Errorf("no search results for title")
+	}
+	normTitle := strings.ToLower(strings.TrimSpace(title))
+	for _, item := range resp.Channel.Items {
+		itemNorm := strings.ToLower(strings.TrimSpace(item.Title))
+		if itemNorm != normTitle {
+			continue
+		}
+		if size > 0 && item.Size > 0 && item.Size != size {
+			continue
+		}
+		if item.Link == "" {
+			continue
+		}
+		return item.Link, nil
+	}
+	return "", fmt.Errorf("no matching release for title in Prowlarr results")
+}
+
+// fileFromNZBURL derives a safe filename for Prowlarr's file= parameter from an NZB URL
+// (e.g. id from ?t=get&id=... or "download" as fallback).
+func fileFromNZBURL(nzbURL string) string {
+	parsed, err := url.Parse(nzbURL)
+	if err != nil {
+		return "download"
+	}
+	if id := parsed.Query().Get("id"); id != "" {
+		// Keep only safe chars for filename
+		var b strings.Builder
+		for _, r := range id {
+			if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+				b.WriteRune(r)
+			}
+		}
+		if b.Len() > 0 {
+			return b.String()
+		}
+	}
+	return "download"
+}
+
+// DownloadNZB downloads an NZB file by URL.
+// When the URL is a direct indexer link (e.g. api.nzbgeek.info), we rewrite to Prowlarr's
+// download endpoint GET /{id}/download?link={encodedUrl} so Prowlarr can add the indexer's API key.
 func (c *Client) DownloadNZB(nzbURL string) ([]byte, error) {
 	if err := c.checkDownloadLimit(); err != nil {
 		logger.Warn("Download limit reached for %s", "indexer", c.Name())
 		return nil, err
+	}
+
+	// Rewrite direct indexer URL to Prowlarr download endpoint: /{indexerId}/download?link=...&file=...
+	// Prowlarr requires both link and file; link must be Base64-encoded. Note: Prowlarr's "normalize" step
+	// only accepts links it generated (proxy links). If search returns direct indexer URLs, Prowlarr will
+	// respond with "Failed to normalize provided link". Users should enable Redirect so search returns Prowlarr proxy URLs.
+	parsed, err := url.Parse(nzbURL)
+	if err == nil {
+		baseParsed, _ := url.Parse(c.baseURL)
+		if baseParsed != nil && parsed.Host != "" && baseParsed.Host != "" && parsed.Host != baseParsed.Host {
+			params := url.Values{}
+			params.Set("link", base64.StdEncoding.EncodeToString([]byte(nzbURL)))
+			params.Set("file", fileFromNZBURL(nzbURL))
+			params.Set("apikey", c.apiKey)
+			downloadURL := fmt.Sprintf("%s/%d/download?%s", c.baseURL, c.indexerID, params.Encode())
+			nzbURL = downloadURL
+		}
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -290,13 +363,20 @@ func (c *Client) DownloadNZB(nzbURL string) ([]byte, error) {
 
 	c.updateUsageFromHeaders(resp.Header)
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("NZB download returned status %d", resp.StatusCode)
-	}
-
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read NZB data: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		bodyStr := string(data)
+		if strings.Contains(bodyStr, "Failed to normalize provided link") {
+			return nil, fmt.Errorf("Prowlarr rejected the download link: it only accepts links it generated (proxy links), not direct indexer URLs. Ensure Prowlarr returns proxy/redirect URLs in search (e.g. enable Redirect for the app or indexer) so the stored link is a Prowlarr download URL")
+		}
+		if len(bodyStr) > 200 {
+			bodyStr = bodyStr[:200] + "..."
+		}
+		return nil, fmt.Errorf("NZB download returned status %d: %s", resp.StatusCode, bodyStr)
 	}
 
 	return data, nil

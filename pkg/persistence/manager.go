@@ -129,6 +129,15 @@ func (m *StateManager) Set(key string, value interface{}) error {
 	return nil
 }
 
+// Delete removes a key from state and schedules a save.
+func (m *StateManager) Delete(key string) error {
+	m.mu.Lock()
+	delete(m.data, key)
+	m.mu.Unlock()
+	m.scheduleSave()
+	return nil
+}
+
 // scheduleSave triggers a debounced save. The actual write runs after saveDebounceInterval
 // with no further updates; rapid updates coalesce into one write.
 func (m *StateManager) scheduleSave() {

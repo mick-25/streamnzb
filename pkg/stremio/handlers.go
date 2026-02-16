@@ -151,7 +151,7 @@ func (s *Server) SetupRoutes(mux *http.ServeMux) {
 
 			// Try to authenticate as a device token
 			if deviceManager != nil {
-				device, err := deviceManager.AuthenticateToken(token)
+				device, err := deviceManager.AuthenticateToken(token, s.config.GetAdminUsername(), s.config.AdminToken)
 				if err == nil && device != nil {
 					authenticatedDevice = device
 					// Strip token from path for internal routing
@@ -224,7 +224,7 @@ func (s *Server) handleManifest(w http.ResponseWriter, r *http.Request) {
 
 	// Configure button (behaviorHints.configurable) only for admin users
 	device, _ := auth.DeviceFromContext(r)
-	isAdmin := device != nil && device.Username == "admin"
+	isAdmin := device != nil && device.Username == s.config.GetAdminUsername()
 
 	data, err := manifest.ToJSONForDevice(isAdmin)
 	if err != nil {
@@ -322,7 +322,7 @@ func addAPIKeyToDownloadURL(downloadURL string, indexers []config.IndexerConfig)
 
 // triageCandidates returns filtered+sorted candidates (device or global triage).
 func (s *Server) triageCandidates(device *auth.Device, items []indexer.Item) []triage.Candidate {
-	if device != nil && device.Username != "admin" &&
+	if device != nil && device.Username != s.config.GetAdminUsername() &&
 		(len(device.Filters.AllowedQualities) > 0 || device.Filters.MinResolution != "" || len(device.Filters.AllowedCodecs) > 0 ||
 			len(device.Sorting.ResolutionWeights) > 0 || device.Sorting.GrabWeight != 0) {
 		ts := triage.NewService(&device.Filters, device.Sorting)

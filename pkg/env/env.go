@@ -56,7 +56,10 @@ const (
 	KeyAvailNZBAPIKey = "availnzb_api_key"
 	KeyTMDBAPIKey     = "tmdb_api_key"
 	KeyTVDBAPIKey     = "tvdb_api_key"
+	KeyAdminUsername  = "admin_username"
 )
+
+const AdminUsernameEnv = "ADMIN_USERNAME"
 
 // TZ returns the TZ environment variable (e.g. for logger timezone).
 func TZ() string {
@@ -109,6 +112,7 @@ type ConfigOverrides struct {
 	ProxyHost               string
 	ProxyAuthUser           string
 	ProxyAuthPass           string
+	AdminUsername           string
 	Providers               []Provider
 	Indexers                []Indexer
 }
@@ -199,6 +203,10 @@ func ReadConfigOverrides() (ConfigOverrides, []string) {
 	if v := os.Getenv(NNTPProxyAuthPass); v != "" {
 		o.ProxyAuthPass = v
 		keys = append(keys, KeyProxyAuthPass)
+	}
+	if v := os.Getenv(AdminUsernameEnv); v != "" {
+		o.AdminUsername = v
+		keys = append(keys, KeyAdminUsername)
 	}
 
 	o.Providers = readProvidersFromEnv()

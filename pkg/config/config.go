@@ -1,6 +1,9 @@
 package config
 
 import (
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -10,6 +13,9 @@ import (
 	"streamnzb/pkg/logger"
 	"streamnzb/pkg/paths"
 )
+
+// defaultAdminPasswordHash is SHA256("admin") - used when no admin password is set
+const defaultAdminPasswordHash = "8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918"
 
 // Provider represents a Usenet provider configuration
 type Provider struct {
@@ -114,6 +120,12 @@ type Config struct {
 	AddonBaseURL string `json:"addon_base_url"`
 	LogLevel     string `json:"log_level"`
 
+	// Dashboard admin: stored in config.json (never send hash/token to frontend)
+	AdminUsername         string `json:"admin_username"`
+	AdminPasswordHash     string `json:"admin_password_hash"`     // SHA256 hash; do not send to API clients
+	AdminMustChangePassword bool `json:"admin_must_change_password"`
+	AdminToken            string `json:"admin_token"`            // Single token for dashboard + streaming; do not send to API clients
+
 	// Validation settings
 	CacheTTLSeconds      int `json:"cache_ttl_seconds"`
 	ValidationSampleSize int `json:"validation_sample_size"`
@@ -149,6 +161,14 @@ type Config struct {
 	LoadedPath string `json:"-"`
 }
 
+// GetAdminUsername returns the dashboard admin login username (default "admin").
+func (c *Config) GetAdminUsername() string {
+	if c != nil && c.AdminUsername != "" {
+		return c.AdminUsername
+	}
+	return "admin"
+}
+
 // Load is intended for startup only. It loads configuration from config.json,
 // applies environment variable overrides once, then saves the merged config.
 // Environment variables are not read again after startup; subsequent reloads
@@ -174,6 +194,7 @@ func Load() (*Config, error) {
 		AddonPort:            7000,
 		AddonBaseURL:         "http://localhost:7000",
 		LogLevel:             "INFO",
+		AdminUsername:        "admin",
 		CacheTTLSeconds:      300,
 		ValidationSampleSize: 5,
 		MaxStreams:           6,
@@ -240,6 +261,25 @@ func Load() (*Config, error) {
 
 	// 4. Migrate legacy indexers
 	cfg.MigrateLegacyIndexers()
+
+	// 4.5. Ensure admin token and password hash defaults (do not overwrite if already set)
+	needSave := false
+	if cfg.AdminToken == "" {
+		bytes := make([]byte, 32)
+		if _, err := rand.Read(bytes); err == nil {
+			hash := sha256.Sum256(bytes)
+			cfg.AdminToken = hex.EncodeToString(hash[:])
+			needSave = true
+		}
+	}
+	if cfg.AdminPasswordHash == "" {
+		cfg.AdminPasswordHash = defaultAdminPasswordHash
+		cfg.AdminMustChangePassword = true
+		needSave = true
+	}
+	if needSave {
+		logger.Info("Set default admin token/password in config")
+	}
 
 	// 5. Save the merged configuration
 	if err := cfg.Save(); err != nil {
@@ -418,6 +458,9 @@ func ApplyEnvOverrides(cfg *Config, o env.ConfigOverrides, keys []string) {
 	if keySet(keys, env.KeyProxyAuthPass) {
 		cfg.ProxyAuthPass = o.ProxyAuthPass
 	}
+	if keySet(keys, env.KeyAdminUsername) {
+		cfg.AdminUsername = o.AdminUsername
+	}
 	if keySet(keys, env.KeyProviders) {
 		cfg.Providers = make([]Provider, len(o.Providers))
 		for i, p := range o.Providers {
@@ -450,6 +493,15 @@ func ApplyEnvOverrides(cfg *Config, o env.ConfigOverrides, keys []string) {
 // those values so the file is not overwritten with form data that env would override.
 func GetEnvOverrideKeys() []string {
 	return env.OverrideKeys()
+}
+
+// RedactForAPI returns a copy of the config with AdminPasswordHash and AdminToken cleared.
+// Use when sending config to the frontend so sensitive values are never exposed.
+func (c *Config) RedactForAPI() Config {
+	out := *c
+	out.AdminPasswordHash = ""
+	out.AdminToken = ""
+	return out
 }
 
 // CopyEnvOverridesFrom copies into dst the effective values for any key that has an
@@ -499,6 +551,8 @@ func CopyEnvOverridesFrom(src, dst *Config) {
 			dst.ProxyAuthUser = src.ProxyAuthUser
 		case env.KeyProxyAuthPass:
 			dst.ProxyAuthPass = src.ProxyAuthPass
+		case env.KeyAdminUsername:
+			dst.AdminUsername = src.AdminUsername
 		case env.KeyProviders:
 			dst.Providers = make([]Provider, len(src.Providers))
 			copy(dst.Providers, src.Providers)

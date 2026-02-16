@@ -246,7 +246,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/info", s.handleInfo)
 
 	// Protected routes (require auth)
-	authMiddleware := auth.AuthMiddleware(s.deviceManager)
+	authMiddleware := auth.AuthMiddleware(s.deviceManager, func() string { return s.config.GetAdminUsername() }, func() string { return s.config.AdminToken })
 	mux.Handle("/api/ws", authMiddleware(http.HandlerFunc(s.handleWebSocket)))
 
 	return mux

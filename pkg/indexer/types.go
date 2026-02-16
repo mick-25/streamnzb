@@ -1,6 +1,7 @@
 package indexer
 
 import (
+	"context"
 	"encoding/xml"
 	"fmt"
 	"strconv"
@@ -14,6 +15,13 @@ type Indexer interface {
 	Ping() error
 	Name() string
 	GetUsage() Usage
+}
+
+// IndexerWithResolve is an optional interface implemented by Prowlarr client and Aggregator.
+// When a direct indexer URL comes from AvailNZB, ResolveDownloadURL searches by title/size
+// and returns the result's Link (e.g. Prowlarr proxy URL) so DownloadNZB succeeds.
+type IndexerWithResolve interface {
+	ResolveDownloadURL(ctx context.Context, directURL, title string, size int64) (resolvedURL string, err error)
 }
 
 // Usage represents the current API and download usage for an indexer

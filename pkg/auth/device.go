@@ -21,19 +21,12 @@ type Device struct {
 	// They are only used for admin (stored separately in AdminCredentials)
 }
 
-// AdminCredentials stores admin login credentials separately
-type AdminCredentials struct {
-	PasswordHash      string `json:"password_hash"`
-	MustChangePassword bool   `json:"must_change_password"`
-}
-
-// DeviceManager handles device storage and authentication
+// DeviceManager handles device storage and authentication.
+// Admin credentials and single admin token are stored in config, not state.
 type DeviceManager struct {
-	mu            sync.RWMutex
-	devices       map[string]*Device // username -> Device (excludes admin)
-	admin         *AdminCredentials // Admin credentials stored separately
-	adminSessions map[string]bool   // Active admin session tokens
-	manager       *persistence.StateManager
+	mu      sync.RWMutex
+	devices map[string]*Device // username -> Device (excludes admin)
+	manager *persistence.StateManager
 }
 
 var globalDeviceManager *DeviceManager
@@ -54,9 +47,8 @@ func GetDeviceManager(dataDir string) (*DeviceManager, error) {
 	}
 
 	dm := &DeviceManager{
-		devices:       make(map[string]*Device),
-		adminSessions: make(map[string]bool),
-		manager:       manager,
+		devices: make(map[string]*Device),
+		manager: manager,
 	}
 
 	if err := dm.load(); err != nil {
@@ -97,51 +89,14 @@ func (dm *DeviceManager) load() error {
 
 	if devices != nil {
 		dm.devices = devices
-		// Remove admin from devices map if it exists (migration)
+		// Remove legacy "admin" from devices map if present (admin is now in config)
 		if _, exists := dm.devices["admin"]; exists {
-			// Migrate admin to separate storage
-			// Note: Old Device struct had PasswordHash and MustChangePassword, but we removed them
-			// For migration, we'll create default admin credentials (password reset required)
-			admin := AdminCredentials{
-				PasswordHash:      hashPassword("admin"), // Reset to default
-				MustChangePassword: true,                 // Force password change
-			}
-			dm.manager.Set("admin", admin)
 			delete(dm.devices, "admin")
-			dm.saveLocked() // Save without admin
-			logger.Info("Migrated admin from devices to separate storage (password reset required)")
+			dm.saveLocked()
+			logger.Info("Removed legacy admin from devices (admin is in config)")
 		}
 	} else {
 		dm.devices = make(map[string]*Device)
-	}
-
-	// Load admin credentials separately
-	var admin AdminCredentials
-	adminFound, err := dm.manager.Get("admin", &admin)
-	if err != nil {
-		return err
-	}
-
-	if !adminFound {
-		// Create default admin credentials
-		admin = AdminCredentials{
-			PasswordHash:      hashPassword("admin"),
-			MustChangePassword: true,
-		}
-		if err := dm.manager.Set("admin", admin); err != nil {
-			return fmt.Errorf("failed to save default admin credentials: %w", err)
-		}
-		logger.Info("Created default admin credentials", "password", "admin")
-	}
-
-	dm.admin = &admin
-
-	// Load admin sessions
-	var adminSessions map[string]bool
-	if found, _ := dm.manager.Get("admin_sessions", &adminSessions); found {
-		dm.adminSessions = adminSessions
-	} else {
-		dm.adminSessions = make(map[string]bool)
 	}
 
 	return nil
@@ -160,33 +115,14 @@ func (dm *DeviceManager) saveLocked() error {
 	return dm.manager.Set("devices", dm.devices)
 }
 
-// saveAdmin saves admin credentials separately
-func (dm *DeviceManager) saveAdmin() error {
-	dm.mu.RLock()
-	defer dm.mu.RUnlock()
-
-	if dm.admin == nil {
-		return fmt.Errorf("admin credentials not initialized")
-	}
-	return dm.manager.Set("admin", dm.admin)
-}
-
-// saveAdminLocked saves admin credentials to persistent storage (caller must hold write lock)
-func (dm *DeviceManager) saveAdminLocked() error {
-	if dm.admin == nil {
-		return fmt.Errorf("admin credentials not initialized")
-	}
-	return dm.manager.Set("admin", dm.admin)
-}
-
-// hashPassword creates a SHA256 hash of a password
-func hashPassword(password string) string {
+// HashPassword creates a SHA256 hash of a password (exported for API password updates).
+func HashPassword(password string) string {
 	hash := sha256.Sum256([]byte(password))
 	return hex.EncodeToString(hash[:])
 }
 
-// generateToken generates a random SHA256 token
-func generateToken() (string, error) {
+// GenerateToken generates a random SHA256 token (exported for migration/config bootstrap).
+func GenerateToken() (string, error) {
 	bytes := make([]byte, 32)
 	if _, err := rand.Read(bytes); err != nil {
 		return "", err
@@ -195,75 +131,51 @@ func generateToken() (string, error) {
 	return hex.EncodeToString(hash[:]), nil
 }
 
-// Authenticate validates username and password, returns device if valid
-// Admin is handled separately and gets a session token
-func (dm *DeviceManager) Authenticate(username, password string) (*Device, error) {
-	dm.mu.Lock()
-	defer dm.mu.Unlock()
+// Authenticate validates username and password, returns device if valid.
+// adminUsername, adminPasswordHash, adminToken come from config (admin uses a single persistent token).
+// When loginUsername == adminUsername, validates password against adminPasswordHash and returns Device with Token set to adminToken.
+func (dm *DeviceManager) Authenticate(loginUsername, password, adminUsername, adminPasswordHash, adminToken string) (*Device, error) {
+	if adminUsername == "" {
+		adminUsername = "admin"
+	}
 
-	// Handle admin separately
-	if username == "admin" {
-		if dm.admin == nil {
+	if loginUsername == adminUsername {
+		if adminPasswordHash == "" || adminToken == "" {
 			return nil, fmt.Errorf("invalid credentials")
 		}
-
-		passwordHash := hashPassword(password)
-		if dm.admin.PasswordHash != passwordHash {
+		passwordHash := HashPassword(password)
+		if passwordHash != adminPasswordHash {
 			return nil, fmt.Errorf("invalid credentials")
 		}
-
-		// Generate a session token for admin
-		token, err := generateToken()
-		if err != nil {
-			return nil, fmt.Errorf("failed to generate session token: %w", err)
-		}
-
-		// Store admin session token
-		if dm.adminSessions == nil {
-			dm.adminSessions = make(map[string]bool)
-		}
-		dm.adminSessions[token] = true
-		if err := dm.manager.Set("admin_sessions", dm.adminSessions); err != nil {
-			return nil, fmt.Errorf("failed to save admin session: %w", err)
-		}
-
-		// Return a temporary Device object for admin (not stored in devices map)
 		return &Device{
-			Username: "admin",
-			Token:    token,
+			Username: adminUsername,
+			Token:    adminToken,
 			Filters:  config.FilterConfig{},
 			Sorting:  config.SortConfig{},
 		}, nil
 	}
 
-	// Regular devices don't have passwords
 	return nil, fmt.Errorf("invalid credentials")
 }
 
-// AuthenticateToken validates a token and returns the device
-// Admin tokens are stored separately in admin_sessions
-func (dm *DeviceManager) AuthenticateToken(token string) (*Device, error) {
-	dm.mu.RLock()
-	defer dm.mu.RUnlock()
-
-	// Check admin sessions first
-	var adminSessions map[string]bool
-	if found, _ := dm.manager.Get("admin_sessions", &adminSessions); found {
-		if adminSessions[token] {
-			// Valid admin session token
-			if dm.admin == nil {
-				return nil, fmt.Errorf("admin credentials not initialized")
-			}
-			return &Device{
-				Username: "admin",
-				Token:    token,
-				Filters:  config.FilterConfig{},
-				Sorting:  config.SortConfig{},
-			}, nil
-		}
+// AuthenticateToken validates a token and returns the device.
+// adminUsername and adminToken come from config; if token == adminToken, returns admin device.
+func (dm *DeviceManager) AuthenticateToken(token string, adminUsername, adminToken string) (*Device, error) {
+	if adminUsername == "" {
+		adminUsername = "admin"
 	}
 
-	// Check regular devices
+	if adminToken != "" && token == adminToken {
+		return &Device{
+			Username: adminUsername,
+			Token:    adminToken,
+			Filters:  config.FilterConfig{},
+			Sorting:  config.SortConfig{},
+		}, nil
+	}
+
+	dm.mu.RLock()
+	defer dm.mu.RUnlock()
 	for _, device := range dm.devices {
 		if device.Token == token {
 			return device, nil
@@ -273,12 +185,15 @@ func (dm *DeviceManager) AuthenticateToken(token string) (*Device, error) {
 	return nil, fmt.Errorf("invalid token")
 }
 
-// GetDevice retrieves a device by username (admin returns error, use GetAdminCredentials instead)
-func (dm *DeviceManager) GetDevice(username string) (*Device, error) {
+// GetDevice retrieves a device by username. Admin (dashboard login) is not a regular device; pass adminUsername to reject it.
+func (dm *DeviceManager) GetDevice(username string, adminUsername string) (*Device, error) {
 	dm.mu.RLock()
 	defer dm.mu.RUnlock()
 
-	if username == "admin" {
+	if adminUsername == "" {
+		adminUsername = "admin"
+	}
+	if username == adminUsername {
 		return nil, fmt.Errorf("admin is not a regular device")
 	}
 
@@ -291,20 +206,8 @@ func (dm *DeviceManager) GetDevice(username string) (*Device, error) {
 }
 
 // GetUser is an alias for GetDevice for backwards compatibility
-func (dm *DeviceManager) GetUser(username string) (*Device, error) {
-	return dm.GetDevice(username)
-}
-
-// GetAdminCredentials returns admin credentials
-func (dm *DeviceManager) GetAdminCredentials() (*AdminCredentials, error) {
-	dm.mu.RLock()
-	defer dm.mu.RUnlock()
-
-	if dm.admin == nil {
-		return nil, fmt.Errorf("admin credentials not initialized")
-	}
-
-	return dm.admin, nil
+func (dm *DeviceManager) GetUser(username string, adminUsername string) (*Device, error) {
+	return dm.GetDevice(username, adminUsername)
 }
 
 // GetAllDevices returns all devices (without password hashes for security, excludes admin)
@@ -314,7 +217,7 @@ func (dm *DeviceManager) GetAllDevices() []Device {
 
 	devices := make([]Device, 0, len(dm.devices))
 	for _, device := range dm.devices {
-		// Skip admin if it somehow got in there
+		// Skip dashboard admin if it somehow got in there (admin is stored separately)
 		if device.Username == "admin" {
 			continue
 		}
@@ -335,12 +238,15 @@ func (dm *DeviceManager) GetAllUsers() []Device {
 	return dm.GetAllDevices()
 }
 
-// CreateDevice creates a new device (password is optional, admin cannot be created this way)
-func (dm *DeviceManager) CreateDevice(username, password string) (*Device, error) {
+// CreateDevice creates a new device (password is optional). adminUsername is the dashboard admin name; cannot create a device with that name.
+func (dm *DeviceManager) CreateDevice(username, password string, adminUsername string) (*Device, error) {
 	dm.mu.Lock()
 	defer dm.mu.Unlock()
 
-	if username == "admin" {
+	if adminUsername == "" {
+		adminUsername = "admin"
+	}
+	if username == adminUsername {
 		return nil, fmt.Errorf("cannot create admin device via this method")
 	}
 
@@ -348,7 +254,7 @@ func (dm *DeviceManager) CreateDevice(username, password string) (*Device, error
 		return nil, fmt.Errorf("device already exists")
 	}
 
-	token, err := generateToken()
+	token, err := GenerateToken()
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate token: %w", err)
 	}
@@ -372,34 +278,20 @@ func (dm *DeviceManager) CreateDevice(username, password string) (*Device, error
 }
 
 // CreateUser is an alias for CreateDevice for backwards compatibility
-func (dm *DeviceManager) CreateUser(username, password string) (*Device, error) {
-	return dm.CreateDevice(username, password)
+func (dm *DeviceManager) CreateUser(username, password string, adminUsername string) (*Device, error) {
+	return dm.CreateDevice(username, password, adminUsername)
 }
 
-// UpdateUser updates user password (only for admin)
-func (dm *DeviceManager) UpdateUser(username, newPassword string) error {
-	dm.mu.Lock()
-	defer dm.mu.Unlock()
-
-	if username != "admin" {
-		return fmt.Errorf("only admin password can be updated")
+// UpdateUser updates dashboard admin password. adminUsername is the configured admin name.
+// Admin password is stored in config; callers must update config and save instead of using this for admin.
+func (dm *DeviceManager) UpdateUser(username, newPassword string, adminUsername string) error {
+	if adminUsername == "" {
+		adminUsername = "admin"
 	}
-
-	if dm.admin == nil {
-		return fmt.Errorf("admin credentials not initialized")
+	if username == adminUsername {
+		return fmt.Errorf("admin password is managed via config; use dashboard to change")
 	}
-
-	if newPassword != "" {
-		dm.admin.PasswordHash = hashPassword(newPassword)
-		dm.admin.MustChangePassword = false // Clear the flag when password is changed
-	}
-
-	if err := dm.saveAdminLocked(); err != nil {
-		return fmt.Errorf("failed to save admin credentials: %w", err)
-	}
-
-	logger.Info("Updated admin password")
-	return nil
+	return fmt.Errorf("only admin password can be updated")
 }
 
 // RegenerateToken generates a new token for a device
@@ -412,7 +304,7 @@ func (dm *DeviceManager) RegenerateToken(username string) (string, error) {
 		return "", fmt.Errorf("device not found")
 	}
 
-	token, err := generateToken()
+	token, err := GenerateToken()
 	if err != nil {
 		return "", fmt.Errorf("failed to generate token: %w", err)
 	}
