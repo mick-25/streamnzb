@@ -280,10 +280,7 @@ func (s *VirtualStream) ensureReader(part *virtualPart, partIdx int) error {
 	volOff := part.VolOffset + localOff
 	logger.Trace("VirtualStream.ensureReader: calculated offsets", "localOff", localOff, "volOff", volOff)
 
-	// For RAR volumes (loader.File), prefetch the target segment before opening the reader.
-	// This prevents stalls when the first Read() needs to download the segment.
-	// StartDownloadSegment registers the download synchronously, then downloads asynchronously.
-	// waitForSegment will detect it and wait on the channel (queue-based, no polling).
+	// For loader.File volumes, prefetch the target segment before opening the reader.
 	if volFile, ok := part.VolFile.(*loader.File); ok && volOff > 0 {
 		logger.Trace("VirtualStream.ensureReader: RAR volume detected", "volOff", volOff)
 		if err := volFile.EnsureSegmentMap(); err == nil {

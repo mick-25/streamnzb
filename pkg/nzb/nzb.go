@@ -143,7 +143,7 @@ func (n *NZB) GetContentFiles() []*FileInfo {
 
 		if info.Size > maxSize {
 			// Check if it's a valid content type
-			if info.IsVideo || isArchivePart(info.Extension) || info.Extension == ".rar" || info.Extension == ".7z" {
+			if info.IsVideo || isArchivePart(info.Extension) || isSplitArchivePart(info.Extension) || info.Extension == ".rar" || info.Extension == ".7z" {
 				maxSize = info.Size
 				mainPattern = getFilePattern(info.Filename)
 				mainIsArchive = !info.IsVideo
@@ -217,13 +217,16 @@ func (n *NZB) CompressionType() string {
 	if len(contentFiles) == 0 {
 		return "direct"
 	}
+	lowerName := func(s string) string { return strings.ToLower(s) }
 	for _, info := range contentFiles {
-		ext := strings.ToLower(info.Extension)
-		if ext == ".rar" || isArchivePart(ext) {
-			return "rar"
-		}
-		if ext == ".7z" || strings.Contains(strings.ToLower(info.Filename), ".7z.001") {
+		ext := lowerName(info.Extension)
+		filename := lowerName(info.Filename)
+		// Check 7z first (e.g. file.7z.001 has ext .001 - must not be misclassified as rar)
+		if ext == ".7z" || strings.Contains(filename, ".7z.001") {
 			return "7z"
+		}
+		if ext == ".rar" || isArchivePart(ext) || isSplitArchivePart(ext) {
+			return "rar"
 		}
 	}
 	return "direct"
@@ -314,9 +317,8 @@ func isVideoExtension(ext string) bool {
 }
 
 func isArchivePart(ext string) bool {
-	// Check for .r00, .r01, etc.
+	// Check for .r00, .r01, .r99 (RAR volume naming)
 	if len(ext) == 4 && strings.HasPrefix(ext, ".r") {
-		// Verify remaining chars are digits
 		for _, c := range ext[2:] {
 			if c < '0' || c > '9' {
 				return false
@@ -325,6 +327,18 @@ func isArchivePart(ext string) bool {
 		return true
 	}
 	return false
+}
+
+// isSplitArchivePart matches .001, .002, .117, etc. (RAR/7z split volume naming).
+// 7z is checked before this in CompressionType so .7z.001 files are not misclassified.
+func isSplitArchivePart(ext string) bool {
+	if len(ext) != 4 {
+		return false
+	}
+	return ext[0] == '.' &&
+		ext[1] >= '0' && ext[1] <= '9' &&
+		ext[2] >= '0' && ext[2] <= '9' &&
+		ext[3] >= '0' && ext[3] <= '9'
 }
 
 // isSampleFile checks if the filename indicates a sample

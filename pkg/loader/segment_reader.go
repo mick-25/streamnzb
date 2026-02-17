@@ -53,36 +53,8 @@ func NewSegmentReader(parent context.Context, f *File, startOffset int64) *Segme
 		sr.segIdx = idx
 		sr.segOff = startOffset - f.segments[idx].StartOffset
 	}
-
-	logger.Debug("NewSegmentReader: created", "startOffset", startOffset, "segIdx", sr.segIdx, "segOff", sr.segOff, "hasInFlight", f.HasInFlightDownload(sr.segIdx) != nil)
-	
-	// Start prefetching immediately for sequential reads after seek.
-	// This ensures segments are downloading while the first Read() processes.
-	// Prefetch uses StartDownloadSegment to register synchronously before returning.
-	maxWorkers := f.TotalConnections()
-	if maxWorkers > 15 {
-		maxWorkers = 15
-	}
-	if maxWorkers < 1 {
-		maxWorkers = 1
-	}
-	ahead := maxWorkers
-	
-	for i := 0; i < ahead; i++ { // Include current segment so it's in-flight before first Read()
-		segIdx := sr.segIdx + i
-		if segIdx >= len(f.segments) {
-			break
-		}
-		if _, ok := f.GetCachedSegment(segIdx); ok {
-			continue
-		}
-		if f.HasInFlightDownload(segIdx) != nil {
-			continue // Already prefetching
-		}
-		// Use StartDownloadSegment to register synchronously
-		_ = f.StartDownloadSegment(sr.ctx, segIdx)
-	}
-	
+	// No prefetch here - first Read() gets the segment with zero competition.
+	// startPrefetch() runs after each Read for sequential throughput.
 	return sr
 }
 
@@ -139,52 +111,12 @@ func (r *SegmentReader) Read(p []byte) (int, error) {
 }
 
 func (r *SegmentReader) waitForSegment(index int) ([]byte, error) {
-	logger.Trace("SegmentReader.waitForSegment: start", "segIdx", index)
-	
 	// Fast path: already in shared cache
 	if data, ok := r.file.GetCachedSegment(index); ok {
-		logger.Trace("SegmentReader.waitForSegment: cache hit", "segIdx", index)
 		return data, nil
 	}
-
-	logger.Trace("SegmentReader.waitForSegment: cache miss", "segIdx", index)
-
-	// Get or start the download. Use StartDownloadSegment so we always register
-	// before waiting - this avoids races and ensures consistent channel-based waiting.
-	// HasInFlightDownload returns existing channel; StartDownloadSegment registers
-	// and returns a channel (or immediate closed channel if cached).
-	done := r.file.HasInFlightDownload(index)
-	if done == nil {
-		done = r.file.StartDownloadSegment(r.ctx, index)
-		logger.Debug("SegmentReader.waitForSegment: started download, waiting", "segIdx", index)
-	} else {
-		logger.Debug("SegmentReader.waitForSegment: found in-flight download, waiting", "segIdx", index)
-	}
-
-	select {
-	case <-done:
-		logger.Debug("SegmentReader.waitForSegment: download completed", "segIdx", index)
-		if data, ok := r.file.GetCachedSegment(index); ok {
-			logger.Debug("SegmentReader.waitForSegment: got from cache after wait", "segIdx", index, "size", len(data))
-			return data, nil
-		}
-		// Download may have failed - fall through to synchronous retry
-		logger.Debug("SegmentReader.waitForSegment: not in cache after wait, retrying sync", "segIdx", index)
-	case <-r.ctx.Done():
-		logger.Debug("SegmentReader.waitForSegment: context cancelled while waiting", "segIdx", index)
-		if data, ok := r.file.GetCachedSegment(index); ok {
-			logger.Debug("SegmentReader.waitForSegment: got from cache after context cancellation", "segIdx", index, "size", len(data))
-			return data, nil
-		}
-		return nil, r.ctx.Err()
-	}
-
-	// Fallback: sync download (e.g. previous async failed)
-	data, err := r.file.DownloadSegment(r.ctx, index)
-	if err != nil {
-		return nil, err
-	}
-	return data, nil
+	// Direct download - no waiting on in-flight; avoids seek latency from blocking on other downloads
+	return r.file.DownloadSegment(r.ctx, index)
 }
 
 func (r *SegmentReader) startPrefetch() {
@@ -286,29 +218,7 @@ func (r *SegmentReader) Seek(offset int64, whence int) (int64, error) {
 		} else {
 			r.segIdx = idx
 			r.segOff = target - r.file.segments[idx].StartOffset
-			
-			// Prefetch same window as NewSegmentReader: target + next ahead-1 segments.
-			// Uses StartDownloadSegment so segments are in-flight before first Read().
-			maxWorkers := r.file.TotalConnections()
-			if maxWorkers > 15 {
-				maxWorkers = 15
-			}
-			if maxWorkers < 1 {
-				maxWorkers = 1
-			}
-			for i := 0; i < maxWorkers; i++ {
-				segIdx := idx + i
-				if segIdx >= len(r.file.segments) {
-					break
-				}
-				if _, ok := r.file.GetCachedSegment(segIdx); ok {
-					continue
-				}
-				if r.file.HasInFlightDownload(segIdx) != nil {
-					continue
-				}
-				_ = r.file.StartDownloadSegment(r.ctx, segIdx)
-			}
+			// No prefetch - first Read() gets the segment with zero competition
 		}
 	}
 

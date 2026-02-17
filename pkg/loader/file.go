@@ -29,14 +29,6 @@ type Segment struct {
 	EndOffset   int64
 }
 
-// inflight tracks a segment download in progress so concurrent callers
-// wait for the same result instead of issuing duplicate NNTP requests.
-type inflight struct {
-	done chan struct{}
-	data []byte
-	err  error
-}
-
 type File struct {
 	nzbFile   *nzb.File
 	pools     []*nntp.ClientPool
@@ -49,9 +41,6 @@ type File struct {
 
 	segCache   map[int][]byte
 	segCacheMu sync.RWMutex
-
-	inflightMu sync.Mutex
-	inflightDL map[int]*inflight
 
 	zeroFillMu   sync.Mutex
 	zeroFillCount int
@@ -75,8 +64,7 @@ func NewFile(ctx context.Context, f *nzb.File, pools []*nntp.ClientPool, estimat
 		segments:   segments,
 		totalSize:  offset,
 		ctx:        ctx,
-		segCache:   make(map[int][]byte),
-		inflightDL: make(map[int]*inflight),
+		segCache: make(map[int][]byte),
 	}
 }
 
@@ -227,128 +215,28 @@ func (f *File) PrewarmSegment(index int) {
 
 // --- Segment download ---
 
-// HasInFlightDownload checks if a segment download is already in progress.
-// Returns the done channel if in-flight, nil otherwise.
-func (f *File) HasInFlightDownload(index int) <-chan struct{} {
-	f.inflightMu.Lock()
-	defer f.inflightMu.Unlock()
-	if fl, ok := f.inflightDL[index]; ok {
-		return fl.done
-	}
-	return nil
-}
-
 // StartDownloadSegment starts a segment download asynchronously and returns immediately.
-// The download is registered in inflightDL synchronously before returning.
-// Returns the done channel that will be closed when the download completes.
+// Used for prefetch; callers typically ignore the return value.
 func (f *File) StartDownloadSegment(ctx context.Context, index int) <-chan struct{} {
-	logger.Debug("File.StartDownloadSegment: start", "segIdx", index)
-	logger.Trace("File.StartDownloadSegment: start", "segIdx", index)
-	
-	// Fast path: already cached
+	done := make(chan struct{})
 	if _, ok := f.GetCachedSegment(index); ok {
-		logger.Debug("File.StartDownloadSegment: already cached", "segIdx", index)
-		logger.Trace("File.StartDownloadSegment: already cached", "segIdx", index)
-		done := make(chan struct{})
 		close(done)
 		return done
 	}
-
-	// Check if already in-flight
-	f.inflightMu.Lock()
-	if fl, ok := f.inflightDL[index]; ok {
-		f.inflightMu.Unlock()
-		logger.Trace("File.StartDownloadSegment: already in-flight", "segIdx", index)
-		return fl.done
-	}
-	// Register new download synchronously
-	fl := &inflight{done: make(chan struct{})}
-	f.inflightDL[index] = fl
-	f.inflightMu.Unlock()
-
-	logger.Debug("File.StartDownloadSegment: registered, starting async download", "segIdx", index)
-	logger.Trace("File.StartDownloadSegment: registered, starting async download", "segIdx", index)
-
-	// Start download asynchronously
 	go func() {
-		logger.Debug("File.StartDownloadSegment: async download started", "segIdx", index)
-		logger.Trace("File.StartDownloadSegment: async download started", "segIdx", index)
-		data, err := f.doDownloadSegment(f.ctx, index)
-		fl.data = data
-		fl.err = err
-		close(fl.done)
-
-		f.inflightMu.Lock()
-		delete(f.inflightDL, index)
-		f.inflightMu.Unlock()
-		
-		if err != nil {
-			logger.Debug("File.StartDownloadSegment: async download completed with error", "segIdx", index, "err", err)
-			logger.Trace("File.StartDownloadSegment: async download completed with error", "segIdx", index, "err", err)
-		} else {
-			logger.Debug("File.StartDownloadSegment: async download completed", "segIdx", index, "size", len(data))
-			logger.Trace("File.StartDownloadSegment: async download completed", "segIdx", index, "size", len(data))
-		}
+		_, _ = f.DownloadSegment(ctx, index)
+		close(done)
 	}()
-
-	return fl.done
+	return done
 }
 
 func (f *File) DownloadSegment(ctx context.Context, index int) ([]byte, error) {
-	logger.Trace("File.DownloadSegment: start", "segIdx", index)
-	
 	if data, ok := f.GetCachedSegment(index); ok {
-		logger.Trace("File.DownloadSegment: cache hit", "segIdx", index)
 		return data, nil
 	}
-
-	logger.Trace("File.DownloadSegment: cache miss", "segIdx", index)
-
-	// Deduplicate concurrent downloads for the same segment.
-	f.inflightMu.Lock()
-	if fl, ok := f.inflightDL[index]; ok {
-		f.inflightMu.Unlock()
-		logger.Trace("File.DownloadSegment: found in-flight download, waiting", "segIdx", index)
-		select {
-		case <-fl.done:
-			logger.Trace("File.DownloadSegment: in-flight download completed", "segIdx", index, "err", fl.err)
-			return fl.data, fl.err
-		case <-ctx.Done():
-			logger.Trace("File.DownloadSegment: context cancelled while waiting", "segIdx", index)
-			return nil, ctx.Err()
-		}
-	}
-	fl := &inflight{done: make(chan struct{})}
-	f.inflightDL[index] = fl
-	f.inflightMu.Unlock()
-
-	logger.Trace("File.DownloadSegment: starting new download", "segIdx", index)
-
-	// Use the file's long-lived context for the actual NNTP download so it
-	// survives HTTP client disconnects. The caller's ctx only gates the wait
-	// above -- if they cancel, the download still finishes and gets cached
-	// for the next request.
-	data, err := f.doDownloadSegment(f.ctx, index)
-	fl.data = data
-	fl.err = err
-	close(fl.done)
-
-	f.inflightMu.Lock()
-	delete(f.inflightDL, index)
-	f.inflightMu.Unlock()
-
-	if err != nil {
-		logger.Trace("File.DownloadSegment: download failed", "segIdx", index, "err", err)
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		default:
-		}
-	} else {
-		logger.Trace("File.DownloadSegment: download completed", "segIdx", index, "size", len(data))
-	}
-
-	return data, err
+	// Direct download - no in-flight coalescing; improves seek latency by avoiding
+	// blocking on other downloads (was added with RAR changes, hurt seek perf)
+	return f.doDownloadSegment(ctx, index)
 }
 
 func (f *File) doDownloadSegment(ctx context.Context, index int) ([]byte, error) {

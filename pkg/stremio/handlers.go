@@ -1111,6 +1111,7 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 
 	if sess.NZB != nil && sess.NZB.IsRARRelease() {
 		logger.Info("RAR playback not supported (seeking issues)", "id", sessionID)
+		s.reportRARRelease(sess) // Report as available with compression_type=rar (don't mark provider unavailable)
 		forceDisconnect(w, s.baseURL)
 		return
 	}
@@ -1181,8 +1182,29 @@ func (s *Server) reportBadRelease(sess *session.Session, streamErr error) {
 		!strings.Contains(errMsg, "EOF") && !errors.Is(streamErr, loader.ErrTooManyZeroFills) {
 		return
 	}
+	s.reportUnstreamableRelease(sess, errMsg)
+}
 
-	logger.Info("Reporting bad/unstreamable release to AvailNZB", "session", sess.ID, "reason", errMsg)
+// reportUnstreamableRelease reports unstreamable releases (corrupted, etc.) to AvailNZB as unavailable.
+func (s *Server) reportUnstreamableRelease(sess *session.Session, reason string) {
+	if s.availClient == nil || s.availClient.BaseURL == "" {
+		return
+	}
+	logger.Info("Reporting bad/unstreamable release to AvailNZB", "session", sess.ID, "reason", reason)
+	s.doReportToAvailNZB(sess, false)
+}
+
+// reportRARRelease reports RAR releases to AvailNZB as available with compression_type=rar.
+// We don't mark the provider unavailable — the release is there, we just don't stream RAR.
+func (s *Server) reportRARRelease(sess *session.Session) {
+	if s.availClient == nil || s.availClient.BaseURL == "" {
+		return
+	}
+	logger.Info("Reporting RAR release to AvailNZB (compression_type)", "session", sess.ID)
+	s.doReportToAvailNZB(sess, true)
+}
+
+func (s *Server) doReportToAvailNZB(sess *session.Session, available bool) {
 	go func() {
 		releaseURL := sess.ReleaseURL
 		if releaseURL == "" {
@@ -1212,7 +1234,7 @@ func (s *Server) reportBadRelease(sess *session.Session, streamErr error) {
 		if hosts := s.validator.GetProviderHosts(); len(hosts) > 0 {
 			providerURL = hosts[0]
 		}
-		_ = s.availClient.ReportAvailability(releaseURL, providerURL, false, meta)
+		_ = s.availClient.ReportAvailability(releaseURL, providerURL, available, meta)
 	}()
 }
 
