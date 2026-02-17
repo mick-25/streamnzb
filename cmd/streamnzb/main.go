@@ -81,6 +81,7 @@ func main() {
 	cacheTTL := time.Duration(cfg.CacheTTLSeconds) * time.Second
 	validator := validation.NewChecker(
 		comp.ProviderPools,
+		comp.ProviderOrder,
 		cacheTTL,
 		cfg.ValidationSampleSize,
 		6, // Hardcoded concurrency limit (not configurable)

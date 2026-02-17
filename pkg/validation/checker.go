@@ -13,17 +13,20 @@ import (
 
 // Checker validates article availability across providers
 type Checker struct {
-	mu            sync.RWMutex
-	providers     map[string]*nntp.ClientPool
-	cache         *Cache
-	sampleSize    int
-	maxConcurrent int
+	mu             sync.RWMutex
+	providers      map[string]*nntp.ClientPool
+	providerOrder  []string // Provider names in priority order (for single-provider validation)
+	cache          *Cache
+	sampleSize     int
+	maxConcurrent  int
 }
 
-// NewChecker creates a new article availability checker
-func NewChecker(providers map[string]*nntp.ClientPool, cacheTTL time.Duration, sampleSize, maxConcurrent int) *Checker {
+// NewChecker creates a new article availability checker.
+// providerOrder is the list of provider names in priority order (used for cache warming).
+func NewChecker(providers map[string]*nntp.ClientPool, providerOrder []string, cacheTTL time.Duration, sampleSize, maxConcurrent int) *Checker {
 	return &Checker{
 		providers:     providers,
+		providerOrder: providerOrder,
 		cache:         NewCache(cacheTTL),
 		sampleSize:    sampleSize,
 		maxConcurrent: maxConcurrent,
@@ -41,18 +44,6 @@ type ValidationResult struct {
 	Error           error
 }
 
-// GetAnyProvider returns the first available provider from the pool
-// Used when validation is skipped (trusted source)
-func (c *Checker) GetAnyProvider() (*nntp.ClientPool, string) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
-	for host, pool := range c.providers {
-		return pool, host
-	}
-	return nil, ""
-}
-
 // GetProviderHosts returns a list of all configured provider hostnames
 func (c *Checker) GetProviderHosts() []string {
 	c.mu.RLock()
@@ -63,6 +54,31 @@ func (c *Checker) GetProviderHosts() []string {
 		hosts = append(hosts, host)
 	}
 	return hosts
+}
+
+// GetPrimaryProviderHost returns the highest-priority provider name for single-provider validation (e.g. cache warming).
+func (c *Checker) GetPrimaryProviderHost() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if len(c.providerOrder) > 0 {
+		return c.providerOrder[0]
+	}
+	for name := range c.providers {
+		return name
+	}
+	return ""
+}
+
+// ValidateNZBSingleProvider checks article availability for a single provider only.
+// Used for cache warming: check one provider, report good or bad, don't shop around.
+func (c *Checker) ValidateNZBSingleProvider(ctx context.Context, nzbData *nzb.NZB, providerName string) *ValidationResult {
+	c.mu.RLock()
+	pool, ok := c.providers[providerName]
+	c.mu.RUnlock()
+	if !ok || pool == nil {
+		return &ValidationResult{Provider: providerName, Error: fmt.Errorf("provider %q not found", providerName)}
+	}
+	return c.validateProvider(ctx, nzbData, providerName, pool)
 }
 
 // ValidateNZB checks article availability for an NZB across all providers
@@ -142,22 +158,23 @@ func (c *Checker) validateProvider(ctx context.Context, nzbData *nzb.NZB, provid
 	result.TotalArticles = len(nzbData.Files[0].Segments)
 	result.CheckedArticles = len(articles)
 
-	logger.Trace("validateProvider: pool.Get start", "provider", providerName)
-	client, err := pool.Get(ctx)
-	if err != nil {
-		logger.Trace("validateProvider: pool.Get failed", "provider", providerName, "err", err)
-		result.Error = fmt.Errorf("failed to get client: %w", err)
-		return result
+	client, ok := pool.TryGet(ctx)
+	if !ok {
+		var err error
+		waitCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+		client, err = pool.Get(waitCtx)
+		if err != nil {
+			result.Error = fmt.Errorf("pool busy: %w", err)
+			return result
+		}
 	}
-	logger.Trace("validateProvider: pool.Get ok", "provider", providerName)
-	// Only Put back if we finished cleanly; otherwise Discard to avoid poisoning the pool
-	// (errors or ctx cancel can leave the connection in a bad state)
+
 	releaseAsOk := false
 	defer func() {
 		if releaseAsOk {
 			pool.Put(client)
 		} else {
-			logger.Trace("validateProvider: defer Discard client", "provider", providerName)
 			pool.Discard(client)
 		}
 	}()
@@ -173,8 +190,6 @@ func (c *Checker) validateProvider(ctx context.Context, nzbData *nzb.NZB, provid
 
 		exists, err := client.StatArticle(articleID)
 		if err != nil {
-			logger.Trace("validateProvider: StatArticle error, discarding client", "provider", providerName, "err", err)
-			// Connection error or timeout; don't reuse this client
 			result.Error = err
 			return result
 		}
@@ -188,7 +203,6 @@ func (c *Checker) validateProvider(ctx context.Context, nzbData *nzb.NZB, provid
 	result.Available = missing == 0
 
 	logger.Debug("Provider check", "provider", providerName, "available", result.CheckedArticles-missing, "total", result.CheckedArticles)
-	logger.Trace("validateProvider: done, Put client", "provider", providerName)
 
 	return result
 }
@@ -276,11 +290,4 @@ func GetBestProvider(results map[string]*ValidationResult) *ValidationResult {
 	}
 
 	return bestResult
-}
-
-// UpdatePools swaps the provider pools at runtime
-func (c *Checker) UpdatePools(providers map[string]*nntp.ClientPool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.providers = providers
 }

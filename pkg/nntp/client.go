@@ -260,14 +260,6 @@ func (c *Client) Reconnect() error {
 	return nil
 }
 
-type AuthError struct {
-	Inner error
-}
-
-func (e *AuthError) Error() string {
-	return "authentication required (480)"
-}
-
 func (c *Client) Quit() error {
 	return c.conn.Close()
 }

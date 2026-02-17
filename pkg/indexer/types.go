@@ -3,7 +3,6 @@ package indexer
 import (
 	"context"
 	"encoding/xml"
-	"fmt"
 	"strconv"
 	"strings"
 )
@@ -157,20 +156,3 @@ func NormalizeSearchResponse(resp *SearchResponse) {
 	}
 }
 
-// ValidateItem returns an error if the item does not meet the minimum contract (Title and download URL).
-func ValidateItem(item *Item) error {
-	if item == nil {
-		return fmt.Errorf("item is nil")
-	}
-	if strings.TrimSpace(item.Title) == "" {
-		return fmt.Errorf("item missing title")
-	}
-	link := item.Link
-	if link == "" {
-		link = item.Enclosure.URL
-	}
-	if link == "" {
-		return fmt.Errorf("item missing link and enclosure URL")
-	}
-	return nil
-}

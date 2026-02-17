@@ -3,7 +3,9 @@ package loader
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"sort"
 	"sync"
 	"time"
 
@@ -13,20 +15,13 @@ import (
 	"streamnzb/pkg/nzb"
 )
 
-type File struct {
-	nzbFile   *nzb.File
-	pools     []*nntp.ClientPool
-	estimator *SegmentSizeEstimator
-	segments  []*Segment
-	totalSize int64
-	detected  bool
-	ctx       context.Context // Added context for lifecycle management
-	mu        sync.Mutex
+// MaxZeroFills is the maximum number of segments we zero-fill before returning
+// an error. Beyond this, playback would be too corrupted to be useful.
+const MaxZeroFills = 10
 
-	// Single-segment cache to optimized scattered reads (e.g. header parsing)
-	lastSegIndex int
-	lastSegData  []byte
-}
+// ErrTooManyZeroFills is returned when segment downloads fail on all providers
+// more than MaxZeroFills times. Callers can use errors.Is to detect and redirect.
+var ErrTooManyZeroFills = errors.New("too many failed segments")
 
 type Segment struct {
 	nzb.Segment
@@ -34,10 +29,37 @@ type Segment struct {
 	EndOffset   int64
 }
 
+// inflight tracks a segment download in progress so concurrent callers
+// wait for the same result instead of issuing duplicate NNTP requests.
+type inflight struct {
+	done chan struct{}
+	data []byte
+	err  error
+}
+
+type File struct {
+	nzbFile   *nzb.File
+	pools     []*nntp.ClientPool
+	estimator *SegmentSizeEstimator
+	segments  []*Segment
+	totalSize int64
+	detected  bool
+	ctx       context.Context
+	mu        sync.Mutex
+
+	segCache   map[int][]byte
+	segCacheMu sync.RWMutex
+
+	inflightMu sync.Mutex
+	inflightDL map[int]*inflight
+
+	zeroFillMu   sync.Mutex
+	zeroFillCount int
+}
+
 func NewFile(ctx context.Context, f *nzb.File, pools []*nntp.ClientPool, estimator *SegmentSizeEstimator) *File {
 	segments := make([]*Segment, len(f.Segments))
 	var offset int64
-	// Initial estimation using NZB bytes
 	for i, s := range f.Segments {
 		segments[i] = &Segment{
 			Segment:     s,
@@ -46,28 +68,45 @@ func NewFile(ctx context.Context, f *nzb.File, pools []*nntp.ClientPool, estimat
 		}
 		offset += s.Bytes
 	}
-
-	fl := &File{
-		nzbFile:      f,
-		pools:        pools,
-		estimator:    estimator,
-		segments:     segments,
-		totalSize:    offset,
-		ctx:          ctx,
-		lastSegIndex: -1,
+	return &File{
+		nzbFile:    f,
+		pools:      pools,
+		estimator:  estimator,
+		segments:   segments,
+		totalSize:  offset,
+		ctx:        ctx,
+		segCache:   make(map[int][]byte),
+		inflightDL: make(map[int]*inflight),
 	}
-
-	return fl
 }
 
-func (f *File) ensureSegmentMap() error {
+func (f *File) Name() string { return f.nzbFile.Subject }
+
+func (f *File) Size() int64 {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.totalSize
+}
+
+func (f *File) SegmentCount() int { return len(f.segments) }
+
+func (f *File) TotalConnections() int {
+	total := 0
+	for _, p := range f.pools {
+		total += p.MaxConn()
+	}
+	return total
+}
+
+// --- Segment size detection ---
+
+func (f *File) EnsureSegmentMap() error {
 	f.mu.Lock()
 	if f.detected {
 		f.mu.Unlock()
 		return nil
 	}
 	f.mu.Unlock()
-
 	return f.detectSegmentSize()
 }
 
@@ -79,10 +118,9 @@ func (f *File) detectSegmentSize() error {
 	}
 	f.mu.Unlock()
 
-	// Check estimator first
-	firstSegEncoded := f.segments[0].Bytes
+	firstEncoded := f.segments[0].Bytes
 	if f.estimator != nil {
-		if decoded, ok := f.estimator.Get(firstSegEncoded); ok {
+		if decoded, ok := f.estimator.Get(firstEncoded); ok {
 			f.mu.Lock()
 			if f.detected {
 				f.mu.Unlock()
@@ -95,7 +133,6 @@ func (f *File) detectSegmentSize() error {
 		}
 	}
 
-	// Download first segment (force download, bypass simple cache)
 	data, err := f.DownloadSegment(f.ctx, 0)
 	if err != nil {
 		return err
@@ -103,22 +140,18 @@ func (f *File) detectSegmentSize() error {
 
 	f.mu.Lock()
 	defer f.mu.Unlock()
-
 	if f.detected {
 		return nil
 	}
-
 	if len(data) == 0 {
 		return errors.New("empty first segment")
 	}
 
 	segSize := int64(len(data))
 	logger.Debug("Detected segment size", "name", f.Name(), "size", segSize, "nzb_size", f.segments[0].Bytes)
-
 	if f.estimator != nil {
 		f.estimator.Set(f.segments[0].Bytes, segSize)
 	}
-
 	f.applySegmentSize(segSize)
 	return nil
 }
@@ -127,7 +160,6 @@ func (f *File) applySegmentSize(segSize int64) {
 	var offset int64
 	for i := range f.segments {
 		f.segments[i].StartOffset = offset
-
 		if i < len(f.segments)-1 {
 			f.segments[i].EndOffset = offset + segSize
 			offset += segSize
@@ -138,121 +170,188 @@ func (f *File) applySegmentSize(segSize int64) {
 			offset += estSize
 		}
 	}
-
 	f.totalSize = offset
 	f.detected = true
 	logger.Debug("Recalculated total decoded size", "size", f.totalSize)
 }
 
-func (f *File) Size() int64 {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.totalSize
+// --- Segment lookup (binary search) ---
+
+func (f *File) FindSegmentIndex(offset int64) int {
+	idx := sort.Search(len(f.segments), func(i int) bool {
+		return f.segments[i].EndOffset > offset
+	})
+	if idx < len(f.segments) && offset >= f.segments[idx].StartOffset {
+		return idx
+	}
+	return -1
 }
 
-func (f *File) ReadAt(p []byte, off int64) (n int, err error) {
-	if err := f.ensureSegmentMap(); err != nil {
-		return 0, err
-	}
-	if off >= f.totalSize {
-		return 0, io.EOF
-	}
+// --- Shared segment cache ---
 
-	startSegIdx := -1
-	// Simple scan (TODO: Binary search)
-	for i, s := range f.segments {
-		if off >= s.StartOffset && off < s.EndOffset {
-			startSegIdx = i
-			break
+func (f *File) GetCachedSegment(index int) ([]byte, bool) {
+	f.segCacheMu.RLock()
+	data, ok := f.segCache[index]
+	f.segCacheMu.RUnlock()
+	return data, ok
+}
+
+func (f *File) PutCachedSegment(index int, data []byte) {
+	f.segCacheMu.Lock()
+	f.segCache[index] = data
+	f.segCacheMu.Unlock()
+}
+
+func (f *File) EvictCachedSegmentsBefore(minIndex int) {
+	f.segCacheMu.Lock()
+	for idx := range f.segCache {
+		if idx < minIndex {
+			delete(f.segCache, idx)
 		}
 	}
+	f.segCacheMu.Unlock()
+}
 
-	if startSegIdx == -1 {
-		return 0, io.EOF
+// PrewarmSegment downloads a segment by index in the background.
+// Used to pre-cache data that video players predictably request
+// (e.g. end-of-file for MKV Cues).
+func (f *File) PrewarmSegment(index int) {
+	if index < 0 || index >= len(f.segments) {
+		return
+	}
+	if _, ok := f.GetCachedSegment(index); ok {
+		return
+	}
+	go f.DownloadSegment(f.ctx, index)
+}
+
+// --- Segment download ---
+
+// HasInFlightDownload checks if a segment download is already in progress.
+// Returns the done channel if in-flight, nil otherwise.
+func (f *File) HasInFlightDownload(index int) <-chan struct{} {
+	f.inflightMu.Lock()
+	defer f.inflightMu.Unlock()
+	if fl, ok := f.inflightDL[index]; ok {
+		return fl.done
+	}
+	return nil
+}
+
+// StartDownloadSegment starts a segment download asynchronously and returns immediately.
+// The download is registered in inflightDL synchronously before returning.
+// Returns the done channel that will be closed when the download completes.
+func (f *File) StartDownloadSegment(ctx context.Context, index int) <-chan struct{} {
+	logger.Debug("File.StartDownloadSegment: start", "segIdx", index)
+	logger.Trace("File.StartDownloadSegment: start", "segIdx", index)
+	
+	// Fast path: already cached
+	if _, ok := f.GetCachedSegment(index); ok {
+		logger.Debug("File.StartDownloadSegment: already cached", "segIdx", index)
+		logger.Trace("File.StartDownloadSegment: already cached", "segIdx", index)
+		done := make(chan struct{})
+		close(done)
+		return done
 	}
 
-	currentOffset := off
-	totalRead := 0
+	// Check if already in-flight
+	f.inflightMu.Lock()
+	if fl, ok := f.inflightDL[index]; ok {
+		f.inflightMu.Unlock()
+		logger.Trace("File.StartDownloadSegment: already in-flight", "segIdx", index)
+		return fl.done
+	}
+	// Register new download synchronously
+	fl := &inflight{done: make(chan struct{})}
+	f.inflightDL[index] = fl
+	f.inflightMu.Unlock()
 
-	for i := startSegIdx; i < len(f.segments) && totalRead < len(p); i++ {
-		seg := f.segments[i]
+	logger.Debug("File.StartDownloadSegment: registered, starting async download", "segIdx", index)
+	logger.Trace("File.StartDownloadSegment: registered, starting async download", "segIdx", index)
 
-		segInternalOffset := currentOffset - seg.StartOffset
+	// Start download asynchronously
+	go func() {
+		logger.Debug("File.StartDownloadSegment: async download started", "segIdx", index)
+		logger.Trace("File.StartDownloadSegment: async download started", "segIdx", index)
+		data, err := f.doDownloadSegment(f.ctx, index)
+		fl.data = data
+		fl.err = err
+		close(fl.done)
 
-		// Use smart getter
-		data, err := f.getSegmentData(i)
+		f.inflightMu.Lock()
+		delete(f.inflightDL, index)
+		f.inflightMu.Unlock()
+		
 		if err != nil {
-			logger.Error("Error fetching segment", "index", i, "err", err)
-			return totalRead, err
+			logger.Debug("File.StartDownloadSegment: async download completed with error", "segIdx", index, "err", err)
+			logger.Trace("File.StartDownloadSegment: async download completed with error", "segIdx", index, "err", err)
+		} else {
+			logger.Debug("File.StartDownloadSegment: async download completed", "segIdx", index, "size", len(data))
+			logger.Trace("File.StartDownloadSegment: async download completed", "segIdx", index, "size", len(data))
 		}
+	}()
 
-		if segInternalOffset >= int64(len(data)) {
-			// Should not happen ideally
-			continue
-		}
-
-		copied := copy(p[totalRead:], data[segInternalOffset:])
-		totalRead += copied
-		currentOffset += int64(copied)
-	}
-
-	if totalRead < len(p) && currentOffset >= f.totalSize {
-		return totalRead, io.EOF
-	}
-
-	return totalRead, nil
+	return fl.done
 }
 
-func (f *File) getSegmentData(index int) ([]byte, error) {
-	f.mu.Lock()
-	if f.lastSegIndex == index && f.lastSegData != nil {
-		data := f.lastSegData
-		f.mu.Unlock()
-		return data, nil
-	}
-	f.mu.Unlock()
-
-	// Not in cache, fetch it
-	// We release lock during network IO to allow concurrency on other methods
-
-	data, err := f.DownloadSegment(f.ctx, index)
-	if err != nil {
-		return nil, err
-	}
-
-	// Update Cache
-	f.mu.Lock()
-	f.lastSegIndex = index
-	f.lastSegData = data
-	f.mu.Unlock()
-
-	return data, nil
-}
-
-// TotalConnections returns the sum of all provider connection limits
-func (f *File) TotalConnections() int {
-	total := 0
-	for _, p := range f.pools {
-		total += p.MaxConn()
-	}
-	return total
-}
-
-// DownloadSegment performs the actual NNTP download (Exported for SmartStream)
 func (f *File) DownloadSegment(ctx context.Context, index int) ([]byte, error) {
-	logger.Trace("DownloadSegment start", "index", index)
-	// Optimization: Check single-segment cache first
-	f.mu.Lock()
-	if f.lastSegIndex == index && f.lastSegData != nil {
-		data := f.lastSegData
-		f.mu.Unlock()
-		logger.Trace("DownloadSegment cache hit", "index", index)
+	logger.Trace("File.DownloadSegment: start", "segIdx", index)
+	
+	if data, ok := f.GetCachedSegment(index); ok {
+		logger.Trace("File.DownloadSegment: cache hit", "segIdx", index)
 		return data, nil
 	}
-	f.mu.Unlock()
 
-	// Add overall timeout for segment download (5 minutes max)
-	// This prevents worker goroutines from being tied up indefinitely on slow downloads
+	logger.Trace("File.DownloadSegment: cache miss", "segIdx", index)
+
+	// Deduplicate concurrent downloads for the same segment.
+	f.inflightMu.Lock()
+	if fl, ok := f.inflightDL[index]; ok {
+		f.inflightMu.Unlock()
+		logger.Trace("File.DownloadSegment: found in-flight download, waiting", "segIdx", index)
+		select {
+		case <-fl.done:
+			logger.Trace("File.DownloadSegment: in-flight download completed", "segIdx", index, "err", fl.err)
+			return fl.data, fl.err
+		case <-ctx.Done():
+			logger.Trace("File.DownloadSegment: context cancelled while waiting", "segIdx", index)
+			return nil, ctx.Err()
+		}
+	}
+	fl := &inflight{done: make(chan struct{})}
+	f.inflightDL[index] = fl
+	f.inflightMu.Unlock()
+
+	logger.Trace("File.DownloadSegment: starting new download", "segIdx", index)
+
+	// Use the file's long-lived context for the actual NNTP download so it
+	// survives HTTP client disconnects. The caller's ctx only gates the wait
+	// above -- if they cancel, the download still finishes and gets cached
+	// for the next request.
+	data, err := f.doDownloadSegment(f.ctx, index)
+	fl.data = data
+	fl.err = err
+	close(fl.done)
+
+	f.inflightMu.Lock()
+	delete(f.inflightDL, index)
+	f.inflightMu.Unlock()
+
+	if err != nil {
+		logger.Trace("File.DownloadSegment: download failed", "segIdx", index, "err", err)
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+	} else {
+		logger.Trace("File.DownloadSegment: download completed", "segIdx", index, "size", len(data))
+	}
+
+	return data, err
+}
+
+func (f *File) doDownloadSegment(ctx context.Context, index int) ([]byte, error) {
 	downloadCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 
@@ -260,9 +359,7 @@ func (f *File) DownloadSegment(ctx context.Context, index int) ([]byte, error) {
 	tried := make([]bool, len(f.pools))
 	var lastErr error
 
-	// Retry loop
 	for attempt := 0; attempt < len(f.pools); attempt++ {
-		// Check context before doing work
 		select {
 		case <-downloadCtx.Done():
 			return nil, downloadCtx.Err()
@@ -273,8 +370,6 @@ func (f *File) DownloadSegment(ctx context.Context, index int) ([]byte, error) {
 		var pool *nntp.ClientPool
 		var poolIdx int = -1
 
-		// 1. Try to grab a FREE connection from any untried pool (Priority Order)
-		// This enables "Spillover" (Speed) - if Priority 0 is busy, we grab Priority 1 immediately.
 		for i, p := range f.pools {
 			if !tried[i] {
 				if c, ok := p.TryGet(downloadCtx); ok {
@@ -286,14 +381,12 @@ func (f *File) DownloadSegment(ctx context.Context, index int) ([]byte, error) {
 			}
 		}
 
-		// 2. If no free connections, we MUST wait. Block on the highest priority untried pool.
 		if client == nil {
 			for i, p := range f.pools {
 				if !tried[i] {
 					var err error
-					client, err = p.Get(downloadCtx) // Blocking wait
+					client, err = p.Get(downloadCtx)
 					if err != nil {
-						// This pool is broken (closed?) or context canceled
 						tried[i] = true
 						lastErr = err
 						if errors.Is(err, context.Canceled) {
@@ -308,130 +401,131 @@ func (f *File) DownloadSegment(ctx context.Context, index int) ([]byte, error) {
 			}
 		}
 
-		// If we still have no client, it means we exhausted all pools (or they are all broken)
 		if client == nil {
 			break
 		}
 
-		// Execute Download
 		if len(f.nzbFile.Groups) > 0 {
 			client.Group(f.nzbFile.Groups[0])
 		}
 
 		r, err := client.Body(seg.ID)
 		if err != nil {
-			// Download failed
 			pool.Put(client)
 			tried[poolIdx] = true
 			lastErr = err
-			// Loop to try next pool
 			continue
 		}
 
-		// Decode with timeout to prevent indefinite blocking
-		decodeDone := make(chan struct {
+		type decodeResult struct {
 			frame *decode.Frame
 			err   error
-		}, 1)
-		logger.Trace("DownloadSegment decode start", "index", index)
+		}
+		done := make(chan decodeResult, 1)
 		go func() {
 			frame, err := decode.DecodeToBytes(r)
-			decodeDone <- struct {
-				frame *decode.Frame
-				err   error
-			}{frame, err}
+			done <- decodeResult{frame, err}
 		}()
 
-		var frame *decode.Frame
 		select {
 		case <-downloadCtx.Done():
-			logger.Trace("DownloadSegment decode timeout/cancel, discarding client", "index", index)
 			pool.Discard(client)
 			return nil, downloadCtx.Err()
-		case result := <-decodeDone:
-			frame = result.frame
-			err = result.err
-			logger.Trace("DownloadSegment decode done", "index", index, "err", err)
-		}
-
-		if err != nil {
+		case res := <-done:
+			if res.err != nil {
+				pool.Put(client)
+				tried[poolIdx] = true
+				lastErr = res.err
+				continue
+			}
 			pool.Put(client)
-			tried[poolIdx] = true
-			lastErr = err
-			continue
+			f.PutCachedSegment(index, res.frame.Data)
+			return res.frame.Data, nil
 		}
-
-		logger.Trace("DownloadSegment success", "index", index)
-		pool.Put(client)
-		return frame.Data, nil
 	}
 
-	logger.Trace("DownloadSegment all pools failed", "index", index, "err", lastErr)
-	// Error handling: If all providers fail, ZERO-FILL to keep stream alive
-	logger.Debug("Segment failed on all providers, zero-filling", "index", index, "err", lastErr)
+	f.zeroFillMu.Lock()
+	count := f.zeroFillCount
+	if count >= MaxZeroFills {
+		f.zeroFillMu.Unlock()
+		return nil, fmt.Errorf("too many failed segments (%d/%d): %w", count+1, MaxZeroFills, errors.Join(ErrTooManyZeroFills, lastErr))
+	}
+	f.zeroFillCount++
+	f.zeroFillMu.Unlock()
 
-	// Maintain stream alignment by returning exactly what matches the current offsets
+	logger.Debug("Segment failed on all providers, zero-filling", "index", index, "count", count+1, "max", MaxZeroFills, "err", lastErr)
 	size := int(seg.EndOffset - seg.StartOffset)
 	if size < 0 {
 		size = 0
-	} // Safety check
-
-	return make([]byte, size), nil
-}
-
-func (f *File) Name() string {
-	// Simple extraction: look for "filename.ext" in subject?
-	// Often it's in quotes or just standard part of subject.
-	// For prototype, let's assume standard format or just return Subject.
-	// Better: extract the string ending in .rar or .rXX or .mkv
-
-	// Quick hack:
-	return f.nzbFile.Subject
-}
-
-// OpenStream creates a new BufferedStream starting at offset 0 (or Seek later).
-func (f *File) OpenStream() (io.ReadSeekCloser, error) {
-	// Ensure we have correct size map
-	if err := f.ensureSegmentMap(); err != nil {
-		logger.Error("Error ensuring segment detection", "err", err)
-		// Proceed anyway? BufferedStream might fail.
-		return nil, err
 	}
-	return NewBufferedStream(f), nil
+	zeroData := make([]byte, size)
+	f.PutCachedSegment(index, zeroData)
+	return zeroData, nil
 }
 
-// OpenSmartStream creates a high-performance linear reader
-func (f *File) OpenSmartStream(offset int64) io.ReadCloser {
-	if err := f.ensureSegmentMap(); err != nil {
-		logger.Error("Error ensuring segment detection", "err", err)
+// --- Random access (for archive header scanning) ---
+
+func (f *File) ReadAt(p []byte, off int64) (n int, err error) {
+	if err := f.EnsureSegmentMap(); err != nil {
+		return 0, err
 	}
-	return NewSmartStream(f, offset)
-}
-
-// OpenReaderAt implements UnpackableFile.OpenReaderAt
-func (f *File) OpenReaderAt(offset int64) (io.ReadCloser, error) {
-	// Wrapper typically returns errors, but OpenSmartStream handles it internally/async.
-	// We check detection first.
-	if err := f.ensureSegmentMap(); err != nil {
-		return nil, err
+	if off >= f.totalSize {
+		return 0, io.EOF
 	}
-	return NewSmartStream(f, offset), nil
-}
 
-// FindSegmentIndex logic exposed for BufferedStream
-func (f *File) FindSegmentIndex(offset int64) int {
-	// TODO: Binary search
-	for i, s := range f.segments {
-		if offset >= s.StartOffset && offset < s.EndOffset {
-			return i
+	startIdx := f.FindSegmentIndex(off)
+	if startIdx == -1 {
+		return 0, io.EOF
+	}
+
+	currentOffset := off
+	totalRead := 0
+	for i := startIdx; i < len(f.segments) && totalRead < len(p); i++ {
+		seg := f.segments[i]
+		segOff := currentOffset - seg.StartOffset
+
+		data, err := f.DownloadSegment(f.ctx, i)
+		if err != nil {
+			return totalRead, err
 		}
+		if segOff >= int64(len(data)) {
+			continue
+		}
+
+		copied := copy(p[totalRead:], data[segOff:])
+		totalRead += copied
+		currentOffset += int64(copied)
 	}
-	return -1
+
+	if totalRead < len(p) && currentOffset >= f.totalSize {
+		return totalRead, io.EOF
+	}
+	return totalRead, nil
 }
 
-// SegmentSizeEstimator shares detected sizes across files to avoid redundant probing.
+// --- Stream creation ---
+
+func (f *File) OpenStream() (io.ReadSeekCloser, error) {
+	return f.OpenStreamCtx(f.ctx)
+}
+
+func (f *File) OpenStreamCtx(ctx context.Context) (io.ReadSeekCloser, error) {
+	if err := f.EnsureSegmentMap(); err != nil {
+		return nil, err
+	}
+	return NewSegmentReader(ctx, f, 0), nil
+}
+
+func (f *File) OpenReaderAt(ctx context.Context, offset int64) (io.ReadCloser, error) {
+	if err := f.EnsureSegmentMap(); err != nil {
+		return nil, err
+	}
+	return NewSegmentReader(ctx, f, offset), nil
+}
+
+// --- Segment size estimator ---
+
 type SegmentSizeEstimator struct {
-	// List of known sizes for fuzzy matching
 	entries []sizeEntry
 	mu      sync.RWMutex
 }
@@ -442,24 +536,17 @@ type sizeEntry struct {
 }
 
 func NewSegmentSizeEstimator() *SegmentSizeEstimator {
-	return &SegmentSizeEstimator{
-		entries: make([]sizeEntry, 0, 4),
-	}
+	return &SegmentSizeEstimator{entries: make([]sizeEntry, 0, 4)}
 }
 
 func (e *SegmentSizeEstimator) Get(encodedSize int64) (int64, bool) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-
 	for _, entry := range e.entries {
 		diff := entry.encoded - encodedSize
 		if diff < 0 {
 			diff = -diff
 		}
-
-		// If encoded size is within 4KB (arbitrary tolerance for yEnc overhead variation)
-		// We assume it maps to the same decoded size.
-		// Standard segment sizes are usually far apart (384KB, 512KB, 768KB, etc.)
 		if diff < 4096 {
 			return entry.decoded, true
 		}
@@ -470,21 +557,14 @@ func (e *SegmentSizeEstimator) Get(encodedSize int64) (int64, bool) {
 func (e *SegmentSizeEstimator) Set(encodedSize, decodedSize int64) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-
-	// Check if already covered
 	for _, entry := range e.entries {
 		diff := entry.encoded - encodedSize
 		if diff < 0 {
 			diff = -diff
 		}
 		if diff < 4096 {
-			// Already have a close-enough entry
 			return
 		}
 	}
-
-	e.entries = append(e.entries, sizeEntry{
-		encoded: encodedSize,
-		decoded: decodedSize,
-	})
+	e.entries = append(e.entries, sizeEntry{encoded: encodedSize, decoded: decodedSize})
 }

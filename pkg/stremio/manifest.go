@@ -65,11 +65,6 @@ func NewManifest(version string) *Manifest {
 	}
 }
 
-// ToJSON converts manifest to JSON
-func (m *Manifest) ToJSON() ([]byte, error) {
-	return json.MarshalIndent(m, "", "  ")
-}
-
 // ToJSONForDevice returns manifest JSON with behaviorHints set for the given device.
 // Configurable is true only for admin users (shows configure button in Stremio).
 func (m *Manifest) ToJSONForDevice(isAdmin bool) ([]byte, error) {

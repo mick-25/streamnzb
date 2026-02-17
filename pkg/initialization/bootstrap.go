@@ -23,6 +23,7 @@ type InitializedComponents struct {
 	Config                *config.Config
 	Indexer               indexer.Indexer
 	ProviderPools         map[string]*nntp.ClientPool
+	ProviderOrder         []string // Provider names in priority order (for single-provider validation)
 	StreamingPools        []*nntp.ClientPool
 	AvailNZBIndexerHosts  []string // Underlying indexer hostnames for AvailNZB GetReleases filter (e.g. nzbgeek.info)
 }
@@ -230,6 +231,7 @@ func BuildComponents(cfg *config.Config) (*InitializedComponents, error) {
 		return priI < priJ
 	})
 
+	providerOrder := make([]string, 0, len(providers))
 	for _, provider := range providers {
 		logger.Info("Initializing NNTP pool", "provider", provider.Name, "host", provider.Host, "conns", provider.Connections)
 
@@ -263,6 +265,7 @@ func BuildComponents(cfg *config.Config) (*InitializedComponents, error) {
 		}
 
 		providerPools[poolName] = pool
+		providerOrder = append(providerOrder, poolName)
 		streamingPools = append(streamingPools, pool)
 	}
 
@@ -274,6 +277,7 @@ func BuildComponents(cfg *config.Config) (*InitializedComponents, error) {
 		Config:               cfg,
 		Indexer:              aggregator,
 		ProviderPools:        providerPools,
+		ProviderOrder:        providerOrder,
 		StreamingPools:       streamingPools,
 		AvailNZBIndexerHosts: availNzbHosts,
 	}, nil

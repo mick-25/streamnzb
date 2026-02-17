@@ -59,11 +59,6 @@ func GetDeviceManager(dataDir string) (*DeviceManager, error) {
 	return dm, nil
 }
 
-// GetUserManager is an alias for GetDeviceManager for backwards compatibility
-func GetUserManager(dataDir string) (*DeviceManager, error) {
-	return GetDeviceManager(dataDir)
-}
-
 // load loads devices from persistent storage
 func (dm *DeviceManager) load() error {
 	dm.mu.Lock()

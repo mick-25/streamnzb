@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -244,19 +245,25 @@ func (s *Session) GetOrDownloadNZB(manager *Manager) (*nzb.NZB, error) {
 	ctx := s.ctx
 	s.mu.Unlock()
 
-	// When the URL is a direct indexer link (e.g. from AvailNZB), resolve to proxy URL via search
-	// so Prowlarr (and similar) can serve the download without "Failed to normalize" errors.
-	if res, ok := idx.(indexer.IndexerWithResolve); ok {
-		resolved, err := res.ResolveDownloadURL(ctx, nzbURL, itemTitle, reportSize)
-		if err == nil && resolved != "" {
-			logger.Debug("Resolved direct indexer URL to proxy URL via search", "title", itemTitle)
-			nzbURL = resolved
+	// If the URL already contains an API key, download directly (Newznab/NZBHydra).
+	// Otherwise the URL came from AvailNZB for a Prowlarr-only indexer and needs
+	// to be resolved to a proxy URL via search first.
+	var data []byte
+	var err error
+	hasAPIKey := urlHasAPIKey(nzbURL)
+	if hasAPIKey {
+		logger.Trace("Lazy Downloading NZB (direct)...", "title", itemTitle, "indexer", indexerName)
+		data, err = idx.DownloadNZB(nzbURL)
+	}
+	if !hasAPIKey || err != nil {
+		if res, ok := idx.(indexer.IndexerWithResolve); ok {
+			resolved, resolveErr := res.ResolveDownloadURL(ctx, nzbURL, itemTitle, reportSize)
+			if resolveErr == nil && resolved != "" {
+				logger.Debug("Resolved to proxy URL via search", "title", itemTitle)
+				data, err = idx.DownloadNZB(resolved)
+			}
 		}
 	}
-
-	// Download and parse outside lock so session is not held for I/O duration
-	logger.Trace("Lazy Downloading NZB...", "title", itemTitle, "indexer", indexerName, "url", nzbURL)
-	data, err := idx.DownloadNZB(nzbURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to lazy download NZB: %w", err)
 	}
@@ -368,43 +375,6 @@ func (m *Manager) cleanup() {
 	}
 }
 
-// Stats returns session statistics
-func (m *Manager) Stats() map[string]interface{} {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	return map[string]interface{}{
-		"active_sessions": len(m.sessions),
-		"ttl_minutes":     m.ttl.Minutes(),
-	}
-}
-
-// Count returns the number of sessions
-func (m *Manager) Count() int {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return len(m.sessions)
-}
-
-// CountActive returns the number of sessions currently being played
-func (m *Manager) CountActive() int {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	count := 0
-	for _, s := range m.sessions {
-		// We can read ActivePlays without session lock if we accept slight race,
-		// but better to allow atomic access or just lock.
-		// Since we use atomic for updates (or lock), let's just lock for correctness.
-		s.mu.Lock()
-		if s.ActivePlays > 0 {
-			count++
-		}
-		s.mu.Unlock()
-	}
-	return count
-}
-
 // StartPlayback increments the active play count for a session and tracks IP
 func (m *Manager) StartPlayback(id, ip string) {
 	s, err := m.GetSession(id)
@@ -507,4 +477,13 @@ func (m *Manager) UpdatePools(pools []*nntp.ClientPool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.pools = pools
+}
+
+func urlHasAPIKey(rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	q := u.Query()
+	return q.Get("apikey") != "" || q.Get("api_key") != "" || q.Get("r") != ""
 }

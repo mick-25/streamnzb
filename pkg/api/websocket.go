@@ -344,7 +344,7 @@ func (s *Server) handleSaveConfigWS(conn *websocket.Conn, client *Client, payloa
 				return
 			}
 
-			validator := validation.NewChecker(comp.ProviderPools, 24*time.Hour, 10, 5)
+			validator := validation.NewChecker(comp.ProviderPools, comp.ProviderOrder, 24*time.Hour, 10, 5)
 			triageService := triage.NewService(
 				&comp.Config.Filters,
 				comp.Config.Sorting,

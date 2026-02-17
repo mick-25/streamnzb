@@ -11,20 +11,10 @@ type contextKey string
 
 const userContextKey contextKey = "user"
 
-// UserFromContext extracts the authenticated device from context (alias for backwards compatibility)
-func UserFromContext(r *http.Request) (*Device, bool) {
-	return DeviceFromContext(r)
-}
-
 // DeviceFromContext extracts the authenticated device from context
 func DeviceFromContext(r *http.Request) (*Device, bool) {
 	device, ok := r.Context().Value(userContextKey).(*Device)
 	return device, ok
-}
-
-// ContextWithUser adds a device to the request context (alias for backwards compatibility)
-func ContextWithUser(ctx context.Context, device *Device) context.Context {
-	return ContextWithDevice(ctx, device)
 }
 
 // ContextWithDevice adds a device to the request context
@@ -93,10 +83,4 @@ func AuthMiddleware(deviceManager *DeviceManager, getAdminUsername, getAdminToke
 			})
 		})
 	}
-}
-
-// RequireAuth wraps a handler to require authentication.
-func RequireAuth(deviceManager *DeviceManager, getAdminUsername, getAdminToken func() string, handler http.HandlerFunc) http.HandlerFunc {
-	middleware := AuthMiddleware(deviceManager, getAdminUsername, getAdminToken)
-	return middleware(handler).ServeHTTP
 }

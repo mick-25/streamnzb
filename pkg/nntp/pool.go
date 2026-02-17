@@ -272,31 +272,6 @@ func (p *ClientPool) Discard(c *Client) {
 	p.slots <- struct{}{}
 }
 
-// InitializedPool creates 'count' connections immediately. (Legacy/Eager)
-func NewInitializedClientPool(host string, port int, ssl bool, user, pass string, count int) (*ClientPool, error) {
-	p := NewClientPool(host, port, ssl, user, pass, count)
-
-	// Eagerly fill
-	// We consume slots and put into idleClients
-	for i := 0; i < count; i++ {
-		select {
-		case <-p.slots:
-			c, err := NewClient(host, port, ssl)
-			if err != nil {
-				return nil, err
-			}
-			if err := c.Authenticate(user, pass); err != nil {
-				c.Quit()
-				return nil, err
-			}
-			p.Put(c)
-		default:
-			// Max reached
-		}
-	}
-	return p, nil
-}
-
 func (p *ClientPool) reaperLoop() {
 	ticker := time.NewTicker(15 * time.Second) // Check every 15 seconds
 	timeout := 30 * time.Second                // Close connections idle >30s
