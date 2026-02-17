@@ -25,6 +25,7 @@ import (
 	"streamnzb/pkg/loader"
 	"streamnzb/pkg/logger"
 	"streamnzb/pkg/nzb"
+	"streamnzb/pkg/parser"
 	"streamnzb/pkg/session"
 	"streamnzb/pkg/tmdb"
 	"streamnzb/pkg/triage"
@@ -363,6 +364,14 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string, 
 	} else {
 		req.TMDBID = searchID
 	}
+	imdbForText := req.IMDbID
+	tmdbForText := req.TMDBID
+	if contentType == "series" && strings.Contains(id, ":") {
+		parts := strings.Split(id, ":")
+		if parts[0] == "tmdb" && len(parts) >= 2 {
+			tmdbForText = parts[1]
+		}
+	}
 	if contentType == "movie" {
 		req.Cat = "2000"
 	} else {
@@ -505,12 +514,11 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string, 
 
 	// 3. Indexers: search, triage, validate until we have enough streams
 	if !hasEnoughStreams(streams) {
-
-		searchResp, err := s.indexer.Search(req)
+		allItems, err := s.runIndexerSearches(req, contentType, contentIDs, imdbForText, tmdbForText)
 		if err != nil {
-			return nil, fmt.Errorf("indexer search failed: %w", err)
+			return nil, err
 		}
-		candidates := s.triageCandidates(device, searchResp.Channel.Items)
+		candidates := s.triageCandidates(device, allItems)
 		logger.Debug("Indexer candidates after triage", "count", len(candidates))
 
 		if s.availClient != nil && s.availClient.BaseURL != "" && (contentIDs.ImdbID != "" || contentIDs.TvdbID != "") {
@@ -706,6 +714,150 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string, 
 	}
 	logger.Info("Returning validated streams", "count", len(streams))
 	return streams, nil
+}
+
+// runIndexerSearches runs ID-based and text-based searches in parallel, merges and dedupes.
+// Text search uses TMDB to resolve titles; when TMDB is unavailable, only ID search runs.
+func (s *Server) runIndexerSearches(req indexer.SearchRequest, contentType string, contentIDs *session.AvailReportMeta, imdbForText, tmdbForText string) ([]indexer.Item, error) {
+	idReq := req
+	idReq.Query = ""
+
+	var textQuery string
+	if s.tmdbClient != nil {
+		if contentType == "movie" {
+			if t, err := s.tmdbClient.GetMovieTitle(contentIDs.ImdbID, req.TMDBID); err == nil {
+				textQuery = t
+			}
+		} else if req.Season != "" && req.Episode != "" {
+			if name, err := s.tmdbClient.GetTVShowName(tmdbForText, imdbForText); err == nil {
+				textQuery = fmt.Sprintf("%s S%sE%s", name, req.Season, req.Episode)
+			}
+		}
+	}
+
+	var idResp *indexer.SearchResponse
+	var idErr error
+	var textItems []indexer.Item
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		idResp, idErr = s.indexer.Search(idReq)
+	}()
+	if textQuery != "" {
+		wg.Add(1)
+		textReq := indexer.SearchRequest{Query: textQuery, Cat: req.Cat, Limit: req.Limit, Season: req.Season, Episode: req.Episode}
+		go func() {
+			defer wg.Done()
+			if resp, err := s.indexer.Search(textReq); err == nil {
+				textItems = filterTextResultsByContent(resp.Channel.Items, contentType, textQuery, req.Season, req.Episode)
+			}
+		}()
+	}
+	wg.Wait()
+
+	if idErr != nil {
+		return nil, fmt.Errorf("indexer search failed: %w", idErr)
+	}
+	items := make([]indexer.Item, 0, len(idResp.Channel.Items)+len(textItems))
+	for i := range idResp.Channel.Items {
+		it := idResp.Channel.Items[i]
+		it.QuerySource = "id"
+		items = append(items, it)
+	}
+	for i := range textItems {
+		it := textItems[i]
+		it.QuerySource = "text"
+		items = append(items, it)
+	}
+	if len(textItems) > 0 {
+		logger.Debug("Indexer dual search", "id", len(idResp.Channel.Items), "text", len(textItems))
+	}
+	return mergeAndDedupeSearchResults(items), nil
+}
+
+// filterTextResultsByContent keeps only items where ptt-parsed title matches the content.
+// For movies: parsed title must match. For TV: show name, season, episode must match.
+func filterTextResultsByContent(items []indexer.Item, contentType, textQuery, season, episode string) []indexer.Item {
+	if contentType != "movie" && contentType != "series" {
+		return items
+	}
+	// Parse the text query to get expected title/show name
+	expectTitle := strings.ToLower(strings.TrimSpace(textQuery))
+	expectSeason, _ := strconv.Atoi(season)
+	expectEpisode, _ := strconv.Atoi(episode)
+	// For TV, expectTitle might be "Show Name S01E02" - extract show part for fuzzy match
+	var expectShow string
+	if contentType == "series" && (expectSeason > 0 || expectEpisode > 0) {
+		expectShow = strings.ToLower(strings.TrimSpace(strings.Split(textQuery, " S")[0]))
+	}
+
+	var out []indexer.Item
+	for _, item := range items {
+		parsed := parser.ParseReleaseTitle(item.Title)
+		if contentType == "movie" {
+			got := strings.ToLower(strings.TrimSpace(parsed.Title))
+			if got == "" {
+				continue
+			}
+			// Title should match (allow partial: e.g. "Inception" matches "Inception")
+			if !strings.Contains(expectTitle, got) && !strings.Contains(got, expectTitle) {
+				// Normalize: remove year from expect for comparison
+				expectBase := expectTitle
+				for i := len(expectBase) - 1; i >= 0; i-- {
+					if expectBase[i] >= '0' && expectBase[i] <= '9' {
+						continue
+					}
+					if i < len(expectBase)-1 && expectBase[i] == ' ' {
+						expectBase = strings.TrimSpace(expectBase[:i])
+					}
+					break
+				}
+				if !strings.Contains(got, expectBase) && !strings.Contains(expectBase, got) {
+					continue
+				}
+			}
+		} else {
+			gotShow := strings.ToLower(strings.TrimSpace(parsed.Title))
+			if gotShow == "" {
+				continue
+			}
+			if expectShow != "" && !strings.Contains(gotShow, expectShow) && !strings.Contains(expectShow, gotShow) {
+				continue
+			}
+			if expectSeason > 0 && parsed.Season != expectSeason {
+				continue
+			}
+			if expectEpisode > 0 && parsed.Episode != expectEpisode {
+				continue
+			}
+		}
+		out = append(out, item)
+	}
+	return out
+}
+
+// mergeAndDedupeSearchResults merges ID and text results, preferring ID-based when duplicates.
+// Deduplication uses release title only (normalized).
+func mergeAndDedupeSearchResults(items []indexer.Item) []indexer.Item {
+	// Process ID items first so they take precedence when deduping
+	sort.SliceStable(items, func(i, j int) bool {
+		return items[i].QuerySource == "id" && items[j].QuerySource != "id"
+	})
+	seenTitle := make(map[string]bool)
+	var result []indexer.Item
+	for _, item := range items {
+		normTitle := strings.ToLower(strings.TrimSpace(item.Title))
+		if normTitle == "" {
+			continue
+		}
+		if seenTitle[normTitle] {
+			continue
+		}
+		seenTitle[normTitle] = true
+		result = append(result, item)
+	}
+	return result
 }
 
 // warmAvailNZBCache validates one indexer candidate that isn't in AvailNZB with each provider

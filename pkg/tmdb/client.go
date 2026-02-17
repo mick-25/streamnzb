@@ -129,6 +129,110 @@ func (c *Client) GetExternalIDs(tmdbID int, mediaType string) (*ExternalIDsRespo
 	return &result, nil
 }
 
+// MovieDetails is the response from GET /movie/{id}
+type MovieDetails struct {
+	ID           int    `json:"id"`
+	Title        string `json:"title"`
+	ReleaseDate  string `json:"release_date"`
+	OriginalTitle string `json:"original_title"`
+}
+
+// TVDetails is the response from GET /tv/{id}
+type TVDetails struct {
+	ID   int    `json:"id"`
+	Name string `json:"name"`
+}
+
+// GetMovieTitle returns the movie title for text-based search.
+// Supports IMDb ID (tt123) or TMDB ID.
+func (c *Client) GetMovieTitle(imdbID string, tmdbID string) (string, error) {
+	if tmdbID != "" {
+		if id, err := strconv.Atoi(tmdbID); err == nil {
+			d, err := c.GetMovieDetails(id)
+			if err != nil {
+				return "", err
+			}
+			return d.Title, nil
+		}
+	}
+	if imdbID != "" {
+		find, err := c.Find(imdbID, "imdb_id")
+		if err != nil {
+			return "", err
+		}
+		if len(find.MovieResults) > 0 {
+			return find.MovieResults[0].Title, nil
+		}
+	}
+	return "", fmt.Errorf("could not resolve movie title")
+}
+
+// GetTVShowName returns the TV show name for text-based search.
+// Supports TMDB ID or IMDb ID (tt123).
+func (c *Client) GetTVShowName(tmdbID string, imdbID string) (string, error) {
+	if tmdbID != "" {
+		if id, err := strconv.Atoi(tmdbID); err == nil {
+			d, err := c.GetTVDetails(id)
+			if err != nil {
+				return "", err
+			}
+			return d.Name, nil
+		}
+	}
+	if imdbID != "" {
+		find, err := c.Find(imdbID, "imdb_id")
+		if err != nil {
+			return "", err
+		}
+		if len(find.TVResults) > 0 {
+			return find.TVResults[0].Name, nil
+		}
+	}
+	return "", fmt.Errorf("could not resolve TV show name")
+}
+
+// GetMovieDetails fetches movie title for text-based search.
+func (c *Client) GetMovieDetails(tmdbID int) (*MovieDetails, error) {
+	if c.apiKey == "" {
+		return nil, fmt.Errorf("TMDB API key not configured")
+	}
+	endpoint := fmt.Sprintf("https://api.themoviedb.org/3/movie/%d", tmdbID)
+	resp, err := c.doRequest(endpoint, url.Values{})
+	if err != nil {
+		return nil, fmt.Errorf("TMDB movie details: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("TMDB returned status: %d", resp.StatusCode)
+	}
+	var d MovieDetails
+	if err := json.NewDecoder(resp.Body).Decode(&d); err != nil {
+		return nil, fmt.Errorf("TMDB movie decode: %w", err)
+	}
+	return &d, nil
+}
+
+// GetTVDetails fetches TV show name for text-based search.
+func (c *Client) GetTVDetails(tmdbID int) (*TVDetails, error) {
+	if c.apiKey == "" {
+		return nil, fmt.Errorf("TMDB API key not configured")
+	}
+	endpoint := fmt.Sprintf("https://api.themoviedb.org/3/tv/%d", tmdbID)
+	resp, err := c.doRequest(endpoint, url.Values{})
+	if err != nil {
+		return nil, fmt.Errorf("TMDB TV details: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("TMDB returned status: %d", resp.StatusCode)
+	}
+	var d TVDetails
+	if err := json.NewDecoder(resp.Body).Decode(&d); err != nil {
+		return nil, fmt.Errorf("TMDB TV decode: %w", err)
+	}
+	return &d, nil
+}
+
 // ResolveTVDBID tries to find the TVDB ID for a given IMDb string (e.g. tt123456)
 func (c *Client) ResolveTVDBID(imdbID string) (string, error) {
 	// 1. Find the TMDB ID from IMDb ID

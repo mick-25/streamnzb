@@ -88,6 +88,9 @@ type Item struct {
 	// ActualGUID is the real indexer GUID when using meta-indexers like NZBHydra2
 	// This is extracted from the link field and not part of the XML
 	ActualGUID string `xml:"-"`
+
+	// QuerySource is "id" or "text" when using ForceQuery dual search. Used to prioritize ID-based results.
+	QuerySource string `xml:"-"`
 }
 
 // Attribute represents Newznab attributes

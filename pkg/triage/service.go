@@ -13,10 +13,11 @@ import (
 
 // Candidate represents a filtered search result suitable for deep inspection
 type Candidate struct {
-	Result   indexer.Item
-	Metadata *parser.ParsedRelease
-	Group    string // 4K, 1080p, 720p, SD
-	Score    int
+	Result      indexer.Item
+	Metadata    *parser.ParsedRelease
+	Group       string // 4K, 1080p, 720p, SD
+	Score       int
+	QuerySource string // "id" or "text" — ID-based results are prioritized
 }
 
 // Service implements smart triage logic
@@ -36,7 +37,7 @@ func NewService(filterConfig *config.FilterConfig, sortConfig config.SortConfig)
 // Filter processes search results and returns candidates sorted by score
 func (s *Service) Filter(results []indexer.Item) []Candidate {
 	var candidates []Candidate
-	
+
 	for _, res := range results {
 		// Parse title
 		parsed := parser.ParseReleaseTitle(res.Title)
@@ -53,15 +54,25 @@ func (s *Service) Filter(results []indexer.Item) []Candidate {
 
 		// Calculate score
 		score := s.calculateScore(res, parsed)
-		
+
 		// Apply score boost for preferred attributes
 		score += scoreBoost(s.SortConfig, parsed)
 
+		// Prioritize ID-based results over text-based (ForceQuery dual search)
+		if res.QuerySource == "id" {
+			score += 50_000_000 // Large boost so ID results sort first
+		}
+
+		querySource := res.QuerySource
+		if querySource == "" {
+			querySource = "id"
+		}
 		candidates = append(candidates, Candidate{
-			Result:   res,
-			Metadata: parsed,
-			Group:    group,
-			Score:    score,
+			Result:      res,
+			Metadata:    parsed,
+			Group:       group,
+			Score:       score,
+			QuerySource: querySource,
 		})
 	}
 	
@@ -258,9 +269,11 @@ func (s *Service) deduplicateReleases(candidates []Candidate) []Candidate {
 			seen[normalized] = candidate
 			continue
 		}
-		
-		// Keep the better release (higher score)
+
+		// Keep the better release (higher score; on tie, prefer ID-based)
 		if candidate.Score > existing.Score {
+			seen[normalized] = candidate
+		} else if candidate.Score == existing.Score && candidate.QuerySource == "id" && existing.QuerySource != "id" {
 			seen[normalized] = candidate
 		}
 	}
