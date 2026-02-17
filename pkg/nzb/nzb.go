@@ -205,6 +205,30 @@ func getFilePattern(filename string) string {
 	return strings.Trim(s, " .-_")
 }
 
+// IsRARRelease returns true if the main content of the release is RAR-based.
+// RAR playback is not supported due to seeking issues.
+func (n *NZB) IsRARRelease() bool {
+	return n.CompressionType() == "rar"
+}
+
+// CompressionType returns the release compression type for AvailNZB: "rar", "7z", or "direct".
+func (n *NZB) CompressionType() string {
+	contentFiles := n.GetContentFiles()
+	if len(contentFiles) == 0 {
+		return "direct"
+	}
+	for _, info := range contentFiles {
+		ext := strings.ToLower(info.Extension)
+		if ext == ".rar" || isArchivePart(ext) {
+			return "rar"
+		}
+		if ext == ".7z" || strings.Contains(strings.ToLower(info.Filename), ".7z.001") {
+			return "7z"
+		}
+	}
+	return "direct"
+}
+
 // GetMainVideoFile returns the main video file from the NZB (Deprecated: use GetContentFiles)
 func (n *NZB) GetMainVideoFile() *FileInfo {
 	files := n.GetContentFiles()

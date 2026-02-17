@@ -424,7 +424,7 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string, 
 
 	// 2. AvailNZB first: get all cached releases, filter per configuration, check limits
 	if s.availClient != nil && s.availClient.BaseURL != "" && (contentIDs.ImdbID != "" || contentIDs.TvdbID != "") {
-		releases, err := s.availClient.GetReleases(contentIDs.ImdbID, contentIDs.TvdbID, contentIDs.Season, contentIDs.Episode, availIndexers)
+		releases, err := s.availClient.GetReleases(contentIDs.ImdbID, contentIDs.TvdbID, contentIDs.Season, contentIDs.Episode, availIndexers, "direct,7z")
 		if err == nil && releases != nil && len(releases.Releases) > 0 {
 			var availItems []indexer.Item
 			detailsURLToRelease := make(map[string]*availnzb.ReleaseItem)
@@ -514,7 +514,7 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string, 
 		logger.Debug("Indexer candidates after triage", "count", len(candidates))
 
 		if s.availClient != nil && s.availClient.BaseURL != "" && (contentIDs.ImdbID != "" || contentIDs.TvdbID != "") {
-			releases, _ := s.availClient.GetReleases(contentIDs.ImdbID, contentIDs.TvdbID, contentIDs.Season, contentIDs.Episode, availIndexers)
+			releases, _ := s.availClient.GetReleases(contentIDs.ImdbID, contentIDs.TvdbID, contentIDs.Season, contentIDs.Episode, availIndexers, "direct,7z")
 			if releases != nil && len(releases.Releases) > 0 {
 				ourProviders := make(map[string]bool)
 				for _, h := range s.validator.GetProviderHosts() {
@@ -744,7 +744,7 @@ func (s *Server) warmAvailNZBCache(ctx context.Context, req indexer.SearchReques
 			continue
 		}
 		streamSize := nzbParsed.TotalSize()
-		meta := availnzb.ReportMeta{ReleaseName: item.Title, Size: streamSize}
+		meta := availnzb.ReportMeta{ReleaseName: item.Title, Size: streamSize, CompressionType: nzbParsed.CompressionType()}
 		meta.ImdbID = contentIDs.ImdbID
 		meta.TvdbID = contentIDs.TvdbID
 		meta.Season = contentIDs.Season
@@ -870,23 +870,26 @@ func (s *Server) validateCandidate(ctx context.Context, cand triage.Candidate, d
 			return Stream{}, fmt.Errorf("no best provider")
 		}
 
-		// Async report to AvailNZB (POST /api/v1/report); report no longer includes download_link
-		go func() {
-			meta := availnzb.ReportMeta{ReleaseName: item.Title, Size: item.Size}
-			if contentIDs != nil {
-				meta.ImdbID = contentIDs.ImdbID
-				meta.TvdbID = contentIDs.TvdbID
-				meta.Season = contentIDs.Season
-				meta.Episode = contentIDs.Episode
-			}
-			if meta.ImdbID == "" && meta.TvdbID == "" {
-				logger.Debug("AvailNZB report skipped (good): no imdb_id or tvdb_id for this content", "url", item.ReleaseDetailsURL())
-				return
-			}
-			if err := s.availClient.ReportAvailability(item.ReleaseDetailsURL(), bestResult.Host, true, meta); err != nil {
-				logger.Debug("AvailNZB report failed", "err", err, "url", item.ReleaseDetailsURL())
-			}
-		}()
+		// Report to AvailNZB (including RAR — we filter them at GetReleases)
+		reportMeta := availnzb.ReportMeta{ReleaseName: item.Title, Size: streamSize, CompressionType: nzbParsed.CompressionType()}
+		if contentIDs != nil {
+			reportMeta.ImdbID = contentIDs.ImdbID
+			reportMeta.TvdbID = contentIDs.TvdbID
+			reportMeta.Season = contentIDs.Season
+			reportMeta.Episode = contentIDs.Episode
+		}
+		if reportMeta.ImdbID != "" || reportMeta.TvdbID != "" {
+			go func() {
+				available := true
+				if err := s.availClient.ReportAvailability(item.ReleaseDetailsURL(), bestResult.Host, available, reportMeta); err != nil {
+					logger.Debug("AvailNZB report failed", "err", err, "url", item.ReleaseDetailsURL())
+				}
+			}()
+		}
+
+		if nzbParsed.IsRARRelease() {
+			return Stream{}, fmt.Errorf("RAR playback not supported (seeking issues)")
+		}
 
 		// Store NZB in session manager
 		logger.Trace("validateCandidate: CreateSession start", "title", item.Title)
@@ -953,6 +956,12 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 	if _, err = sess.GetOrDownloadNZB(s.sessionManager); err != nil {
 		logger.Error("Failed to lazy load NZB", "id", sessionID, "err", err)
 		http.Error(w, "Failed to load NZB content", http.StatusInternalServerError)
+		return
+	}
+
+	if sess.NZB != nil && sess.NZB.IsRARRelease() {
+		logger.Info("RAR playback not supported (seeking issues)", "id", sessionID)
+		forceDisconnect(w, s.baseURL)
 		return
 	}
 
@@ -1046,6 +1055,9 @@ func (s *Server) reportBadRelease(sess *session.Session, streamErr error) {
 		if meta.ReleaseName == "" {
 			return
 		}
+		if sess.NZB != nil {
+			meta.CompressionType = sess.NZB.CompressionType()
+		}
 		providerURL := "ALL"
 		if hosts := s.validator.GetProviderHosts(); len(hosts) > 0 {
 			providerURL = hosts[0]
@@ -1111,6 +1123,12 @@ func (s *Server) handleDebugPlay(w http.ResponseWriter, r *http.Request, device 
 	if err != nil {
 		logger.Error("Failed to parse NZB", "err", err)
 		http.Error(w, "Failed to parse NZB", http.StatusInternalServerError)
+		return
+	}
+
+	if nzbParsed.IsRARRelease() {
+		logger.Info("RAR playback not supported (seeking issues)", "nzb", nzbPath)
+		forceDisconnect(w, s.baseURL)
 		return
 	}
 

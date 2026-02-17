@@ -24,16 +24,18 @@ type Client struct {
 // ReportRequest is the body for POST /api/v1/report (authenticated).
 // For movies: set ImdbID. For TV: set TvdbID, Season, Episode.
 // download_link is not sent; status/releases return it (Newznab API URL without apikey—add apikey when fetching).
+// compression_type: "direct", "7z", or "rar" — used by AvailNZB to filter GetReleases.
 type ReportRequest struct {
-	URL         string `json:"url"`               // Indexer release URL (details link)
-	ReleaseName string `json:"release_name"`      // Release name (e.g. Show.Name.S01E02.720p.WEB.x264-GROUP)
-	Size        int64  `json:"size"`              // File size in bytes (required)
-	ProviderURL string `json:"provider_url"`      // Usenet provider hostname
-	Status      bool   `json:"status"`            // true = available, false = failed
-	ImdbID      string `json:"imdb_id,omitempty"` // Required for movies
-	TvdbID      string `json:"tvdb_id,omitempty"` // Required for TV (with season, episode)
-	Season      int    `json:"season,omitempty"`  // Required for TV
-	Episode     int    `json:"episode,omitempty"` // Required for TV
+	URL              string `json:"url"`                        // Indexer release URL (details link)
+	ReleaseName      string `json:"release_name"`               // Release name (e.g. Show.Name.S01E02.720p.WEB.x264-GROUP)
+	Size             int64  `json:"size"`                       // File size in bytes (required)
+	CompressionType  string `json:"compression_type,omitempty"` // "direct", "7z", or "rar"
+	ProviderURL      string `json:"provider_url"`               // Usenet provider hostname
+	Status           bool   `json:"status"`                     // true = available, false = failed
+	ImdbID           string `json:"imdb_id,omitempty"`          // Required for movies
+	TvdbID           string `json:"tvdb_id,omitempty"`          // Required for TV (with season, episode)
+	Season           int    `json:"season,omitempty"`           // Required for TV
+	Episode          int    `json:"episode,omitempty"`          // Required for TV
 }
 
 // ProviderStatus is one provider's status in a summary.
@@ -72,13 +74,15 @@ type ReleasesResponse struct {
 }
 
 // ReportMeta holds data for reporting (movie or TV). ReleaseName and Size are required by the API.
+// CompressionType: "direct", "7z", or "rar" — optional; when empty, API may default.
 type ReportMeta struct {
-	ReleaseName string // Release name (e.g. item.Title)
-	Size        int64  // File size in bytes (required)
-	ImdbID      string // For movies
-	TvdbID      string // For TV
-	Season      int
-	Episode     int
+	ReleaseName     string // Release name (e.g. item.Title)
+	Size            int64  // File size in bytes (required)
+	CompressionType string // "direct", "7z", or "rar"
+	ImdbID          string // For movies
+	TvdbID          string // For TV
+	Season          int
+	Episode         int
 }
 
 func NewClient(baseURL, apiKey string) *Client {
@@ -109,11 +113,12 @@ func (c *Client) ReportAvailability(releaseURL string, providerURL string, statu
 	}
 
 	body := ReportRequest{
-		URL:         releaseURL,
-		ReleaseName: meta.ReleaseName,
-		Size:        meta.Size,
-		ProviderURL: providerURL,
-		Status:      status,
+		URL:             releaseURL,
+		ReleaseName:     meta.ReleaseName,
+		Size:            meta.Size,
+		CompressionType: meta.CompressionType,
+		ProviderURL:     providerURL,
+		Status:          status,
 	}
 	if meta.ImdbID != "" {
 		body.ImdbID = meta.ImdbID
@@ -205,7 +210,8 @@ func (c *Client) GetStatus(releaseURL string, provider string) (*StatusResponse,
 
 // GetReleases returns cached releases for content (GET /api/v1/releases).
 // For movies: set imdbID only. For TV: set tvdbID, season, episode. indexers is optional (comma-separated hostnames).
-func (c *Client) GetReleases(imdbID string, tvdbID string, season, episode int, indexers []string) (*ReleasesResponse, error) {
+// compressionTypes filters results; use "direct,7z" to exclude RAR (RAR playback has seeking issues).
+func (c *Client) GetReleases(imdbID string, tvdbID string, season, episode int, indexers []string, compressionTypes string) (*ReleasesResponse, error) {
 	if c.BaseURL == "" {
 		logger.Trace("AvailNZB GetReleases skipped", "reason", "no base URL")
 		return nil, nil
@@ -223,6 +229,9 @@ func (c *Client) GetReleases(imdbID string, tvdbID string, season, episode int, 
 	}
 	if len(indexers) > 0 {
 		params.Set("indexers", strings.Join(indexers, ","))
+	}
+	if compressionTypes != "" {
+		params.Set("compression_types", compressionTypes)
 	}
 	reqURL := c.BaseURL + apiPath + "/releases?" + params.Encode()
 
