@@ -876,7 +876,7 @@ func (s *Server) warmAvailNZBCache(ctx context.Context, req indexer.SearchReques
 	candidates := s.triageCandidates(nil, searchResp.Channel.Items)
 	for _, cand := range candidates {
 		detailsURL := cand.Result.ReleaseDetailsURL()
-		if detailsURL == "" || knownURLs[detailsURL] {
+		if detailsURL == "" || knownURLs[detailsURL] || isPrivateReleaseURL(detailsURL) {
 			continue
 		}
 		item := cand.Result
@@ -1028,7 +1028,7 @@ func (s *Server) validateCandidate(ctx context.Context, cand triage.Candidate, d
 			reportMeta.Season = contentIDs.Season
 			reportMeta.Episode = contentIDs.Episode
 		}
-		if reportMeta.ImdbID != "" || reportMeta.TvdbID != "" {
+		if (reportMeta.ImdbID != "" || reportMeta.TvdbID != "") && !isPrivateReleaseURL(item.ReleaseDetailsURL()) {
 			go func() {
 				available := true
 				if err := s.availClient.ReportAvailability(item.ReleaseDetailsURL(), bestResult.Host, available, reportMeta); err != nil {
@@ -1185,6 +1185,26 @@ func (s *Server) reportBadRelease(sess *session.Session, streamErr error) {
 	s.reportUnstreamableRelease(sess, errMsg)
 }
 
+// isPrivateReleaseURL returns true if the URL host is private/local (localhost).
+// We must not report such URLs to AvailNZB — they're from someone's NZBHydra proxy and useless to others.
+func isPrivateReleaseURL(rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Host == "" {
+		return true // treat unparseable as private to be safe
+	}
+	host, _, err := net.SplitHostPort(u.Host)
+	if err != nil {
+		host = u.Hostname()
+	}
+	ip := net.ParseIP(host)
+	if ip != nil {
+		return ip.IsPrivate() || ip.IsLoopback()
+	}
+	// hostname
+	lower := strings.ToLower(host)
+	return lower == "localhost" || strings.HasSuffix(lower, ".local")
+}
+
 // reportUnstreamableRelease reports unstreamable releases (corrupted, etc.) to AvailNZB as unavailable.
 func (s *Server) reportUnstreamableRelease(sess *session.Session, reason string) {
 	if s.availClient == nil || s.availClient.BaseURL == "" {
@@ -1211,6 +1231,10 @@ func (s *Server) doReportToAvailNZB(sess *session.Session, available bool) {
 			releaseURL = sess.NZBURL
 		}
 		if releaseURL == "" {
+			return
+		}
+		if isPrivateReleaseURL(releaseURL) {
+			logger.Debug("Skipping AvailNZB report: release URL is private (e.g. NZBHydra proxy)", "url", releaseURL)
 			return
 		}
 		meta := availnzb.ReportMeta{ReleaseName: sess.ReportReleaseName, Size: sess.ReportSize}

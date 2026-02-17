@@ -91,45 +91,16 @@ func BuildComponents(cfg *config.Config) (*InitializedComponents, error) {
 
 		switch indexerType {
 		case "nzbhydra":
-			// Try to discover individual indexers first
 			discovered, hydraHosts, err := nzbhydra.GetConfiguredIndexers(idxCfg.URL, idxCfg.APIKey, usageMgr)
 			if err != nil {
-				// Fall back to single aggregated client if discovery fails
-				logger.Debug("NZBHydra2 indexer discovery failed, using aggregated client", "err", err)
-				hydraClient, err := nzbhydra.NewClient(idxCfg.URL, idxCfg.APIKey, idxCfg.Name, usageMgr)
-				if err != nil {
-					logger.Error("Failed to initialize NZBHydra2 from indexer list", "name", idxCfg.Name, "err", err)
-				} else {
-					indexers = append(indexers, hydraClient)
-					logger.Info("Initialized NZBHydra2 aggregated client", "name", idxCfg.Name)
-					// Fallback: use Hydra host so AvailNZB may still return something
-					if h := hostFromIndexerURL(idxCfg.URL); h != "" && !seenHost[h] {
+				logger.Error("Failed to initialize NZBHydra2", "name", idxCfg.Name, "err", err)
+			} else {
+				indexers = append(indexers, discovered...)
+				logger.Info("Initialized NZBHydra2 indexers", "name", idxCfg.Name, "count", len(discovered))
+				for _, h := range hydraHosts {
+					if h != "" && !seenHost[h] {
 						seenHost[h] = true
 						availNzbHosts = append(availNzbHosts, h)
-					}
-				}
-			} else {
-				if len(discovered) > 0 {
-					indexers = append(indexers, discovered...)
-					logger.Info("Initialized NZBHydra2 indexers from discovery", "name", idxCfg.Name, "count", len(discovered))
-					for _, h := range hydraHosts {
-						if h != "" && !seenHost[h] {
-							seenHost[h] = true
-							availNzbHosts = append(availNzbHosts, h)
-						}
-					}
-				} else {
-					// Fall back to aggregated client if no indexers discovered
-					hydraClient, err := nzbhydra.NewClient(idxCfg.URL, idxCfg.APIKey, idxCfg.Name, usageMgr)
-					if err != nil {
-						logger.Error("Failed to initialize NZBHydra2 from indexer list", "name", idxCfg.Name, "err", err)
-					} else {
-						indexers = append(indexers, hydraClient)
-						logger.Info("Initialized NZBHydra2 aggregated client (no indexers discovered)", "name", idxCfg.Name)
-						if h := hostFromIndexerURL(idxCfg.URL); h != "" && !seenHost[h] {
-							seenHost[h] = true
-							availNzbHosts = append(availNzbHosts, h)
-						}
 					}
 				}
 			}

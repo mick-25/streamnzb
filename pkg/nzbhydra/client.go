@@ -267,10 +267,10 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 		}
 	}
 
-	// Resolve all details_links in one batch call to internal API
+	// Resolve all details_links in one batch call (NZBHydra2 has no public API for this; ResolveDetailsLinks fails)
 	detailsLinks, err := c.ResolveDetailsLinks(req)
 	if err != nil {
-		logger.Warn("Failed to resolve details_links from NZBHydra2 internal API", "err", err)
+		logger.Debug("NZBHydra2 details resolution not available", "err", err)
 		// Continue without details_links - we'll fall back to using the hash
 	} else {
 		// Populate ActualGUID for each item

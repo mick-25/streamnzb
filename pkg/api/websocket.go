@@ -685,20 +685,24 @@ func (s *Server) validateConfig(cfg *config.Config) map[string]string {
 		}(i, p)
 	}
 
-	// 2. Validate NZBHydra2
+	// 2. Validate NZBHydra2 (use discovery to verify API key)
 	if cfg.NZBHydra2URL != "" {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, err := nzbhydra.NewClient(cfg.NZBHydra2URL, cfg.NZBHydra2APIKey, "Validation", nil)
+			indexers, _, err := nzbhydra.GetConfiguredIndexers(cfg.NZBHydra2URL, cfg.NZBHydra2APIKey, nil)
 			if err != nil {
 				mu.Lock()
 				errStr := err.Error()
-				if strings.Contains(strings.ToLower(errStr), "api key") || strings.Contains(strings.ToLower(errStr), "hydra error") {
+				if strings.Contains(strings.ToLower(errStr), "api key") || strings.Contains(strings.ToLower(errStr), "forbidden") || strings.Contains(strings.ToLower(errStr), "wrong") {
 					errors["nzbhydra_api_key"] = errStr
 				} else {
 					errors["nzbhydra_url"] = errStr
 				}
+				mu.Unlock()
+			} else if cfg.NZBHydra2APIKey != "" && len(indexers) == 0 {
+				mu.Lock()
+				errors["nzbhydra_api_key"] = "Success, but found no indexers (search returned no results)"
 				mu.Unlock()
 			}
 		}()
