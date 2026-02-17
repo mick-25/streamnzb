@@ -257,8 +257,8 @@ func (dm *DeviceManager) CreateDevice(username, password string, adminUsername s
 	device := &Device{
 		Username: username,
 		Token:    token,
-		Filters:  config.FilterConfig{}, // Default empty filters (device inherits global defaults)
-		Sorting:  config.SortConfig{},   // Default empty sorting (device inherits global defaults)
+		Filters:  config.DefaultFilterConfig(),
+		Sorting:  config.DefaultSortConfig(),
 	}
 
 	dm.devices[username] = device

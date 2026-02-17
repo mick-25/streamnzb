@@ -75,6 +75,14 @@ type FilterConfig struct {
 	BlockedGroups []string `json:"blocked_groups"`
 }
 
+// DefaultFilterConfig returns built-in filter defaults for fresh devices.
+func DefaultFilterConfig() FilterConfig {
+	return FilterConfig{
+		BlockedQualities: []string{"CAM", "TeleSync"},
+		BlockCam:         true,
+	}
+}
+
 // SortConfig holds weights for triage scoring
 type SortConfig struct {
 	ResolutionWeights map[string]int `json:"resolution_weights"`
@@ -88,6 +96,51 @@ type SortConfig struct {
 	// Preference boosts (prioritization, not filtering)
 	PreferredGroups    []string `json:"preferred_groups"`    // e.g., ["FLUX", "NTb"]
 	PreferredLanguages []string `json:"preferred_languages"` // e.g., ["en", "multi"]
+}
+
+// DefaultSortConfig returns built-in sort weights used when config has empty values.
+func DefaultSortConfig() SortConfig {
+	return SortConfig{
+		ResolutionWeights: map[string]int{
+			"4k":    4000000,
+			"1080p": 3000000,
+			"720p":  2000000,
+			"sd":    1000000,
+		},
+		CodecWeights: map[string]int{
+			"HEVC": 1000,
+			"x265": 1000,
+			"x264": 500,
+			"AVC":  500,
+		},
+		AudioWeights: map[string]int{
+			"Atmos":  1500,
+			"TrueHD": 1200,
+			"DTS-HD": 1000,
+			"DTS-X":  1000,
+			"DTS":    500,
+			"DD+":    400,
+			"DD":     300,
+			"AC3":    200,
+			"5.1":    500,
+			"7.1":    1000,
+		},
+		QualityWeights: map[string]int{
+			"BluRay":  2000,
+			"WEB-DL":  1500,
+			"WEBRip":  1200,
+			"HDTV":    1000,
+			"Blu-ray": 2000,
+		},
+		VisualTagWeights: map[string]int{
+			"DV":     1500,
+			"HDR10+": 1200,
+			"HDR":    1000,
+			"3D":     800,
+		},
+		GrabWeight: 0.5,
+		AgeWeight:  1.0,
+	}
 }
 
 // IndexerConfig represents an internal Newznab indexer configuration

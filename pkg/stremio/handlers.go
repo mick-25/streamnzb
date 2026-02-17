@@ -322,11 +322,10 @@ func addAPIKeyToDownloadURL(downloadURL string, indexers []config.IndexerConfig)
 	return downloadURL
 }
 
-// triageCandidates returns filtered+sorted candidates (device or global triage).
+// triageCandidates returns filtered+sorted candidates. Devices use their own filters and sorting;
+// admin and unauthenticated requests use global config.
 func (s *Server) triageCandidates(device *auth.Device, items []indexer.Item) []triage.Candidate {
-	if device != nil && device.Username != s.config.GetAdminUsername() &&
-		(len(device.Filters.AllowedQualities) > 0 || device.Filters.MinResolution != "" || device.Filters.MaxResolution != "" || len(device.Filters.AllowedCodecs) > 0 ||
-			len(device.Sorting.ResolutionWeights) > 0 || device.Sorting.GrabWeight != 0) {
+	if device != nil && device.Username != s.config.GetAdminUsername() {
 		ts := triage.NewService(&device.Filters, device.Sorting)
 		return ts.Filter(items)
 	}
@@ -415,11 +414,11 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string, 
 		}
 		// Only check for resolution variety if per-resolution limiting is enabled
 		if s.config.MaxStreamsPerResolution > 0 {
-			// Make a copy and sort to ensure quality order (limitStreamsPerResolution expects sorted input)
+			// Make a copy and sort by triage score (limitStreamsPerResolution expects sorted input)
 			sorted := make([]Stream, len(currentStreams))
 			copy(sorted, currentStreams)
 			sort.Slice(sorted, func(i, j int) bool {
-				return getQualityScore(sorted[i].Name) > getQualityScore(sorted[j].Name)
+				return streamScore(sorted[i]) > streamScore(sorted[j])
 			})
 			limited := limitStreamsPerResolution(sorted, s.config.MaxStreamsPerResolution, maxStreams)
 			// If limiting reduces the count below maxStreams, we need more streams for variety
@@ -494,9 +493,9 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string, 
 				}
 				logger.Debug("AvailNZB phase done", "streams", len(streams))
 
-				// Sort AvailNZB streams by quality before checking if we have enough
+				// Sort AvailNZB streams by triage score before checking if we have enough
 				sort.Slice(streams, func(i, j int) bool {
-					return getQualityScore(streams[i].Name) > getQualityScore(streams[j].Name)
+					return streamScore(streams[i]) > streamScore(streams[j])
 				})
 
 				// Check if we have enough streams (max streams + per-resolution limits)
@@ -633,10 +632,9 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string, 
 					goto doneCollect
 				}
 				streams = append(streams, stream)
-				// Sort streams by quality before checking (limitStreamsPerResolution expects sorted input)
-				// Note: This is a bit inefficient but ensures correctness during progressive collection
+				// Sort streams by triage score before checking (limitStreamsPerResolution expects sorted input)
 				sort.Slice(streams, func(i, j int) bool {
-					return getQualityScore(streams[i].Name) > getQualityScore(streams[j].Name)
+					return streamScore(streams[i]) > streamScore(streams[j])
 				})
 				// Check if we have enough streams after each addition
 				if hasEnoughStreams(streams) {
@@ -693,9 +691,9 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string, 
 
 	}
 
-	// Final sort all streams by quality before limiting (ensures best quality first)
+	// Final sort all streams by triage score (respects user's priority config)
 	sort.Slice(streams, func(i, j int) bool {
-		return getQualityScore(streams[i].Name) > getQualityScore(streams[j].Name)
+		return streamScore(streams[i]) > streamScore(streams[j])
 	})
 
 	// Apply limiting once at the end: per-resolution limiting if enabled, otherwise just cap at maxStreams
@@ -1353,7 +1351,13 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// getQualityScore assigns a score for sorting (higher = better quality)
+// streamScore returns the triage score for sorting (higher = better). Uses the score from
+// triage which respects the user's priority configuration (resolution, codec, etc.).
+func streamScore(s Stream) int {
+	return s.Score
+}
+
+// getQualityScore assigns a score from stream name (legacy fallback, not used for stream sorting)
 func getQualityScore(name string) int {
 	nameLower := strings.ToLower(name)
 
@@ -1491,9 +1495,9 @@ func limitStreamsPerResolution(streams []Stream, maxPerResolution int, maxTotal 
 		}
 	}
 
-	// Final sort by quality score to maintain overall quality order
+	// Final sort by triage score to maintain user's priority order
 	sort.Slice(result, func(i, j int) bool {
-		return getQualityScore(result[i].Name) > getQualityScore(result[j].Name)
+		return streamScore(result[i]) > streamScore(result[j])
 	})
 
 	logger.Debug("Limited streams per resolution (final)", "total", len(result), "maxPerResolution", maxPerResolution, "maxTotal", maxTotal)

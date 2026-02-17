@@ -168,33 +168,26 @@ func (s *Service) calculateScore(res indexer.Item, p *parser.ParsedRelease) int 
 	// 2. Attribute Boosts (Secondary Sort)
 	attributeBoost := 0
 
-	// Codec boost
+	// Codec boost: use max matching weight (order from PriorityList matters via weight values)
 	if p.Codec != "" {
-		for name, weight := range s.SortConfig.CodecWeights {
-			if strings.Contains(strings.ToLower(p.Codec), strings.ToLower(name)) {
-				attributeBoost += weight
-				break
-			}
+		if w := maxMatchingWeight(s.SortConfig.CodecWeights, strings.ToLower(p.Codec), true); w > 0 {
+			attributeBoost += w
 		}
 	}
 
-	// Audio boost
+	// Audio boost: sum all matching (e.g. "Atmos" + "5.1")
 	for _, audio := range p.Audio {
 		for name, weight := range s.SortConfig.AudioWeights {
 			if strings.Contains(strings.ToLower(audio), strings.ToLower(name)) {
 				attributeBoost += weight
-				// Note: We don't break here to allow multiple audio boosts (e.g., "Atmos" + "5.1")
 			}
 		}
 	}
 
-	// Quality boost
+	// Quality boost: use max matching weight
 	if p.Quality != "" {
-		for name, weight := range s.SortConfig.QualityWeights {
-			if strings.Contains(strings.ToLower(p.Quality), strings.ToLower(name)) {
-				attributeBoost += weight
-				break
-			}
+		if w := maxMatchingWeight(s.SortConfig.QualityWeights, strings.ToLower(p.Quality), true); w > 0 {
+			attributeBoost += w
 		}
 	}
 
@@ -205,24 +198,20 @@ func (s *Service) calculateScore(res indexer.Item, p *parser.ParsedRelease) int 
 		visualTags := make([]string, 0)
 		visualTags = append(visualTags, p.HDR...)
 		if p.ThreeD != "" {
-			// Use the actual 3D format, but also check for "3D" weight
 			visualTags = append(visualTags, p.ThreeD)
 		}
 		for _, tag := range visualTags {
 			tagLower := strings.ToLower(tag)
+			var maxWeight int
 			for name, weight := range s.SortConfig.VisualTagWeights {
 				nameLower := strings.ToLower(name)
-				// Direct match
-				if strings.Contains(tagLower, nameLower) {
-					attributeBoost += weight
-					break
-				}
-				// Special handling: "3D" weight applies to all 3D formats
-				if nameLower == "3d" && strings.HasPrefix(tagLower, "3d") {
-					attributeBoost += weight
-					break
+				if strings.Contains(tagLower, nameLower) || (nameLower == "3d" && strings.HasPrefix(tagLower, "3d")) {
+					if weight > maxWeight {
+						maxWeight = weight
+					}
 				}
 			}
+			attributeBoost += maxWeight
 		}
 	}
 
@@ -320,4 +309,18 @@ func normalizeReleaseName(p *parser.ParsedRelease) string {
 	return strings.Join(parts, "|")
 }
 
-
+// maxMatchingWeight returns the highest weight from the map where value contains the key (case-insensitive).
+// Ensures user's priority order (via weight values) is respected when multiple keys could match.
+func maxMatchingWeight(weights map[string]int, value string, valueContainsKey bool) int {
+	var max int
+	for name, weight := range weights {
+		nameLower := strings.ToLower(name)
+		valLower := strings.ToLower(value)
+		if valueContainsKey && strings.Contains(valLower, nameLower) {
+			if weight > max {
+				max = weight
+			}
+		}
+	}
+	return max
+}

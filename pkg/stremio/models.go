@@ -16,6 +16,9 @@ type Stream struct {
 	// Display name in Stremio
 	Name string `json:"name,omitempty"`
 
+	// Score from triage (higher = better); used for sorting, not sent to client
+	Score int `json:"-"`
+
 	// Optional metadata (shown in Stremio UI)
 	Title         string         `json:"title,omitempty"`
 	Description   string         `json:"description,omitempty"`
