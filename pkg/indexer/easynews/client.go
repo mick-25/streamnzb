@@ -191,8 +191,9 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 	}, nil
 }
 
-// DownloadNZB downloads an NZB file
-func (c *Client) DownloadNZB(nzbURL string) ([]byte, error) {
+// DownloadNZB downloads an NZB file.
+// ctx is used for timeout; use 60s for resolve/lazy load, 5s for validation.
+func (c *Client) DownloadNZB(ctx context.Context, nzbURL string) ([]byte, error) {
 	if err := c.checkDownloadLimit(); err != nil {
 		return nil, err
 	}

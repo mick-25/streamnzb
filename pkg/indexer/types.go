@@ -5,22 +5,25 @@ import (
 	"encoding/xml"
 	"strconv"
 	"strings"
+
+	"streamnzb/pkg/release"
 )
 
 // Indexer defines the interface for interacting with Usenet indexers
 type Indexer interface {
 	Search(req SearchRequest) (*SearchResponse, error)
-	DownloadNZB(nzbURL string) ([]byte, error)
+	DownloadNZB(ctx context.Context, nzbURL string) ([]byte, error)
 	Ping() error
 	Name() string
 	GetUsage() Usage
 }
 
 // IndexerWithResolve is an optional interface implemented by Prowlarr client and Aggregator.
-// When a direct indexer URL comes from AvailNZB, ResolveDownloadURL searches by title/size
+// When a direct indexer URL comes from AvailNZB, ResolveDownloadURL searches by title/size/cat
 // and returns the result's Link (e.g. Prowlarr proxy URL) so DownloadNZB succeeds.
+// cat is the Newznab category: "2000" for movies, "5000" for TV, or "" for general.
 type IndexerWithResolve interface {
-	ResolveDownloadURL(ctx context.Context, directURL, title string, size int64) (resolvedURL string, err error)
+	ResolveDownloadURL(ctx context.Context, directURL, title string, size int64, cat string) (resolvedURL string, err error)
 }
 
 // Usage represents the current API and download usage for an indexer
@@ -47,9 +50,11 @@ type SearchRequest struct {
 
 // SearchResponse represents the Newznab XML response. After aggregation, items are normalized
 // (NormalizeSearchResponse) so Link and Size are populated from Enclosure/attributes when missing.
+// Releases is populated from Items by NormalizeSearchResponse for use by triage and handlers.
 type SearchResponse struct {
-	XMLName xml.Name `xml:"rss"`
-	Channel Channel  `xml:"channel"`
+	XMLName  xml.Name        `xml:"rss"`
+	Channel  Channel         `xml:"channel"`
+	Releases []*release.Release `xml:"-"` // Populated by NormalizeSearchResponse
 }
 
 // NewznabResponse contains metadata about the results
@@ -116,6 +121,31 @@ func (i *Item) GetAttribute(name string) string {
 	return ""
 }
 
+// ToRelease returns a unified Release for comparison and use across the app.
+func (i *Item) ToRelease() *release.Release {
+	if i == nil {
+		return nil
+	}
+	grabs := 0
+	if s := i.GetAttribute("grabs"); s != "" {
+		if n, err := strconv.Atoi(s); err == nil {
+			grabs = n
+		}
+	}
+	return &release.Release{
+		Title:         i.Title,
+		Link:          i.Link,
+		DetailsURL:    i.ReleaseDetailsURL(),
+		Size:          i.Size,
+		Indexer:       i.ActualIndexer,
+		SourceIndexer: i.SourceIndexer,
+		PubDate:       i.PubDate,
+		GUID:          i.GUID,
+		QuerySource:   i.QuerySource,
+		Grabs:         grabs,
+	}
+}
+
 // ReleaseDetailsURL returns the stable indexer details URL for this release (for AvailNZB and reporting).
 // Most indexers use GUID or details_link for the details page; Link is typically the NZB download URL.
 func (i *Item) ReleaseDetailsURL() string {
@@ -149,13 +179,19 @@ func NormalizeItem(item *Item) {
 	}
 }
 
-// NormalizeSearchResponse runs NormalizeItem on every item in the response.
+// NormalizeSearchResponse runs NormalizeItem on every item and populates Releases.
 func NormalizeSearchResponse(resp *SearchResponse) {
 	if resp == nil {
 		return
 	}
 	for i := range resp.Channel.Items {
 		NormalizeItem(&resp.Channel.Items[i])
+	}
+	resp.Releases = make([]*release.Release, 0, len(resp.Channel.Items))
+	for i := range resp.Channel.Items {
+		if rel := resp.Channel.Items[i].ToRelease(); rel != nil {
+			resp.Releases = append(resp.Releases, rel)
+		}
 	}
 }
 

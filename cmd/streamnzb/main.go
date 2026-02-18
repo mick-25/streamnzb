@@ -7,21 +7,18 @@ import (
 	"path/filepath"
 	"time"
 
-	"streamnzb/pkg/api"
 	"streamnzb/pkg/auth"
-	"streamnzb/pkg/availnzb"
-	"streamnzb/pkg/env"
+	"streamnzb/pkg/core/app"
+	"streamnzb/pkg/core/config"
+	"streamnzb/pkg/core/env"
+	"streamnzb/pkg/core/logger"
+	"streamnzb/pkg/core/persistence"
 	"streamnzb/pkg/initialization"
-	"streamnzb/pkg/logger"
-	"streamnzb/pkg/nntp/proxy"
-	"streamnzb/pkg/persistence"
 	"streamnzb/pkg/session"
-	"streamnzb/pkg/stremio"
-	"streamnzb/pkg/tmdb"
-	"streamnzb/pkg/triage"
-	"streamnzb/pkg/tvdb"
-	"streamnzb/pkg/validation"
-	"streamnzb/pkg/web"
+	"streamnzb/pkg/server/api"
+	"streamnzb/pkg/server/stremio"
+	"streamnzb/pkg/server/web"
+	"streamnzb/pkg/usenet/nntp/proxy"
 
 	"github.com/joho/godotenv"
 )
@@ -52,12 +49,10 @@ func main() {
 	logger.Info("Starting StreamNZB", "version", Version)
 
 	// Bootstrap application
-	comp, err := initialization.Bootstrap()
+	cfg, err := config.Load()
 	if err != nil {
-		initialization.WaitForInputAndExit(err)
+		initialization.WaitForInputAndExit(fmt.Errorf("configuration error: %w", err))
 	}
-
-	cfg := comp.Config
 	logger.SetLevel(cfg.LogLevel)
 
 	availNZBUrl := os.Getenv(env.AvailNZBURL)
@@ -77,31 +72,6 @@ func main() {
 		tvdbKey = TVDBKey
 	}
 
-	// Initialize article validator
-	cacheTTL := time.Duration(cfg.CacheTTLSeconds) * time.Second
-	validator := validation.NewChecker(
-		comp.ProviderPools,
-		comp.ProviderOrder,
-		cacheTTL,
-		cfg.ValidationSampleSize,
-		6, // Hardcoded concurrency limit (not configurable)
-	)
-
-	// Initialize session manager
-	sessionTTL := 30 * time.Minute
-	sessionManager := session.NewManager(comp.StreamingPools, sessionTTL)
-	logger.Info("Session manager initialized", "ttl", sessionTTL)
-
-	// Initialize Triage Service
-	triageService := triage.NewService(
-		&cfg.Filters,
-		cfg.Sorting,
-	)
-
-	// Initialize AvailNZB client
-	availClient := availnzb.NewClient(availNZBUrl, availNZBAPIKey)
-
-	// Data directory for state.json (TVDB token, devices, etc.)
 	dataDir := filepath.Dir(cfg.LoadedPath)
 	if dataDir == "" || dataDir == "." {
 		dataDir, _ = os.Getwd()
@@ -132,23 +102,35 @@ func main() {
 		}
 	}
 
-	tmdbClient := tmdb.NewClient(tmdbKey)
-	tvdbClient := tvdb.NewClient(tvdbKey, dataDir)
+	// Centralized app container - builds all components
+	application := app.New()
+	comp, err := application.Build(cfg, app.BuildOpts{
+		AvailNZBURL:    availNZBUrl,
+		AvailNZBAPIKey: availNZBAPIKey,
+		TMDBAPIKey:     tmdbKey,
+		TVDBAPIKey:     tvdbKey,
+		DataDir:        dataDir,
+		SessionTTL:     30 * time.Minute,
+	})
+	if err != nil {
+		initialization.WaitForInputAndExit(fmt.Errorf("failed to build components: %w", err))
+	}
 
-	// Initialize User Manager (needed before Stremio server)
+	sessionManager := session.NewManager(comp.StreamingPools, 30*time.Minute)
+	logger.Info("Session manager initialized", "ttl", 30*time.Minute)
+
 	deviceManager, err := auth.GetDeviceManager(dataDir)
 	if err != nil {
 		initialization.WaitForInputAndExit(fmt.Errorf("Failed to initialize device manager: %v", err))
 	}
 
-	// Initialize Stremio addon server
-	stremioServer, err := stremio.NewServer(cfg, cfg.AddonBaseURL, cfg.AddonPort, comp.Indexer, validator,
-		sessionManager, triageService, availClient, comp.AvailNZBIndexerHosts, tmdbClient, tvdbClient, deviceManager, Version)
+	stremioServer, err := stremio.NewServer(comp.Config, comp.Config.AddonBaseURL, comp.Config.AddonPort, comp.Indexer, comp.Validator,
+		sessionManager, comp.Triage, comp.AvailClient, comp.AvailNZBIndexerHosts, comp.TMDBClient, comp.TVDBClient, deviceManager, Version)
 	if err != nil {
 		initialization.WaitForInputAndExit(fmt.Errorf("Failed to initialize Stremio server: %v", err))
 	}
 
-	apiServer := api.NewServer(cfg, comp.ProviderPools, sessionManager, stremioServer, comp.Indexer, deviceManager, availNZBUrl, availNZBAPIKey, tmdbKey, tvdbKey)
+	apiServer := api.NewServerWithApp(comp.Config, comp.ProviderPools, sessionManager, stremioServer, comp.Indexer, deviceManager, application, availNZBUrl, availNZBAPIKey, tmdbKey, tvdbKey)
 
 	// Set embedded web handler
 	stremioServer.SetWebHandler(web.Handler())
@@ -165,8 +147,8 @@ func main() {
 	mux.Handle("/api/", apiServer.Handler())
 
 	// Start NNTP proxy if enabled
-	if cfg.ProxyEnabled {
-		proxyServer, err := proxy.NewServer(cfg.ProxyHost, cfg.ProxyPort, comp.StreamingPools, cfg.ProxyAuthUser, cfg.ProxyAuthPass)
+	if comp.Config.ProxyEnabled {
+		proxyServer, err := proxy.NewServer(comp.Config.ProxyHost, comp.Config.ProxyPort, comp.StreamingPools, comp.Config.ProxyAuthUser, comp.Config.ProxyAuthPass)
 		if err != nil {
 			initialization.WaitForInputAndExit(fmt.Errorf("Failed to initialize NNTP proxy: %v", err))
 		}
@@ -174,7 +156,7 @@ func main() {
 		apiServer.SetProxyServer(proxyServer)
 
 		go func() {
-			logger.Info("Starting NNTP proxy", "host", cfg.ProxyHost, "port", cfg.ProxyPort)
+			logger.Info("Starting NNTP proxy", "host", comp.Config.ProxyHost, "port", comp.Config.ProxyPort)
 			if err := proxyServer.Start(); err != nil {
 				initialization.WaitForInputAndExit(fmt.Errorf("NNTP proxy failed: %v", err))
 			}
@@ -182,9 +164,9 @@ func main() {
 	}
 
 	// Start Stremio server
-	addr := fmt.Sprintf(":%d", cfg.AddonPort)
+	addr := fmt.Sprintf(":%d", comp.Config.AddonPort)
 
-	logger.Info("Stremio addon server starting", "base_url", cfg.AddonBaseURL, "port", cfg.AddonPort)
+	logger.Info("Stremio addon server starting", "base_url", comp.Config.AddonBaseURL, "port", comp.Config.AddonPort)
 	logger.Info("Note: Access requires device authentication tokens")
 
 	if err := http.ListenAndServe(addr, mux); err != nil {

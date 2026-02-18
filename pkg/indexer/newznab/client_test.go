@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"streamnzb/pkg/config"
+	"streamnzb/pkg/core/config"
 	"streamnzb/pkg/indexer"
-	"streamnzb/pkg/logger"
+	"streamnzb/pkg/core/logger"
 	"testing"
 )
 

@@ -7,7 +7,8 @@ import (
 	"net/url"
 	"sort"
 	"strings"
-	"streamnzb/pkg/logger"
+	"streamnzb/pkg/core/logger"
+	"streamnzb/pkg/release"
 	"sync"
 )
 
@@ -68,13 +69,13 @@ func (a *Aggregator) Ping() error {
 
 // DownloadNZB attempts to download using the first indexer; when nzbURL is a proxy link,
 // the indexer that owns that host should be used—we try each indexer until one succeeds.
-func (a *Aggregator) DownloadNZB(nzbURL string) ([]byte, error) {
+func (a *Aggregator) DownloadNZB(ctx context.Context, nzbURL string) ([]byte, error) {
 	if len(a.Indexers) == 0 {
 		return nil, fmt.Errorf("no indexers configured")
 	}
 	var lastErr error
 	for _, idx := range a.Indexers {
-		data, err := idx.DownloadNZB(nzbURL)
+		data, err := idx.DownloadNZB(ctx, nzbURL)
 		if err == nil {
 			return data, nil
 		}
@@ -85,11 +86,11 @@ func (a *Aggregator) DownloadNZB(nzbURL string) ([]byte, error) {
 
 // ResolveDownloadURL searches all indexers by title and returns the first matching item's Link
 // (e.g. Prowlarr proxy URL) so DownloadNZB works for direct indexer URLs from AvailNZB.
-func (a *Aggregator) ResolveDownloadURL(ctx context.Context, directURL, title string, size int64) (string, error) {
+func (a *Aggregator) ResolveDownloadURL(ctx context.Context, directURL, title string, size int64, cat string) (string, error) {
 	if title == "" {
 		return "", fmt.Errorf("title required to resolve download URL")
 	}
-	req := SearchRequest{Query: title, Limit: 30}
+	req := SearchRequest{Query: title, Limit: 30, Cat: cat}
 	resp, err := a.Search(req)
 	if err != nil {
 		return "", fmt.Errorf("search for resolve: %w", err)
@@ -97,19 +98,26 @@ func (a *Aggregator) ResolveDownloadURL(ctx context.Context, directURL, title st
 	if resp == nil || len(resp.Channel.Items) == 0 {
 		return "", fmt.Errorf("no search results for title")
 	}
-	normTitle := strings.ToLower(strings.TrimSpace(title))
+	normTitle := release.NormalizeTitle(title)
+	var bestMatch string
 	for _, item := range resp.Channel.Items {
-		itemNorm := strings.ToLower(strings.TrimSpace(item.Title))
-		if itemNorm != normTitle {
-			continue
-		}
-		if size > 0 && item.Size > 0 && item.Size != size {
+		if release.NormalizeTitle(item.Title) != normTitle {
 			continue
 		}
 		if item.Link == "" {
 			continue
 		}
-		return item.Link, nil
+		// Prefer exact size match when reportSize is known
+		if size > 0 && item.Size > 0 && item.Size == size {
+			return item.Link, nil
+		}
+		// Keep first title match as fallback (sizes can differ across indexers/sources)
+		if bestMatch == "" {
+			bestMatch = item.Link
+		}
+	}
+	if bestMatch != "" {
+		return bestMatch, nil
 	}
 	return "", fmt.Errorf("no matching release for title in search results")
 }
@@ -160,8 +168,8 @@ func (a *Aggregator) Search(req SearchRequest) (*SearchResponse, error) {
 	uniqueItems := []Item{}
 
 	for _, item := range allItems {
-		// Normalize title for comparison (lowercase, remove extra spaces)
-		normalizedTitle := strings.ToLower(strings.TrimSpace(item.Title))
+		// Use release.NormalizeTitle for consistent comparison across the app
+		normalizedTitle := release.NormalizeTitle(item.Title)
 		
 		// Strategy 1: GUID (most reliable)
 		if item.GUID != "" {

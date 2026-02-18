@@ -10,10 +10,11 @@ import (
 	"time"
 
 	"streamnzb/pkg/indexer"
-	"streamnzb/pkg/loader"
-	"streamnzb/pkg/logger"
-	"streamnzb/pkg/nntp"
-	"streamnzb/pkg/nzb"
+	"streamnzb/pkg/media/loader"
+	"streamnzb/pkg/core/logger"
+	"streamnzb/pkg/release"
+	"streamnzb/pkg/usenet/nntp"
+	"streamnzb/pkg/media/nzb"
 )
 
 // Session represents an active streaming session
@@ -34,24 +35,42 @@ type Session struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	// Deferred download fields
-	NZBURL      string
-	IndexerName string
-	ItemTitle   string          // Used for logging
-	Indexer     indexer.Indexer // Interface to download
-	GUID        string          // External ID for reporting
+	// Release metadata (from release.Release) - used for AvailNZB reporting and deferred download
+	Release *release.Release
 
-	// ReleaseURL is the indexer release URL (e.g. item.Link) for AvailNZB reporting
-	ReleaseURL string
+	// ContentIDs for AvailNZB reporting (movie/TV context from catalog request)
+	ContentIDs *AvailReportMeta
 
-	// AvailNZB report meta (optional); set when creating session so bad reports can include content IDs
-	ReportReleaseName  string
-	ReportDownloadLink string // NZB download URL for report (apikey stripped by client)
-	ReportSize         int64  // File size in bytes for report (required by API)
-	ReportImdbID       string
-	ReportTvdbID       string
-	ReportSeason       int
-	ReportEpisode      int
+	// Deferred download: URL to fetch NZB (may have apikey added by caller); indexer for DownloadNZB
+	downloadURL string
+	indexer     indexer.Indexer
+}
+
+// ReleaseURL returns the indexer details URL for AvailNZB reporting
+func (s *Session) ReleaseURL() string {
+	if s.Release != nil && s.Release.DetailsURL != "" {
+		return s.Release.DetailsURL
+	}
+	return s.downloadURL
+}
+
+// ReportSize returns size in bytes for AvailNZB (from NZB if loaded, else Release)
+func (s *Session) ReportSize() int64 {
+	if s.NZB != nil {
+		return s.NZB.TotalSize()
+	}
+	if s.Release != nil {
+		return s.Release.Size
+	}
+	return 0
+}
+
+// ReportReleaseName returns the release title for AvailNZB
+func (s *Session) ReportReleaseName() string {
+	if s.Release != nil {
+		return s.Release.Title
+	}
+	return ""
 }
 
 // Manager manages active streaming sessions
@@ -70,7 +89,6 @@ func (s *Session) SetBlueprint(bp interface{}) {
 	s.Blueprint = bp
 }
 
-// Manager manages active streaming sessions
 func NewManager(pools []*nntp.ClientPool, ttl time.Duration) *Manager {
 	m := &Manager{
 		sessions:  make(map[string]*Session),
@@ -93,12 +111,24 @@ type AvailReportMeta struct {
 	Episode int
 }
 
+// catFromReportMeta derives Newznab category from report meta: "5000" for TV, "2000" for movies.
+func catFromReportMeta(m *AvailReportMeta) string {
+	if m == nil {
+		return ""
+	}
+	if m.Season > 0 || m.Episode > 0 || m.TvdbID != "" {
+		return "5000"
+	}
+	if m.ImdbID != "" {
+		return "2000"
+	}
+	return ""
+}
+
 // CreateSession creates a new session for the given NZB.
-// releaseURL is the indexer details URL for availability reporting. releaseName, downloadLink, and reportSize are for AvailNZB reports.
-// reportMeta is optional; when set, bad-playback reports can include content IDs.
-// Heavy work (GetContentFiles, NewFile) is done outside the manager lock so
-// GetActiveSessions (e.g. from WebSocket collectStats) is not blocked.
-func (m *Manager) CreateSession(sessionID string, nzbData *nzb.NZB, guid string, releaseURL string, reportMeta *AvailReportMeta, releaseName string, downloadLink string, reportSize int64) (*Session, error) {
+// rel provides release metadata for AvailNZB; contentIDs holds catalog context (ImdbID, TvdbID, etc.).
+// Heavy work (GetContentFiles, NewFile) is done outside the manager lock.
+func (m *Manager) CreateSession(sessionID string, nzbData *nzb.NZB, rel *release.Release, contentIDs *AvailReportMeta) (*Session, error) {
 	logger.Trace("session CreateSession start", "id", sessionID)
 	m.mu.Lock()
 	if existing, ok := m.sessions[sessionID]; ok {
@@ -112,7 +142,6 @@ func (m *Manager) CreateSession(sessionID string, nzbData *nzb.NZB, guid string,
 	m.mu.Unlock()
 
 	logger.Trace("session CreateSession heavy work", "id", sessionID)
-	// Heavy work outside lock so we don't block GetActiveSessions / WebSocket stats
 	contentFiles := nzbData.GetContentFiles()
 	if len(contentFiles) == 0 {
 		return nil, fmt.Errorf("no content files found in NZB")
@@ -129,28 +158,18 @@ func (m *Manager) CreateSession(sessionID string, nzbData *nzb.NZB, guid string,
 		loaderFiles = append(loaderFiles, lf)
 	}
 
-	firstFile := loaderFiles[0]
 	session := &Session{
 		ID:         sessionID,
 		NZB:        nzbData,
 		Files:      loaderFiles,
-		File:       firstFile,
+		File:       loaderFiles[0],
+		Release:    rel,
+		ContentIDs: contentIDs,
 		CreatedAt:  time.Now(),
 		LastAccess: time.Now(),
 		Clients:    make(map[string]time.Time),
-		GUID:       guid,
-		ReleaseURL: releaseURL,
 		ctx:        ctx,
 		cancel:     cancel,
-	}
-	session.ReportReleaseName = releaseName
-	session.ReportDownloadLink = downloadLink
-	session.ReportSize = reportSize
-	if reportMeta != nil {
-		session.ReportImdbID = reportMeta.ImdbID
-		session.ReportTvdbID = reportMeta.TvdbID
-		session.ReportSeason = reportMeta.Season
-		session.ReportEpisode = reportMeta.Episode
 	}
 
 	logger.Trace("session CreateSession insert", "id", sessionID)
@@ -168,15 +187,12 @@ func (m *Manager) CreateSession(sessionID string, nzbData *nzb.NZB, guid string,
 }
 
 // CreateDeferredSession creates a session placeholder without downloading the NZB yet.
-// nzbURL is the download URL for lazy fetch (include apikey if required); releaseDetailsURL is the indexer details URL for AvailNZB (if empty, nzbURL is used).
-// reportSize is the known size in bytes for reporting (e.g. from AvailNZB); 0 if unknown.
-// reportMeta is optional; when set, bad-playback reports can include content IDs.
-func (m *Manager) CreateDeferredSession(sessionID, nzbURL, releaseDetailsURL, indexerName, itemTitle string, idx indexer.Indexer, guid string, reportMeta *AvailReportMeta, reportSize int64) (*Session, error) {
+// downloadURL is the NZB fetch URL (caller adds apikey if needed). rel provides metadata; idx is used for DownloadNZB.
+func (m *Manager) CreateDeferredSession(sessionID, downloadURL string, rel *release.Release, idx indexer.Indexer, contentIDs *AvailReportMeta) (*Session, error) {
 	logger.Trace("session CreateDeferredSession start", "id", sessionID)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// Check if session already exists
 	if existing, ok := m.sessions[sessionID]; ok {
 		existing.mu.Lock()
 		existing.LastAccess = time.Now()
@@ -185,47 +201,27 @@ func (m *Manager) CreateDeferredSession(sessionID, nzbURL, releaseDetailsURL, in
 		return existing, nil
 	}
 
-	if releaseDetailsURL == "" {
-		releaseDetailsURL = nzbURL
-	}
-
 	ctx, cancel := context.WithCancel(context.Background())
-
 	session := &Session{
-		ID:          sessionID,
-		NZB:         nil, // Deferred
-		CreatedAt:   time.Now(),
-		LastAccess:  time.Now(),
-		Clients:     make(map[string]time.Time),
-		// Deferred fields
-		NZBURL:      nzbURL,
-		ReleaseURL:  releaseDetailsURL,
-		IndexerName: indexerName,
-		ItemTitle:   itemTitle,
-		Indexer:     idx,
-		GUID:        guid,
-		ctx:         ctx,
-		cancel:      cancel,
+		ID:           sessionID,
+		NZB:          nil,
+		Release:      rel,
+		ContentIDs:   contentIDs,
+		downloadURL:  downloadURL,
+		indexer:      idx,
+		CreatedAt:    time.Now(),
+		LastAccess:   time.Now(),
+		Clients:      make(map[string]time.Time),
+		ctx:          ctx,
+		cancel:       cancel,
 	}
-	session.ReportReleaseName = itemTitle
-	session.ReportDownloadLink = nzbURL
-	session.ReportSize = reportSize
-	if reportMeta != nil {
-		session.ReportImdbID = reportMeta.ImdbID
-		session.ReportTvdbID = reportMeta.TvdbID
-		session.ReportSeason = reportMeta.Season
-		session.ReportEpisode = reportMeta.Episode
-	}
-
 	m.sessions[sessionID] = session
 	logger.Trace("session CreateDeferredSession done", "id", sessionID)
 	return session, nil
 }
 
 // GetOrDownloadNZB returns the NZB, downloading it if necessary.
-// I/O (DownloadNZB, parse, NewFile) is done outside the session lock so GetActiveSessions
-// and other callers are not blocked for the duration of the download (avoids app appearing
-// hung and requiring restart when the indexer is slow or the play request holds the lock).
+// I/O is done outside the session lock so GetActiveSessions is not blocked.
 func (s *Session) GetOrDownloadNZB(manager *Manager) (*nzb.NZB, error) {
 	s.mu.Lock()
 	if s.NZB != nil {
@@ -233,47 +229,74 @@ func (s *Session) GetOrDownloadNZB(manager *Manager) (*nzb.NZB, error) {
 		s.mu.Unlock()
 		return nzb, nil
 	}
-	if s.NZBURL == "" || s.Indexer == nil {
+	if s.downloadURL == "" || s.indexer == nil {
 		s.mu.Unlock()
 		return nil, fmt.Errorf("session has no NZB and no deferred download info")
 	}
-	nzbURL := s.NZBURL
-	idx := s.Indexer
-	itemTitle := s.ItemTitle
-	indexerName := s.IndexerName
-	reportSize := s.ReportSize
+	nzbURL := s.downloadURL
+	idx := s.indexer
+	itemTitle := ""
+	indexerName := ""
+	reportSize := int64(0)
+	reportCat := ""
+	if s.Release != nil {
+		itemTitle = s.Release.Title
+		indexerName = s.Release.Indexer
+		reportSize = s.Release.Size
+		reportCat = catFromReportMeta(s.ContentIDs)
+	}
 	ctx := s.ctx
 	s.mu.Unlock()
 
-	// If the URL already contains an API key, download directly (Newznab/NZBHydra).
-	// Otherwise the URL came from AvailNZB for a Prowlarr-only indexer and needs
-	// to be resolved to a proxy URL via search first.
 	var data []byte
 	var err error
+	downloadCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+
 	hasAPIKey := urlHasAPIKey(nzbURL)
 	if hasAPIKey {
 		logger.Trace("Lazy Downloading NZB (direct)...", "title", itemTitle, "indexer", indexerName)
-		data, err = idx.DownloadNZB(nzbURL)
+		data, err = idx.DownloadNZB(downloadCtx, nzbURL)
 	}
 	if !hasAPIKey || err != nil {
 		if res, ok := idx.(indexer.IndexerWithResolve); ok {
-			resolved, resolveErr := res.ResolveDownloadURL(ctx, nzbURL, itemTitle, reportSize)
-			if resolveErr == nil && resolved != "" {
-				logger.Debug("Resolved to proxy URL via search", "title", itemTitle)
-				data, err = idx.DownloadNZB(resolved)
+			resolved, resolveErr := res.ResolveDownloadURL(ctx, nzbURL, itemTitle, reportSize, reportCat)
+			if resolveErr != nil {
+				logger.Debug("Resolve failed for direct indexer URL", "url", nzbURL, "title", itemTitle, "err", resolveErr)
+				return nil, fmt.Errorf("no API key in URL and could not resolve via Hydra/Prowlarr: %w", resolveErr)
 			}
+			if resolved == "" {
+				return nil, fmt.Errorf("no API key in URL and resolver returned empty proxy URL")
+			}
+			logger.Debug("Resolved to proxy URL via search", "title", itemTitle)
+			data, err = idx.DownloadNZB(downloadCtx, resolved)
+		} else if !hasAPIKey {
+			return nil, fmt.Errorf("URL has no API key (indexer: %s); add indexer with API key or use Hydra/Prowlarr", indexerName)
 		}
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to lazy download NZB: %w", err)
 	}
+	if len(data) == 0 {
+		logger.Debug("NZB download returned empty body", "indexer", indexerName, "title", itemTitle, "url", nzbURL)
+		return nil, fmt.Errorf("NZB download returned empty body (indexer: %s)", indexerName)
+	}
 	parsedNZB, err := nzb.Parse(bytes.NewReader(data))
 	if err != nil {
-		logger.Trace("Failed to parse lazy downloaded NZB", "url", nzbURL, "err", err)
+		snippet := string(data)
+		if len(snippet) > 200 {
+			snippet = snippet[:200] + "..."
+		}
+		logger.Debug("Failed to parse NZB", "indexer", indexerName, "title", itemTitle, "url", nzbURL, "len", len(data), "snippet", snippet, "err", err)
 		return nil, fmt.Errorf("failed to parse lazy downloaded NZB: %w", err)
 	}
 	contentFiles := parsedNZB.GetContentFiles()
 	if len(contentFiles) == 0 {
+		logger.Error("Lazy load: no content files in NZB",
+			"title", itemTitle,
+			"indexer", indexerName,
+			"nzb_files", len(parsedNZB.Files),
+			"details", "see DEBUG log GetContentFiles returned empty for file list")
 		return nil, fmt.Errorf("no content files found in lazy NZB")
 	}
 
@@ -290,16 +313,12 @@ func (s *Session) GetOrDownloadNZB(manager *Manager) (*nzb.NZB, error) {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	// Re-check in case another goroutine filled it
 	if s.NZB != nil {
 		return s.NZB, nil
 	}
 	s.NZB = parsedNZB
 	s.Files = loaderFiles
 	s.File = loaderFiles[0]
-	if s.ReportSize == 0 {
-		s.ReportSize = parsedNZB.TotalSize()
-	}
 	return s.NZB, nil
 }
 
@@ -451,7 +470,9 @@ func (m *Manager) GetActiveSessions() []ActiveSessionInfo {
 				clients = append(clients, ip)
 			}
 			title := "Unknown"
-			if s.NZB != nil && len(s.NZB.Files) > 0 {
+			if s.Release != nil && s.Release.Title != "" {
+				title = s.Release.Title
+			} else if s.NZB != nil && len(s.NZB.Files) > 0 {
 				parts := strings.Split(nzb.ExtractFilename(s.NZB.Files[0].Subject), ".")
 				if len(parts) > 1 {
 					title = strings.Join(parts[:len(parts)-1], ".")

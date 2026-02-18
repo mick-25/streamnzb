@@ -6,16 +6,16 @@ import (
 	"os"
 	"sort"
 	"strings"
-	"streamnzb/pkg/config"
+	"streamnzb/pkg/core/config"
 	"streamnzb/pkg/indexer"
 	"streamnzb/pkg/indexer/easynews"
 	"streamnzb/pkg/indexer/newznab"
-	"streamnzb/pkg/logger"
-	"streamnzb/pkg/nntp"
-	"streamnzb/pkg/nzbhydra"
-	"streamnzb/pkg/paths"
-	"streamnzb/pkg/persistence"
-	"streamnzb/pkg/prowlarr"
+	"streamnzb/pkg/indexer/nzbhydra"
+	"streamnzb/pkg/indexer/prowlarr"
+	"streamnzb/pkg/core/logger"
+	"streamnzb/pkg/usenet/nntp"
+	"streamnzb/pkg/core/paths"
+	"streamnzb/pkg/core/persistence"
 )
 
 // InitializedComponents holds all the components initialized during bootstrap
@@ -91,7 +91,11 @@ func BuildComponents(cfg *config.Config) (*InitializedComponents, error) {
 
 		switch indexerType {
 		case "nzbhydra":
-			discovered, hydraHosts, err := nzbhydra.GetConfiguredIndexers(idxCfg.URL, idxCfg.APIKey, usageMgr)
+			displayName := idxCfg.Name
+			if displayName == "" {
+				displayName = "NZBHydra2"
+			}
+			discovered, hydraHosts, err := nzbhydra.GetConfiguredIndexers(idxCfg.URL, idxCfg.APIKey, displayName, usageMgr)
 			if err != nil {
 				logger.Error("Failed to initialize NZBHydra2", "name", idxCfg.Name, "err", err)
 			} else {

@@ -1,8 +1,8 @@
 package indexer
 
 import (
-	"streamnzb/pkg/logger"
-	"streamnzb/pkg/persistence"
+	"streamnzb/pkg/core/logger"
+	"streamnzb/pkg/core/persistence"
 	"sync"
 	"time"
 )

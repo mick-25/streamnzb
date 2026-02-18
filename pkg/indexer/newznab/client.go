@@ -1,6 +1,7 @@
 package newznab
 
 import (
+	"context"
 	"crypto/tls"
 	"encoding/xml"
 	"fmt"
@@ -8,9 +9,9 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
-	"streamnzb/pkg/config"
+	"streamnzb/pkg/core/config"
 	"streamnzb/pkg/indexer"
-	"streamnzb/pkg/logger"
+	"streamnzb/pkg/core/logger"
 	"strings"
 	"sync"
 	"time"
@@ -364,13 +365,20 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 	return &result, nil
 }
 
-func (c *Client) DownloadNZB(nzbURL string) ([]byte, error) {
+func (c *Client) DownloadNZB(ctx context.Context, nzbURL string) ([]byte, error) {
 	if err := c.checkDownloadLimit(); err != nil {
 		logger.Warn("Download limit reached for %s", "indexer", c.Name())
 		return nil, err
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
-	resp, err := c.client.Get(nzbURL)
+	req, err := http.NewRequestWithContext(ctx, "GET", nzbURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	resp, err := c.client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to download NZB from %s: %w", c.Name(), err)
 	}

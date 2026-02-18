@@ -5,9 +5,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"streamnzb/pkg/config"
-	"streamnzb/pkg/logger"
-	"streamnzb/pkg/persistence"
+	"streamnzb/pkg/core/config"
+	"streamnzb/pkg/core/logger"
+	"streamnzb/pkg/core/persistence"
 	"sync"
 )
 
