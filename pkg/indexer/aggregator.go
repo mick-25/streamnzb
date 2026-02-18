@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"net/url"
 	"sort"
-	"strings"
 	"streamnzb/pkg/core/logger"
 	"streamnzb/pkg/release"
+	"strings"
 	"sync"
 )
 
@@ -170,7 +170,7 @@ func (a *Aggregator) Search(req SearchRequest) (*SearchResponse, error) {
 	for _, item := range allItems {
 		// Use release.NormalizeTitle for consistent comparison across the app
 		normalizedTitle := release.NormalizeTitle(item.Title)
-		
+
 		// Strategy 1: GUID (most reliable)
 		if item.GUID != "" {
 			if seenGUID[item.GUID] {

@@ -9,8 +9,8 @@ import (
 	"sort"
 	"strings"
 
-	"streamnzb/pkg/media/loader"
 	"streamnzb/pkg/core/logger"
+	"streamnzb/pkg/media/loader"
 
 	"github.com/javi11/sevenzip"
 )

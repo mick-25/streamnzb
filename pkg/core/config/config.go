@@ -26,8 +26,8 @@ type Provider struct {
 	Password    string `json:"password"`
 	Connections int    `json:"connections"`
 	UseSSL      bool   `json:"use_ssl"`
-	Priority    *int   `json:"priority,omitempty"`    // Lower number = higher priority (1 = first, 2 = backup, etc.). nil = not set (old config)
-	Enabled     *bool  `json:"enabled,omitempty"`     // Whether this provider is enabled. nil = not set (old config)
+	Priority    *int   `json:"priority,omitempty"` // Lower number = higher priority (1 = first, 2 = backup, etc.). nil = not set (old config)
+	Enabled     *bool  `json:"enabled,omitempty"`  // Whether this provider is enabled. nil = not set (old config)
 }
 
 // FilterConfig holds user filtering preferences for PTT-based release filtering
@@ -182,10 +182,10 @@ type Config struct {
 	AdminToken              string `json:"admin_token"` // Single token for dashboard + streaming; do not send to API clients
 
 	// Validation settings
-	CacheTTLSeconds          int `json:"cache_ttl_seconds"`
-	ValidationSampleSize     int `json:"validation_sample_size"`
-	MaxStreams               int `json:"max_streams"`               // Max successful streams to return per search
-	MaxStreamsPerResolution  int `json:"max_streams_per_resolution"` // Max streams per resolution (0 = disabled, use MaxStreams behavior)
+	CacheTTLSeconds         int `json:"cache_ttl_seconds"`
+	ValidationSampleSize    int `json:"validation_sample_size"`
+	MaxStreams              int `json:"max_streams"`                // Max successful streams to return per search
+	MaxStreamsPerResolution int `json:"max_streams_per_resolution"` // Max streams per resolution (0 = disabled, use MaxStreams behavior)
 
 	// NNTP Providers
 	Providers []Provider `json:"providers"`
@@ -246,17 +246,17 @@ func Load() (*Config, error) {
 	// 2. Load config.json (or create with defaults if it doesn't exist)
 	cfg := &Config{
 		// Set defaults
-		NZBHydra2URL:         "",
-		AddonPort:            7000,
-		AddonBaseURL:         "http://localhost:7000",
-		LogLevel:             "INFO",
-		AdminUsername:        "admin",
-		CacheTTLSeconds:      300,
-		ValidationSampleSize: 5,
+		NZBHydra2URL:            "",
+		AddonPort:               7000,
+		AddonBaseURL:            "http://localhost:7000",
+		LogLevel:                "INFO",
+		AdminUsername:           "admin",
+		CacheTTLSeconds:         300,
+		ValidationSampleSize:    5,
 		MaxStreams:              6,
 		MaxStreamsPerResolution: 0, // 0 = disabled
-		ProxyPort:            119,
-		ProxyHost:            "0.0.0.0",
+		ProxyPort:               119,
+		ProxyHost:               "0.0.0.0",
 		Sorting: SortConfig{
 			ResolutionWeights: map[string]int{
 				"4k":    4000000,

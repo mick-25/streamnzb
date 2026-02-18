@@ -11,30 +11,30 @@ import (
 
 // Environment variable names (single source of truth)
 const (
-	NZBHYDRA2URL            = "NZBHYDRA2_URL"
-	NZBHYDRA2APIKey         = "NZBHYDRA2_API_KEY"
-	PROWLARRURL             = "PROWLARR_URL"
-	PROWLARRAPIKey          = "PROWLARR_API_KEY"
-	ADDONPort                = "ADDON_PORT"
-	ADDONBaseURL             = "ADDON_BASE_URL"
-	LOGLevel                 = "LOG_LEVEL"
-	CacheTTLSeconds          = "CACHE_TTL_SECONDS"
-	ValidationSampleSize     = "VALIDATION_SAMPLE_SIZE"
-	AvailNZBURL              = "AVAILNZB_URL"
-	AvailNZBAPIKey           = "AVAILNZB_API_KEY"
-	TMDBAPIKey               = "TMDB_API_KEY"
-	TVDBAPIKey               = "TVDB_API_KEY"
-	NNTPProxyEnabled         = "NNTP_PROXY_ENABLED"
-	NNTPProxyPort            = "NNTP_PROXY_PORT"
-	NNTPProxyHost            = "NNTP_PROXY_HOST"
-	NNTPProxyAuthUser        = "NNTP_PROXY_AUTH_USER"
-	NNTPProxyAuthPass        = "NNTP_PROXY_AUTH_PASS"
-	TZVar                    = "TZ"
-	ProviderPrefix           = "PROVIDER_"
-	IndexerPrefix            = "INDEXER_"
-	IndexerQueryHeaderEnv    = "INDEXER_QUERY_HEADER"
-	IndexerGrabHeaderEnv     = "INDEXER_GRAB_HEADER"
-	ProviderHeaderEnv        = "PROVIDER_HEADER"
+	NZBHYDRA2URL          = "NZBHYDRA2_URL"
+	NZBHYDRA2APIKey       = "NZBHYDRA2_API_KEY"
+	PROWLARRURL           = "PROWLARR_URL"
+	PROWLARRAPIKey        = "PROWLARR_API_KEY"
+	ADDONPort             = "ADDON_PORT"
+	ADDONBaseURL          = "ADDON_BASE_URL"
+	LOGLevel              = "LOG_LEVEL"
+	CacheTTLSeconds       = "CACHE_TTL_SECONDS"
+	ValidationSampleSize  = "VALIDATION_SAMPLE_SIZE"
+	AvailNZBURL           = "AVAILNZB_URL"
+	AvailNZBAPIKey        = "AVAILNZB_API_KEY"
+	TMDBAPIKey            = "TMDB_API_KEY"
+	TVDBAPIKey            = "TVDB_API_KEY"
+	NNTPProxyEnabled      = "NNTP_PROXY_ENABLED"
+	NNTPProxyPort         = "NNTP_PROXY_PORT"
+	NNTPProxyHost         = "NNTP_PROXY_HOST"
+	NNTPProxyAuthUser     = "NNTP_PROXY_AUTH_USER"
+	NNTPProxyAuthPass     = "NNTP_PROXY_AUTH_PASS"
+	TZVar                 = "TZ"
+	ProviderPrefix        = "PROVIDER_"
+	IndexerPrefix         = "INDEXER_"
+	IndexerQueryHeaderEnv = "INDEXER_QUERY_HEADER"
+	IndexerGrabHeaderEnv  = "INDEXER_GRAB_HEADER"
+	ProviderHeaderEnv     = "PROVIDER_HEADER"
 )
 
 // Config JSON keys returned by OverrideKeys (for UI warnings)
@@ -114,27 +114,27 @@ type Indexer struct {
 // ConfigOverrides holds all config values that can be set via environment variables.
 // Used at startup by config.Load to apply overrides.
 type ConfigOverrides struct {
-	NZBHydra2URL            string
-	NZBHydra2APIKey         string
-	ProwlarrURL            string
-	ProwlarrAPIKey         string
-	AddonPort               int
-	AddonBaseURL            string
-	LogLevel                string
-	CacheTTLSeconds        int
-	ValidationSampleSize    int
-	AvailNZBURL             string
-	AvailNZBAPIKey          string
-	TMDBAPIKey              string
-	TVDBAPIKey              string
-	ProxyEnabled            bool
-	ProxyPort               int
-	ProxyHost               string
-	ProxyAuthUser           string
-	ProxyAuthPass           string
-	AdminUsername           string
-	Providers               []Provider
-	Indexers                []Indexer
+	NZBHydra2URL         string
+	NZBHydra2APIKey      string
+	ProwlarrURL          string
+	ProwlarrAPIKey       string
+	AddonPort            int
+	AddonBaseURL         string
+	LogLevel             string
+	CacheTTLSeconds      int
+	ValidationSampleSize int
+	AvailNZBURL          string
+	AvailNZBAPIKey       string
+	TMDBAPIKey           string
+	TVDBAPIKey           string
+	ProxyEnabled         bool
+	ProxyPort            int
+	ProxyHost            string
+	ProxyAuthUser        string
+	ProxyAuthPass        string
+	AdminUsername        string
+	Providers            []Provider
+	Indexers             []Indexer
 }
 
 // ReadConfigOverrides reads all relevant environment variables once and returns
@@ -242,7 +242,7 @@ func readProvidersFromEnv() []Provider {
 		if host == "" {
 			continue
 		}
-		priority := getEnvInt(prefix+"PRIORITY", i) // Default priority matches provider number
+		priority := getEnvInt(prefix+"PRIORITY", i)   // Default priority matches provider number
 		enabled := getEnvBool(prefix+"ENABLED", true) // Default to enabled
 		list = append(list, Provider{
 			Name:        getEnv(prefix+"NAME", fmt.Sprintf("Provider %d", i)),

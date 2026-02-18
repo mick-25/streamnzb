@@ -24,14 +24,14 @@ func buildStreamMetadata(url, filename string, cand triage.Candidate, sizeGB flo
 	}
 
 	return Stream{
-		URL:             url,
-		Name:            name,
-		Description:     description,
-		BehaviorHints:   hints,
-		StreamType:      "usenet",
-		Score:           cand.Score,
-		ParsedMetadata:  cand.Metadata,
-		Release:         rel,
+		URL:            url,
+		Name:           name,
+		Description:    description,
+		BehaviorHints:  hints,
+		StreamType:     "usenet",
+		Score:          cand.Score,
+		ParsedMetadata: cand.Metadata,
+		Release:        rel,
 	}
 }
 
@@ -52,32 +52,6 @@ func buildStreamName(meta *parser.ParsedRelease, group string) string {
 	}
 
 	return strings.Join(parts, " ")
-}
-
-// getQualityEmoji returns emoji based on source quality
-func getQualityEmoji(meta *parser.ParsedRelease) string {
-	quality := strings.ToLower(meta.Quality)
-
-	if strings.Contains(quality, "remux") {
-		return "⚡" // REMUX
-	}
-	if strings.Contains(quality, "bluray") || strings.Contains(quality, "blu-ray") {
-		if len(meta.HDR) > 0 || meta.ThreeD != "" {
-			return "🔥" // Visual tag BluRay (HDR/3D)
-		}
-		return "💿" // BluRay
-	}
-	if strings.Contains(quality, "web-dl") || strings.Contains(quality, "webdl") {
-		return "📡" // WEB-DL
-	}
-	if strings.Contains(quality, "webrip") {
-		return "🌐" // WEBRip
-	}
-	if strings.Contains(quality, "hdtv") {
-		return "📺" // HDTV
-	}
-
-	return "🎬"
 }
 
 // buildDetailedDescription creates the right-side technical details

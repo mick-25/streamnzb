@@ -52,8 +52,8 @@ type SearchRequest struct {
 // (NormalizeSearchResponse) so Link and Size are populated from Enclosure/attributes when missing.
 // Releases is populated from Items by NormalizeSearchResponse for use by triage and handlers.
 type SearchResponse struct {
-	XMLName  xml.Name        `xml:"rss"`
-	Channel  Channel         `xml:"channel"`
+	XMLName  xml.Name           `xml:"rss"`
+	Channel  Channel            `xml:"channel"`
 	Releases []*release.Release `xml:"-"` // Populated by NormalizeSearchResponse
 }
 
@@ -194,4 +194,3 @@ func NormalizeSearchResponse(resp *SearchResponse) {
 		}
 	}
 }
-

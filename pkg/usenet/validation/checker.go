@@ -13,11 +13,11 @@ import (
 
 // Checker validates article availability across providers
 type Checker struct {
-	mu             sync.RWMutex
-	providers      map[string]*nntp.ClientPool
-	providerOrder  []string // Provider names in priority order (for single-provider validation)
-	sampleSize     int
-	maxConcurrent  int
+	mu            sync.RWMutex
+	providers     map[string]*nntp.ClientPool
+	providerOrder []string // Provider names in priority order (for single-provider validation)
+	sampleSize    int
+	maxConcurrent int
 }
 
 // NewChecker creates a new article availability checker.
@@ -47,7 +47,7 @@ type ValidationResult struct {
 func (c *Checker) GetProviderHosts() []string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	
+
 	hosts := make([]string, 0, len(c.providers))
 	for host := range c.providers {
 		hosts = append(hosts, host)
@@ -112,7 +112,7 @@ func (c *Checker) ValidateNZB(ctx context.Context, nzbData *nzb.NZB) map[string]
 		wg.Wait()
 		close(done)
 	}()
-	
+
 	select {
 	case <-done:
 		logger.Trace("ValidateNZB: all providers done", "results", len(results))
@@ -296,7 +296,7 @@ func GetBestProvider(results map[string]*ValidationResult) *ValidationResult {
 		} else {
 			score = float64(result.CheckedArticles-result.MissingArticles) / float64(result.CheckedArticles)
 		}
-		
+
 		if score >= bestScore { // Use >= to pick the first one even if score is 0 or equal
 			bestScore = score
 			bestResult = result

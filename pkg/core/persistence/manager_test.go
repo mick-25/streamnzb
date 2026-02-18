@@ -76,7 +76,7 @@ func TestMigration(t *testing.T) {
 	// Create legacy usage.json
 	usageData := map[string]interface{}{
 		"indexer1": map[string]interface{}{
-			"api_hits_used": 10,
+			"api_hits_used":  10,
 			"last_reset_day": "2024-01-01",
 		},
 	}

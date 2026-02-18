@@ -9,18 +9,18 @@ import (
 	"sync"
 	"time"
 
+	"streamnzb/pkg/core/logger"
 	"streamnzb/pkg/indexer"
 	"streamnzb/pkg/media/loader"
-	"streamnzb/pkg/core/logger"
+	"streamnzb/pkg/media/nzb"
 	"streamnzb/pkg/release"
 	"streamnzb/pkg/usenet/nntp"
-	"streamnzb/pkg/media/nzb"
 )
 
 // Session represents an active streaming session
 type Session struct {
 	ID    string
-	NZB   *nzb.NZB // Parsed NZB (may be nil if deferred)
+	NZB   *nzb.NZB       // Parsed NZB (may be nil if deferred)
 	Files []*loader.File // All files related to the content (e.g. RAR volumes)
 	File  *loader.File   // Helper for single-file content, or first file of archive
 	// Cache for archive structure
@@ -203,17 +203,17 @@ func (m *Manager) CreateDeferredSession(sessionID, downloadURL string, rel *rele
 
 	ctx, cancel := context.WithCancel(context.Background())
 	session := &Session{
-		ID:           sessionID,
-		NZB:          nil,
-		Release:      rel,
-		ContentIDs:   contentIDs,
-		downloadURL:  downloadURL,
-		indexer:      idx,
-		CreatedAt:    time.Now(),
-		LastAccess:   time.Now(),
-		Clients:      make(map[string]time.Time),
-		ctx:          ctx,
-		cancel:       cancel,
+		ID:          sessionID,
+		NZB:         nil,
+		Release:     rel,
+		ContentIDs:  contentIDs,
+		downloadURL: downloadURL,
+		indexer:     idx,
+		CreatedAt:   time.Now(),
+		LastAccess:  time.Now(),
+		Clients:     make(map[string]time.Time),
+		ctx:         ctx,
+		cancel:      cancel,
 	}
 	m.sessions[sessionID] = session
 	logger.Trace("session CreateDeferredSession done", "id", sessionID)

@@ -131,9 +131,9 @@ func (c *Client) GetExternalIDs(tmdbID int, mediaType string) (*ExternalIDsRespo
 
 // MovieDetails is the response from GET /movie/{id}
 type MovieDetails struct {
-	ID           int    `json:"id"`
-	Title        string `json:"title"`
-	ReleaseDate  string `json:"release_date"`
+	ID            int    `json:"id"`
+	Title         string `json:"title"`
+	ReleaseDate   string `json:"release_date"`
 	OriginalTitle string `json:"original_title"`
 }
 

@@ -11,15 +11,15 @@ import (
 
 	"streamnzb/pkg/auth"
 	"streamnzb/pkg/core/app"
+	"streamnzb/pkg/core/config"
+	"streamnzb/pkg/core/logger"
 	"streamnzb/pkg/indexer"
-	"streamnzb/pkg/session"
+	"streamnzb/pkg/search/triage"
 	"streamnzb/pkg/server/stremio"
 	"streamnzb/pkg/services/availnzb"
 	"streamnzb/pkg/services/metadata/tmdb"
 	"streamnzb/pkg/services/metadata/tvdb"
-	"streamnzb/pkg/search/triage"
-	"streamnzb/pkg/core/config"
-	"streamnzb/pkg/core/logger"
+	"streamnzb/pkg/session"
 	"streamnzb/pkg/usenet/nntp"
 	"streamnzb/pkg/usenet/nntp/proxy"
 	"streamnzb/pkg/usenet/validation"
@@ -269,10 +269,6 @@ func (s *Server) syncProviderUsageLoop() {
 			pool.SyncUsage()
 		}
 	}
-}
-
-func (s *Server) getPoolList() []*nntp.ClientPool {
-	return s.streamingPools
 }
 
 // Handler returns the HTTP handler for the API

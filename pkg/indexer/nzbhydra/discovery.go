@@ -6,9 +6,9 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"strings"
-	"streamnzb/pkg/indexer"
 	"streamnzb/pkg/core/logger"
+	"streamnzb/pkg/indexer"
+	"strings"
 	"time"
 )
 

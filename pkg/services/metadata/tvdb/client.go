@@ -66,7 +66,7 @@ type searchRemoteIDResponse struct {
 
 // tokenState is stored in state.json
 type tokenState struct {
-	Token    string `json:"token"`
+	Token     string `json:"token"`
 	CreatedAt string `json:"created_at"` // RFC3339
 }
 

@@ -109,4 +109,3 @@ func (m *ProviderUsageManager) SyncUsage(activeNames []string) {
 		}
 	}
 }
-

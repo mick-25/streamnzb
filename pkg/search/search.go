@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"sync"
 
-	"streamnzb/pkg/indexer"
 	"streamnzb/pkg/core/logger"
+	"streamnzb/pkg/indexer"
 	"streamnzb/pkg/release"
 	"streamnzb/pkg/session"
 )

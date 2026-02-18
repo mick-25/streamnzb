@@ -149,7 +149,7 @@ func (c *Client) Ping() error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("Prowlarr returned error status: %d", resp.StatusCode)
+		return fmt.Errorf("prowlarr returned error status: %d", resp.StatusCode)
 	}
 	return nil
 }
@@ -241,11 +241,11 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("Prowlarr returned status %d: %s", resp.StatusCode, string(bodyBytes))
+		return nil, fmt.Errorf("prowlarr returned status %d: %s", resp.StatusCode, string(bodyBytes))
 	}
 
 	if len(bodyBytes) == 0 {
-		return nil, fmt.Errorf("Prowlarr returned empty body")
+		return nil, fmt.Errorf("prowlarr returned empty body")
 	}
 
 	var result indexer.SearchResponse
@@ -316,7 +316,7 @@ func fileFromNZBURL(nzbURL string) string {
 // Use a context with timeout: 60s for resolve/lazy load, 5s for validation.
 func (c *Client) DownloadNZB(ctx context.Context, nzbURL string) ([]byte, error) {
 	if err := c.checkDownloadLimit(); err != nil {
-		logger.Warn("Download limit reached for %s", "indexer", c.Name())
+		logger.Warn("Download limit reached for indexer", "indexer", c.Name())
 		return nil, err
 	}
 
@@ -378,7 +378,7 @@ func (c *Client) DownloadNZB(ctx context.Context, nzbURL string) ([]byte, error)
 	if resp.StatusCode != http.StatusOK {
 		bodyStr := string(data)
 		if strings.Contains(bodyStr, "Failed to normalize provided link") {
-			return nil, fmt.Errorf("Prowlarr rejected the download link: it only accepts links it generated (proxy links), not direct indexer URLs. Ensure Prowlarr returns proxy/redirect URLs in search (e.g. enable Redirect for the app or indexer) so the stored link is a Prowlarr download URL")
+			return nil, fmt.Errorf("prowlarr rejected the download link: it only accepts links it generated (proxy links), not direct indexer URLs. Ensure Prowlarr returns proxy/redirect URLs in search (e.g. enable Redirect for the app or indexer) so the stored link is a Prowlarr download URL")
 		}
 		if len(bodyStr) > 200 {
 			bodyStr = bodyStr[:200] + "..."

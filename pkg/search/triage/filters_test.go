@@ -4,8 +4,8 @@ import (
 	"testing"
 
 	"streamnzb/pkg/core/config"
-	"streamnzb/pkg/search/parser"
 	"streamnzb/pkg/release"
+	"streamnzb/pkg/search/parser"
 )
 
 // Test Resolution Filtering
@@ -193,45 +193,45 @@ func TestCheckSize(t *testing.T) {
 		shouldPass bool
 	}{
 		{
-			name: "0 bytes always rejected",
-			cfg:  &config.FilterConfig{},
-			rel:  &release.Release{Size: 0},
+			name:       "0 bytes always rejected",
+			cfg:        &config.FilterConfig{},
+			rel:        &release.Release{Size: 0},
 			shouldPass: false,
 		},
 		{
-			name: "Negative size always rejected",
-			cfg:  &config.FilterConfig{},
-			rel:  &release.Release{Size: -1},
+			name:       "Negative size always rejected",
+			cfg:        &config.FilterConfig{},
+			rel:        &release.Release{Size: -1},
 			shouldPass: false,
 		},
 		{
-			name: "Valid size passes",
-			cfg:  &config.FilterConfig{},
-			rel:  &release.Release{Size: 1024 * 1024 * 1024}, // 1 GB
+			name:       "Valid size passes",
+			cfg:        &config.FilterConfig{},
+			rel:        &release.Release{Size: 1024 * 1024 * 1024}, // 1 GB
 			shouldPass: true,
 		},
 		{
-			name: "Too small rejected with min size",
-			cfg: &config.FilterConfig{MinSizeGB: 2.0},
-			rel:  &release.Release{Size: 1024 * 1024 * 1024}, // 1 GB
+			name:       "Too small rejected with min size",
+			cfg:        &config.FilterConfig{MinSizeGB: 2.0},
+			rel:        &release.Release{Size: 1024 * 1024 * 1024}, // 1 GB
 			shouldPass: false,
 		},
 		{
-			name: "Meets min size passes",
-			cfg: &config.FilterConfig{MinSizeGB: 1.0},
-			rel:  &release.Release{Size: 1024 * 1024 * 1024}, // 1 GB
+			name:       "Meets min size passes",
+			cfg:        &config.FilterConfig{MinSizeGB: 1.0},
+			rel:        &release.Release{Size: 1024 * 1024 * 1024}, // 1 GB
 			shouldPass: true,
 		},
 		{
-			name: "Too large rejected with max size",
-			cfg: &config.FilterConfig{MaxSizeGB: 5.0},
-			rel:  &release.Release{Size: 10 * 1024 * 1024 * 1024}, // 10 GB
+			name:       "Too large rejected with max size",
+			cfg:        &config.FilterConfig{MaxSizeGB: 5.0},
+			rel:        &release.Release{Size: 10 * 1024 * 1024 * 1024}, // 10 GB
 			shouldPass: false,
 		},
 		{
-			name: "Within max size passes",
-			cfg: &config.FilterConfig{MaxSizeGB: 10.0},
-			rel:  &release.Release{Size: 5 * 1024 * 1024 * 1024}, // 5 GB
+			name:       "Within max size passes",
+			cfg:        &config.FilterConfig{MaxSizeGB: 10.0},
+			rel:        &release.Release{Size: 5 * 1024 * 1024 * 1024}, // 5 GB
 			shouldPass: true,
 		},
 	}

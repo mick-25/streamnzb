@@ -14,10 +14,10 @@ import (
 	"streamnzb/pkg/core/logger"
 	"streamnzb/pkg/core/persistence"
 	"streamnzb/pkg/initialization"
-	"streamnzb/pkg/session"
 	"streamnzb/pkg/server/api"
 	"streamnzb/pkg/server/stremio"
 	"streamnzb/pkg/server/web"
+	"streamnzb/pkg/session"
 	"streamnzb/pkg/usenet/nntp/proxy"
 
 	"github.com/joho/godotenv"
@@ -121,13 +121,13 @@ func main() {
 
 	deviceManager, err := auth.GetDeviceManager(dataDir)
 	if err != nil {
-		initialization.WaitForInputAndExit(fmt.Errorf("Failed to initialize device manager: %v", err))
+		initialization.WaitForInputAndExit(fmt.Errorf("failed to initialize device manager: %v", err))
 	}
 
 	stremioServer, err := stremio.NewServer(comp.Config, comp.Config.AddonBaseURL, comp.Config.AddonPort, comp.Indexer, comp.Validator,
 		sessionManager, comp.Triage, comp.AvailClient, comp.AvailNZBIndexerHosts, comp.TMDBClient, comp.TVDBClient, deviceManager, Version)
 	if err != nil {
-		initialization.WaitForInputAndExit(fmt.Errorf("Failed to initialize Stremio server: %v", err))
+		initialization.WaitForInputAndExit(fmt.Errorf("failed to initialize Stremio server: %v", err))
 	}
 
 	apiServer := api.NewServerWithApp(comp.Config, comp.ProviderPools, sessionManager, stremioServer, comp.Indexer, deviceManager, application, availNZBUrl, availNZBAPIKey, tmdbKey, tvdbKey)
@@ -150,7 +150,7 @@ func main() {
 	if comp.Config.ProxyEnabled {
 		proxyServer, err := proxy.NewServer(comp.Config.ProxyHost, comp.Config.ProxyPort, comp.StreamingPools, comp.Config.ProxyAuthUser, comp.Config.ProxyAuthPass)
 		if err != nil {
-			initialization.WaitForInputAndExit(fmt.Errorf("Failed to initialize NNTP proxy: %v", err))
+			initialization.WaitForInputAndExit(fmt.Errorf("failed to initialize NNTP proxy: %v", err))
 		}
 
 		apiServer.SetProxyServer(proxyServer)
@@ -158,7 +158,7 @@ func main() {
 		go func() {
 			logger.Info("Starting NNTP proxy", "host", comp.Config.ProxyHost, "port", comp.Config.ProxyPort)
 			if err := proxyServer.Start(); err != nil {
-				initialization.WaitForInputAndExit(fmt.Errorf("NNTP proxy failed: %v", err))
+				initialization.WaitForInputAndExit(fmt.Errorf("nntp proxy failed: %w", err))
 			}
 		}()
 	}
@@ -170,6 +170,6 @@ func main() {
 	logger.Info("Note: Access requires device authentication tokens")
 
 	if err := http.ListenAndServe(addr, mux); err != nil {
-		initialization.WaitForInputAndExit(fmt.Errorf("Server failed: %v", err))
+		initialization.WaitForInputAndExit(fmt.Errorf("server failed: %w", err))
 	}
 }

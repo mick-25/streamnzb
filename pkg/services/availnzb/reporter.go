@@ -1,10 +1,10 @@
 package availnzb
 
 import (
-	"sync"
 	"streamnzb/pkg/core/logger"
 	"streamnzb/pkg/release"
 	"streamnzb/pkg/session"
+	"sync"
 )
 
 // ProviderHostsSource provides provider hostnames for reporting.
@@ -14,9 +14,9 @@ type ProviderHostsSource interface {
 
 // Reporter reports availability to AvailNZB.
 type Reporter struct {
-	client     *Client
+	client      *Client
 	providerSrc ProviderHostsSource
-	reported   sync.Map // sessionID -> struct{} for dedup; ReportGood is called on every play request (seeking, etc.)
+	reported    sync.Map // sessionID -> struct{} for dedup; ReportGood is called on every play request (seeking, etc.)
 }
 
 // NewReporter creates a reporter.

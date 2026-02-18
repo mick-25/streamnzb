@@ -13,10 +13,10 @@ import (
 
 // Device represents a device account
 type Device struct {
-	Username string                `json:"username"`
-	Token    string                `json:"token"` // SHA256 token for API access
-	Filters  config.FilterConfig   `json:"filters"`
-	Sorting  config.SortConfig      `json:"sorting"`
+	Username string              `json:"username"`
+	Token    string              `json:"token"` // SHA256 token for API access
+	Filters  config.FilterConfig `json:"filters"`
+	Sorting  config.SortConfig   `json:"sorting"`
 	// PasswordHash and MustChangePassword are not stored for regular devices
 	// They are only used for admin (stored separately in AdminCredentials)
 }
@@ -95,14 +95,6 @@ func (dm *DeviceManager) load() error {
 	}
 
 	return nil
-}
-
-// save saves devices to persistent storage (excludes admin)
-func (dm *DeviceManager) save() error {
-	dm.mu.RLock()
-	defer dm.mu.RUnlock()
-
-	return dm.manager.Set("devices", dm.devices)
 }
 
 // saveLocked saves devices to persistent storage (caller must hold write lock, excludes admin)

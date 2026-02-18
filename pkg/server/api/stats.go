@@ -6,8 +6,8 @@ import (
 	"sort"
 	"time"
 
-	"streamnzb/pkg/indexer"
 	"streamnzb/pkg/core/logger"
+	"streamnzb/pkg/indexer"
 	"streamnzb/pkg/session"
 )
 
@@ -37,14 +37,14 @@ type IndexerStats struct {
 
 // ProviderStats represents statistics for a single NNTP provider
 type ProviderStats struct {
-	Name          string  `json:"name"`
-	Host          string  `json:"host"`
-	ActiveConns   int     `json:"active_conns"`
-	IdleConns     int     `json:"idle_conns"`
-	MaxConns      int     `json:"max_conns"`
-	CurrentSpeed  float64 `json:"current_speed_mbps"` // Mbps (instantaneous)
-	DownloadedMB  float64 `json:"downloaded_mb"`      // Lifetime MB for this provider
-	UsagePercent  float64 `json:"usage_percent"`      // Share of total downloaded MB
+	Name         string  `json:"name"`
+	Host         string  `json:"host"`
+	ActiveConns  int     `json:"active_conns"`
+	IdleConns    int     `json:"idle_conns"`
+	MaxConns     int     `json:"max_conns"`
+	CurrentSpeed float64 `json:"current_speed_mbps"` // Mbps (instantaneous)
+	DownloadedMB float64 `json:"downloaded_mb"`      // Lifetime MB for this provider
+	UsagePercent float64 `json:"usage_percent"`      // Share of total downloaded MB
 }
 
 // collectStats gathers metrics from all sources
@@ -105,16 +105,16 @@ func (s *Server) collectStats() SystemStats {
 		// Actually, let's just use the aggregator's Indexers if it has them
 		// We'll use a type assertion or just call GetUsage.
 		// But for the dashboard we want a list of individual ones.
-		
+
 		// In Aggregator.go we have Indexers []Indexer.
 		// We can't directly access it if it's the Indexer interface.
 		// Wait, s.indexer is set during initialization.
-		
+
 		// Let's assume s.indexer might be an Aggregator
 		type indexerContainer interface {
 			GetIndexers() []indexer.Indexer
 		}
-		
+
 		var indexers []indexer.Indexer
 		if container, ok := s.indexer.(indexerContainer); ok {
 			indexers = container.GetIndexers()

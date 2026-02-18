@@ -156,8 +156,6 @@ func (n *NZB) GetContentFiles() []*FileInfo {
 	// 1. Identify "Main" file logic extended to groups
 	var mainPattern string
 	var maxSize int64
-	var mainIsArchive bool
-	_ = mainIsArchive // Prevent unused error if needed later, or just remove
 
 	// First pass: Find the "main" content (largest video or archive)
 	for _, info := range infos {
@@ -172,7 +170,6 @@ func (n *NZB) GetContentFiles() []*FileInfo {
 				isSplitArchivePart(info.Extension) || isRarSplitPart(info.Extension, info.Filename) {
 				maxSize = info.Size
 				mainPattern = getFilePattern(info.Filename)
-				mainIsArchive = !info.IsVideo
 			}
 		}
 	}
@@ -311,12 +308,6 @@ func (n *NZB) CompressionType() string {
 		return "direct"
 	}
 	ct, _ := compressionTypeFromFileWithReason(largest.Filename, largest.Extension)
-	return ct
-}
-
-// compressionTypeFromFile detects compression from a single filename and extension.
-func compressionTypeFromFile(filename, ext string) string {
-	ct, _ := compressionTypeFromFileWithReason(filename, ext)
 	return ct
 }
 

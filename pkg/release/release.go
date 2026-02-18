@@ -29,11 +29,11 @@ func IsPrivateReleaseURL(rawURL string) bool {
 // Used for comparison (by normalized title) and as a common type across the app.
 // AvailNZB may return partial data (e.g. no SourceIndexer for download).
 type Release struct {
-	Title       string // Release name (e.g. "Movie.2024.1080p.BluRay.x264-GROUP")
-	Link        string // NZB download URL
-	DetailsURL  string // Stable identifier for AvailNZB/reporting
-	Size        int64
-	Indexer     string // Actual indexer name (NZBGeek, Drunken Slug, etc.)
+	Title         string // Release name (e.g. "Movie.2024.1080p.BluRay.x264-GROUP")
+	Link          string // NZB download URL
+	DetailsURL    string // Stable identifier for AvailNZB/reporting
+	Size          int64
+	Indexer       string      // Actual indexer name (NZBGeek, Drunken Slug, etc.)
 	SourceIndexer interface{} // Indexer client for DownloadNZB. Nil when from AvailNZB.
 
 	// Optional fields from indexer search (empty when from AvailNZB)

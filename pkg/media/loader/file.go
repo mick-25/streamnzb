@@ -42,7 +42,7 @@ type File struct {
 	segCache   map[int][]byte
 	segCacheMu sync.RWMutex
 
-	zeroFillMu   sync.Mutex
+	zeroFillMu    sync.Mutex
 	zeroFillCount int
 }
 
@@ -58,13 +58,13 @@ func NewFile(ctx context.Context, f *nzb.File, pools []*nntp.ClientPool, estimat
 		offset += s.Bytes
 	}
 	return &File{
-		nzbFile:    f,
-		pools:      pools,
-		estimator:  estimator,
-		segments:   segments,
-		totalSize:  offset,
-		ctx:        ctx,
-		segCache: make(map[int][]byte),
+		nzbFile:   f,
+		pools:     pools,
+		estimator: estimator,
+		segments:  segments,
+		totalSize: offset,
+		ctx:       ctx,
+		segCache:  make(map[int][]byte),
 	}
 }
 

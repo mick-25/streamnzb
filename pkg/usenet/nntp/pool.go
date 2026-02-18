@@ -19,16 +19,16 @@ type ClientPool struct {
 	idleClients chan *Client
 	slots       chan struct{} // Semaphore tokens for creating new connections
 	// Metrics
-	bytesRead       int64   // bytes since last speed sample
-	totalBytesRead  int64   // cumulative bytes read (lifetime)
-	lastSpeed       float64 // Mbps
-	lastCheck       time.Time
+	bytesRead      int64   // bytes since last speed sample
+	totalBytesRead int64   // cumulative bytes read (lifetime)
+	lastSpeed      float64 // Mbps
+	lastCheck      time.Time
 
 	// Persistence
-	providerName   string
-	usageManager   *ProviderUsageManager
-	lastSyncBytes  int64 // Last synced totalBytesRead value
-	lastSyncTime   time.Time
+	providerName  string
+	usageManager  *ProviderUsageManager
+	lastSyncBytes int64 // Last synced totalBytesRead value
+	lastSyncTime  time.Time
 
 	mu     sync.Mutex
 	closed bool

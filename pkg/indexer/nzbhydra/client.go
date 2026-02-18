@@ -123,10 +123,10 @@ func NewClientWithIndexer(baseURL, apiKey, name, indexerName string, um *indexer
 	}
 
 	c := &Client{
-		baseURL:     baseURL,
-		apiKey:      apiKey,
-		name:        name,
-		indexerName: indexerName,
+		baseURL:      baseURL,
+		apiKey:       apiKey,
+		name:         name,
+		indexerName:  indexerName,
 		usageManager: um,
 		client: &http.Client{
 			Timeout:   30 * time.Second,
@@ -300,7 +300,7 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 // Use a context with timeout: 60s for resolve/lazy load, 5s for validation.
 func (c *Client) DownloadNZB(ctx context.Context, nzbURL string) ([]byte, error) {
 	if err := c.checkDownloadLimit(); err != nil {
-		logger.Warn("Download limit reached for %s", "indexer", c.Name())
+		logger.Warn("Download limit reached for indexer", "indexer", c.Name())
 		return nil, err
 	}
 	if ctx == nil {

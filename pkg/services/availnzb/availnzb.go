@@ -27,16 +27,16 @@ type Client struct {
 // download_link is not sent; status/releases return it (Newznab API URL without apikey—add apikey when fetching).
 // compression_type: "direct", "7z", or "rar" — used by AvailNZB to filter GetReleases.
 type ReportRequest struct {
-	URL              string `json:"url"`                        // Indexer release URL (details link)
-	ReleaseName      string `json:"release_name"`               // Release name (e.g. Show.Name.S01E02.720p.WEB.x264-GROUP)
-	Size             int64  `json:"size"`                       // File size in bytes (required)
-	CompressionType  string `json:"compression_type,omitempty"` // "direct", "7z", or "rar"
-	ProviderURL      string `json:"provider_url"`               // Usenet provider hostname
-	Status           bool   `json:"status"`                     // true = available, false = failed
-	ImdbID           string `json:"imdb_id,omitempty"`          // Required for movies
-	TvdbID           string `json:"tvdb_id,omitempty"`          // Required for TV (with season, episode)
-	Season           int    `json:"season,omitempty"`           // Required for TV
-	Episode          int    `json:"episode,omitempty"`          // Required for TV
+	URL             string `json:"url"`                        // Indexer release URL (details link)
+	ReleaseName     string `json:"release_name"`               // Release name (e.g. Show.Name.S01E02.720p.WEB.x264-GROUP)
+	Size            int64  `json:"size"`                       // File size in bytes (required)
+	CompressionType string `json:"compression_type,omitempty"` // "direct", "7z", or "rar"
+	ProviderURL     string `json:"provider_url"`               // Usenet provider hostname
+	Status          bool   `json:"status"`                     // true = available, false = failed
+	ImdbID          string `json:"imdb_id,omitempty"`          // Required for movies
+	TvdbID          string `json:"tvdb_id,omitempty"`          // Required for TV (with season, episode)
+	Season          int    `json:"season,omitempty"`           // Required for TV
+	Episode         int    `json:"episode,omitempty"`          // Required for TV
 }
 
 // ProviderStatus is one provider's status in a summary.
@@ -288,10 +288,10 @@ func (c *Client) GetReleases(imdbID string, tvdbID string, season, episode int, 
 			Indexer:    idx,
 		}
 		releases = append(releases, &ReleaseWithStatus{
-			Release:        rel,
-			Available:      r.Available,
+			Release:         rel,
+			Available:       r.Available,
 			CompressionType: r.CompressionType,
-			Summary:        r.Summary,
+			Summary:         r.Summary,
 		})
 		if r.Available {
 			availableCount++

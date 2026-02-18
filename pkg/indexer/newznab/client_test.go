@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"streamnzb/pkg/core/config"
-	"streamnzb/pkg/indexer"
 	"streamnzb/pkg/core/logger"
+	"streamnzb/pkg/indexer"
 	"testing"
 )
 

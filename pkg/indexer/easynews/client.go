@@ -18,19 +18,19 @@ import (
 )
 
 const (
-	easynewsBaseURL     = "https://members.easynews.com"
-	maxResultsPerPage   = 250
-	searchTimeout       = 15 * time.Second
-	downloadTimeout     = 30 * time.Second
+	easynewsBaseURL   = "https://members.easynews.com"
+	maxResultsPerPage = 250
+	searchTimeout     = 15 * time.Second
+	downloadTimeout   = 30 * time.Second
 )
 
 // Client represents an Easynews API client
 type Client struct {
-	username      string
-	password      string
-	name          string
-	client        *http.Client
-	downloadBase  string // Base URL for NZB download proxying
+	username     string
+	password     string
+	name         string
+	client       *http.Client
+	downloadBase string // Base URL for NZB download proxying
 
 	// Usage tracking
 	apiLimit          int
@@ -49,7 +49,7 @@ var _ indexer.Indexer = (*Client)(nil)
 // NewClient creates a new Easynews client
 func NewClient(username, password, name string, downloadBase string, apiLimit, downloadLimit int, um *indexer.UsageManager) (*Client, error) {
 	if username == "" || password == "" {
-		return nil, fmt.Errorf("Easynews username and password are required")
+		return nil, fmt.Errorf("easynews username and password are required")
 	}
 
 	transport := &http.Transport{
@@ -60,16 +60,16 @@ func NewClient(username, password, name string, downloadBase string, apiLimit, d
 	}
 
 	c := &Client{
-		username:      username,
-		password:      password,
-		name:          name,
-		downloadBase:  downloadBase,
-		usageManager:  um,
-		apiLimit:      apiLimit,
-		apiUsed:       0,
-		apiRemaining:  apiLimit,
-		downloadLimit: downloadLimit,
-		downloadUsed:  0,
+		username:          username,
+		password:          password,
+		name:              name,
+		downloadBase:      downloadBase,
+		usageManager:      um,
+		apiLimit:          apiLimit,
+		apiUsed:           0,
+		apiRemaining:      apiLimit,
+		downloadLimit:     downloadLimit,
+		downloadUsed:      0,
 		downloadRemaining: downloadLimit,
 		client: &http.Client{
 			Timeout:   searchTimeout,
@@ -97,7 +97,6 @@ func NewClient(username, password, name string, downloadBase string, apiLimit, d
 
 	return c, nil
 }
-
 
 // Name returns the name of this indexer
 func (c *Client) Name() string {
@@ -127,7 +126,7 @@ func (c *Client) Ping() error {
 	testQuery := "dune"
 	_, err := c.searchInternal(testQuery, "", "", "", false)
 	if err != nil {
-		return fmt.Errorf("Easynews credentials invalid: %w", err)
+		return fmt.Errorf("easynews credentials invalid: %w", err)
 	}
 	return nil
 }
@@ -155,7 +154,7 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 	// Perform search
 	results, err := c.searchInternal(query, season, episode, req.Cat, false)
 	if err != nil {
-		return nil, fmt.Errorf("Easynews search failed: %w", err)
+		return nil, fmt.Errorf("easynews search failed: %w", err)
 	}
 
 	// Increment API usage
@@ -175,11 +174,11 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 	items := make([]indexer.Item, 0, len(results))
 	for _, result := range results {
 		item := indexer.Item{
-			Title:       result.Title,
-			Link:        result.DownloadURL,
-			GUID:        result.GUID,
-			PubDate:     result.PubDate,
-			Size:        result.Size,
+			Title:         result.Title,
+			Link:          result.DownloadURL,
+			GUID:          result.GUID,
+			PubDate:       result.PubDate,
+			Size:          result.Size,
 			SourceIndexer: c,
 		}
 		items = append(items, item)
@@ -290,17 +289,17 @@ func (c *Client) searchInternal(query, season, episode, category string, strictM
 	}
 	resp, err := c.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("Easynews search request failed: %w", err)
+		return nil, fmt.Errorf("easynews search request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode == 401 || resp.StatusCode == 403 {
-		return nil, fmt.Errorf("Easynews rejected credentials")
+		return nil, fmt.Errorf("easynews rejected credentials")
 	}
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("Easynews search failed with status %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("easynews search failed with status %d: %s", resp.StatusCode, string(body))
 	}
 
 	var data easynewsSearchResponse
@@ -351,13 +350,13 @@ func (c *Client) downloadNZBInternal(payload map[string]interface{}) ([]byte, er
 	}
 	resp, err := c.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("Easynews NZB download request failed: %w", err)
+		return nil, fmt.Errorf("easynews NZB download request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("Easynews NZB download failed with status %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("easynews NZB download failed with status %d: %s", resp.StatusCode, string(body))
 	}
 
 	nzbData, err := io.ReadAll(resp.Body)
@@ -390,9 +389,9 @@ func (c *Client) checkDownloadLimit() error {
 
 // easynewsSearchResponse represents the Easynews search API response
 type easynewsSearchResponse struct {
-	Data   []interface{} `json:"data"`
-	Total  int           `json:"total"`
-	ThumbURL string      `json:"thumbURL"`
+	Data     []interface{} `json:"data"`
+	Total    int           `json:"total"`
+	ThumbURL string        `json:"thumbURL"`
 }
 
 // easynewsResult represents a filtered Easynews search result

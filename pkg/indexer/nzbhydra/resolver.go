@@ -22,13 +22,13 @@ import (
 func (c *Client) ResolveDetailsLinks(searchRequest indexer.SearchRequest) (map[string]string, error) {
 	// Build internal API URL
 	apiURL := fmt.Sprintf("%s/internalapi/search", c.baseURL)
-	
+
 	// Create search request matching the original Newznab search
 	requestBody := map[string]interface{}{
 		"searchType": determineSearchType(searchRequest),
 		"limit":      1000, // Match the limit from the original search
 	}
-	
+
 	// Add search parameters
 	if searchRequest.Query != "" {
 		requestBody["query"] = searchRequest.Query
@@ -48,31 +48,31 @@ func (c *Client) ResolveDetailsLinks(searchRequest indexer.SearchRequest) (map[s
 	if searchRequest.Episode != "" {
 		requestBody["episode"] = searchRequest.Episode
 	}
-	
+
 	jsonData, err := json.Marshal(requestBody)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
-	
+
 	req, err := http.NewRequest("POST", apiURL, bytes.NewBuffer(jsonData))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
-	
+
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Api-Key", c.apiKey)
-	
+
 	resp, err := c.client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query internal API: %w", err)
 	}
 	defer resp.Body.Close()
-	
+
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("internal API returned status %d: %s", resp.StatusCode, string(body))
 	}
-	
+
 	// Parse the response
 	var result struct {
 		SearchResults []struct {
@@ -80,11 +80,11 @@ func (c *Client) ResolveDetailsLinks(searchRequest indexer.SearchRequest) (map[s
 			DetailsLink    string `json:"details_link"`
 		} `json:"searchResults"`
 	}
-	
+
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("failed to parse response: %w", err)
 	}
-	
+
 	// Build the mapping
 	detailsLinks := make(map[string]string)
 	for _, sr := range result.SearchResults {
@@ -92,7 +92,7 @@ func (c *Client) ResolveDetailsLinks(searchRequest indexer.SearchRequest) (map[s
 			detailsLinks[sr.SearchResultID] = sr.DetailsLink
 		}
 	}
-	
+
 	return detailsLinks, nil
 }
 

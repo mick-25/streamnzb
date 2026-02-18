@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
-	"streamnzb/pkg/media/loader"
 	"streamnzb/pkg/core/logger"
+	"streamnzb/pkg/media/loader"
 
 	"github.com/javi11/rardecode/v2"
 )
@@ -38,12 +38,7 @@ func StreamFromBlueprint(ctx context.Context, bp *ArchiveBlueprint) (io.ReadSeek
 
 	parts := make([]virtualPart, len(bp.Parts))
 	for i, p := range bp.Parts {
-		parts[i] = virtualPart{
-			VirtualStart: p.VirtualStart,
-			VirtualEnd:   p.VirtualEnd,
-			VolFile:      p.VolFile,
-			VolOffset:    p.VolOffset,
-		}
+		parts[i] = virtualPart(p)
 	}
 	return NewVirtualStream(ctx, parts, bp.TotalSize, 0), bp.MainFileName, bp.TotalSize, nil
 }

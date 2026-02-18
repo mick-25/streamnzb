@@ -1282,49 +1282,6 @@ func streamScore(s Stream) int {
 	return s.Score
 }
 
-// getQualityScore assigns a score from stream name (legacy fallback, not used for stream sorting)
-func getQualityScore(name string) int {
-	nameLower := strings.ToLower(name)
-
-	// Resolution scoring (primary)
-	score := 0
-	if strings.Contains(nameLower, "4k") || strings.Contains(nameLower, "2160p") {
-		score += 4000
-	} else if strings.Contains(nameLower, "1080p") {
-		score += 3000
-	} else if strings.Contains(nameLower, "720p") {
-		score += 2000
-	} else {
-		score += 1000 // SD
-	}
-
-	// Source quality bonus
-	if strings.Contains(nameLower, "remux") {
-		score += 500
-	} else if strings.Contains(nameLower, "bluray") {
-		score += 400
-	} else if strings.Contains(nameLower, "web-dl") || strings.Contains(nameLower, "web") {
-		score += 300
-	} else if strings.Contains(nameLower, "webrip") {
-		score += 200
-	}
-
-	// Visual tag bonus (HDR/3D)
-	if strings.Contains(nameLower, "hdr") || strings.Contains(nameLower, "dv") || strings.Contains(nameLower, "3d") {
-		score += 100
-	}
-
-	// Atmos/TrueHD bonus
-	if strings.Contains(nameLower, "atmos") {
-		score += 50
-	}
-	if strings.Contains(nameLower, "truehd") {
-		score += 40
-	}
-
-	return score
-}
-
 // limitStreamsPerResolution limits streams per resolution group if MaxStreamsPerResolution is enabled
 // Returns limited streams, still sorted by quality score, filling up to maxTotal if possible
 func limitStreamsPerResolution(streams []Stream, maxPerResolution int, maxTotal int) []Stream {

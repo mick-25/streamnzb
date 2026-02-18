@@ -7,8 +7,8 @@ import (
 	"io"
 	"sync"
 
-	"streamnzb/pkg/media/loader"
 	"streamnzb/pkg/core/logger"
+	"streamnzb/pkg/media/loader"
 )
 
 // virtualPart maps a range of the virtual file to a physical volume location.
@@ -150,7 +150,7 @@ func (s *VirtualStream) Seek(offset int64, whence int) (int64, error) {
 		localOff := target - part.VirtualStart
 		volOff := part.VolOffset + localOff
 		logger.Trace("VirtualStream.Seek: same part, reusing reader", "partIdx", partIdx, "volOff", volOff)
-		
+
 		// Prefetch target segment even when reusing reader (SegmentReader.Seek handles this too, but
 		// doing it here ensures it starts immediately when http.ServeContent calls Seek)
 		if volFile, ok := part.VolFile.(*loader.File); ok && volOff > 0 {
@@ -165,7 +165,7 @@ func (s *VirtualStream) Seek(offset int64, whence int) (int64, error) {
 				}
 			}
 		}
-		
+
 		if seeker, ok := s.currentReader.(io.Seeker); ok {
 			// Calculate seek offset relative to current reader position
 			currentLocalOff := s.offset - part.VirtualStart
@@ -201,7 +201,7 @@ func (s *VirtualStream) Seek(offset int64, whence int) (int64, error) {
 	logger.Trace("VirtualStream.Seek: closing reader, will recreate on next Read", "oldPart", s.currentPart)
 	s.closeReader()
 	s.offset = target
-	
+
 	// Prefetch the target segment immediately when seeking (before Read() is called).
 	// This ensures the segment is downloading while http.ServeContent processes the Range header.
 	if part != nil {
@@ -232,7 +232,7 @@ func (s *VirtualStream) Seek(offset int64, whence int) (int64, error) {
 			logger.Debug("VirtualStream.Seek: not RAR volume or volOff=0", "isLoaderFile", ok, "volOff", volOff)
 		}
 	}
-	
+
 	return target, nil
 }
 

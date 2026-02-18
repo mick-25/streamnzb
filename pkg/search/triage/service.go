@@ -179,7 +179,7 @@ func (s *Service) calculateScore(rel *release.Release, p *parser.ParsedRelease) 
 	// Visual tag boost (HDR and 3D)
 	// Combine HDR and 3D into visual tags
 	// PTT ThreeD formats: "3D", "3D HSBS", "3D SBS", "3D HOU", "3D OU"
-	if s.SortConfig.VisualTagWeights != nil && len(s.SortConfig.VisualTagWeights) > 0 {
+	if len(s.SortConfig.VisualTagWeights) > 0 {
 		visualTags := make([]string, 0)
 		visualTags = append(visualTags, p.HDR...)
 		if p.ThreeD != "" {

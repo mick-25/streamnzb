@@ -5,27 +5,27 @@ import (
 	"net/url"
 	"os"
 	"sort"
-	"strings"
 	"streamnzb/pkg/core/config"
+	"streamnzb/pkg/core/logger"
+	"streamnzb/pkg/core/paths"
+	"streamnzb/pkg/core/persistence"
 	"streamnzb/pkg/indexer"
 	"streamnzb/pkg/indexer/easynews"
 	"streamnzb/pkg/indexer/newznab"
 	"streamnzb/pkg/indexer/nzbhydra"
 	"streamnzb/pkg/indexer/prowlarr"
-	"streamnzb/pkg/core/logger"
 	"streamnzb/pkg/usenet/nntp"
-	"streamnzb/pkg/core/paths"
-	"streamnzb/pkg/core/persistence"
+	"strings"
 )
 
 // InitializedComponents holds all the components initialized during bootstrap
 type InitializedComponents struct {
-	Config                *config.Config
-	Indexer               indexer.Indexer
-	ProviderPools         map[string]*nntp.ClientPool
-	ProviderOrder         []string // Provider names in priority order (for single-provider validation)
-	StreamingPools        []*nntp.ClientPool
-	AvailNZBIndexerHosts  []string // Underlying indexer hostnames for AvailNZB GetReleases filter (e.g. nzbgeek.info)
+	Config               *config.Config
+	Indexer              indexer.Indexer
+	ProviderPools        map[string]*nntp.ClientPool
+	ProviderOrder        []string // Provider names in priority order (for single-provider validation)
+	StreamingPools       []*nntp.ClientPool
+	AvailNZBIndexerHosts []string // Underlying indexer hostnames for AvailNZB GetReleases filter (e.g. nzbgeek.info)
 }
 
 // WaitForInputAndExit prints an error and waits for user input before exiting

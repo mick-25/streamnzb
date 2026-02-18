@@ -20,14 +20,14 @@ type SegmentReader struct {
 	cancel context.CancelFunc
 	parent context.Context // Store parent to recreate context on seek
 
-	mu         sync.Mutex
-	segIdx     int
-	segOff     int64 // byte offset within current segment
-	offset     int64 // virtual offset in file
-	closed     bool
+	mu     sync.Mutex
+	segIdx int
+	segOff int64 // byte offset within current segment
+	offset int64 // virtual offset in file
+	closed bool
 
 	// Prefetch
-	prefetchWg sync.WaitGroup
+	prefetchWg  sync.WaitGroup
 	prefetching map[int]bool
 }
 
@@ -205,7 +205,7 @@ func (r *SegmentReader) Seek(offset int64, whence int) (int64, error) {
 	r.ctx, r.cancel = context.WithCancel(r.parent)
 	// Clear prefetching map - old prefetch goroutines will exit via context cancellation
 	r.prefetching = make(map[int]bool)
-	
+
 	r.offset = target
 	if target >= r.file.Size() {
 		r.segIdx = len(r.file.segments)

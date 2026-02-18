@@ -4,8 +4,8 @@ import (
 	"strings"
 
 	"streamnzb/pkg/core/config"
-	"streamnzb/pkg/search/parser"
 	"streamnzb/pkg/release"
+	"streamnzb/pkg/search/parser"
 )
 
 // checkQuality validates quality filters
@@ -115,11 +115,11 @@ func checkCodec(cfg *config.FilterConfig, p *parser.ParsedRelease) bool {
 	// PTT normalizes: h264/x264 -> AVC, h265/x265 -> HEVC
 	// But we check against user input which might use aliases
 	codecAliases := map[string][]string{
-		"avc":   {"avc", "h264", "x264", "h.264"},
-		"hevc":  {"hevc", "h265", "x265", "h.265"},
+		"avc":    {"avc", "h264", "x264", "h.264"},
+		"hevc":   {"hevc", "h265", "x265", "h.265"},
 		"mpeg-2": {"mpeg-2", "mpeg2", "mpeg"},
-		"divx":  {"divx", "dvix"},
-		"xvid":  {"xvid"},
+		"divx":   {"divx", "dvix"},
+		"xvid":   {"xvid"},
 	}
 
 	// Check blocked codecs
@@ -415,7 +415,7 @@ func checkOther(cfg *config.FilterConfig, p *parser.ParsedRelease) bool {
 			"10bit": 10,
 			"12bit": 12,
 		}
-		
+
 		minValue, minOk := bitDepthHierarchy[strings.ToLower(cfg.MinBitDepth)]
 		if minOk {
 			currentValue, currentOk := bitDepthHierarchy[strings.ToLower(p.BitDepth)]

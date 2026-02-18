@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"streamnzb/pkg/indexer"
 	"streamnzb/pkg/core/logger"
+	"streamnzb/pkg/indexer"
 )
 
 // IndexerDefinition represents a Prowlarr indexer configuration (API response)
@@ -47,7 +47,7 @@ func GetConfiguredIndexers(baseURL, apiKey string, um *indexer.UsageManager) ([]
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, nil, fmt.Errorf("Prowlarr returned status %d", resp.StatusCode)
+		return nil, nil, fmt.Errorf("prowlarr returned status %d", resp.StatusCode)
 	}
 
 	body, err := io.ReadAll(resp.Body)

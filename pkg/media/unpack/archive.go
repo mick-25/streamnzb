@@ -5,8 +5,8 @@ import (
 	"io"
 	"strings"
 
-	"streamnzb/pkg/media/loader"
 	"streamnzb/pkg/core/logger"
+	"streamnzb/pkg/media/loader"
 )
 
 // ReadSeekCloser combines Reader, Seeker and Closer.

@@ -9,9 +9,9 @@ import (
 
 // UsageData stores the usage for a specific indexer
 type UsageData struct {
-	LastResetDay   string `json:"last_reset_day"`
-	APIHitsUsed    int    `json:"api_hits_used"`
-	DownloadsUsed  int    `json:"downloads_used"`
+	LastResetDay  string `json:"last_reset_day"`
+	APIHitsUsed   int    `json:"api_hits_used"`
+	DownloadsUsed int    `json:"downloads_used"`
 }
 
 // UsageManager handles persistent storage of indexer usage via StateManager
@@ -86,14 +86,14 @@ func (m *UsageManager) UpdateUsage(name string, apiHits, downloads int) {
 	m.mu.Lock()
 	// We don't unlock yet because we want to save while holding lock?
 	// Actually, let's update then save.
-	
+
 	today := time.Now().Format("2006-01-02")
 	data, ok := m.data[name]
 	if !ok {
 		data = &UsageData{LastResetDay: today}
 		m.data[name] = data
 	}
-	
+
 	if data.LastResetDay != today {
 		data.LastResetDay = today
 		data.APIHitsUsed = apiHits
@@ -122,7 +122,7 @@ func (m *UsageManager) IncrementUsed(name string, hits, downloads int) {
 		data = &UsageData{LastResetDay: today}
 		m.data[name] = data
 	}
-	
+
 	if data.LastResetDay != today {
 		data.LastResetDay = today
 		data.APIHitsUsed = hits
@@ -141,7 +141,7 @@ func (m *UsageManager) IncrementUsed(name string, hits, downloads int) {
 // SyncUsage removes usage data for indexers that are no longer active
 func (m *UsageManager) SyncUsage(activeNames []string) {
 	m.mu.Lock()
-	
+
 	activeMap := make(map[string]bool)
 	for _, name := range activeNames {
 		activeMap[name] = true

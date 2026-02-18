@@ -115,11 +115,11 @@ func (a *App) buildFull(cfg *config.Config, opts BuildOpts) (*Components, error)
 type ReloadScope int
 
 const (
-	ReloadConfigOnly  ReloadScope = iota // Filters, Sorting, MaxStreams, LogLevel - no NNTP/indexer restart
-	ReloadIndexers                       // Indexers changed
-	ReloadProviders                      // Providers changed - full pool rebuild
-	ReloadProxy                          // Proxy settings changed
-	ReloadFull                           // Indexers or Providers changed - full rebuild
+	ReloadConfigOnly ReloadScope = iota // Filters, Sorting, MaxStreams, LogLevel - no NNTP/indexer restart
+	ReloadIndexers                      // Indexers changed
+	ReloadProviders                     // Providers changed - full pool rebuild
+	ReloadProxy                         // Proxy settings changed
+	ReloadFull                          // Indexers or Providers changed - full rebuild
 )
 
 // ConfigChanged returns what scope of reload is needed

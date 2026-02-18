@@ -375,7 +375,7 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 
 func (c *Client) DownloadNZB(ctx context.Context, nzbURL string) ([]byte, error) {
 	if err := c.checkDownloadLimit(); err != nil {
-		logger.Warn("Download limit reached for %s", "indexer", c.Name())
+		logger.Warn("Download limit reached for indexer", "indexer", c.Name())
 		return nil, err
 	}
 	if ctx == nil {
