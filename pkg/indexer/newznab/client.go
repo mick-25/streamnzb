@@ -10,8 +10,9 @@ import (
 	"net/url"
 	"strconv"
 	"streamnzb/pkg/core/config"
-	"streamnzb/pkg/indexer"
+	"streamnzb/pkg/core/env"
 	"streamnzb/pkg/core/logger"
+	"streamnzb/pkg/indexer"
 	"strings"
 	"sync"
 	"time"
@@ -302,7 +303,14 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 	apiURL := fmt.Sprintf("%s%s?%s", c.baseURL, c.apiPath, params.Encode())
 	logger.Debug("Newznab search request", "indexer", c.Name(), "url", apiURL, "limit", limit)
 
-	resp, err := c.client.Get(apiURL)
+	httpReq, err := http.NewRequestWithContext(context.Background(), "GET", apiURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	if ua := env.IndexerQueryHeader(); ua != "" {
+		httpReq.Header.Set("User-Agent", ua)
+	}
+	resp, err := c.client.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query %s: %w", c.Name(), err)
 	}
@@ -377,6 +385,9 @@ func (c *Client) DownloadNZB(ctx context.Context, nzbURL string) ([]byte, error)
 	req, err := http.NewRequestWithContext(ctx, "GET", nzbURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	if ua := env.IndexerGrabHeader(); ua != "" {
+		req.Header.Set("User-Agent", ua)
 	}
 	resp, err := c.client.Do(req)
 	if err != nil {

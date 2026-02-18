@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"streamnzb/pkg/core/env"
 	"streamnzb/pkg/indexer"
 )
 
@@ -282,8 +283,11 @@ func (c *Client) searchInternal(query, season, episode, category string, strictM
 	}
 
 	req.SetBasicAuth(c.username, c.password)
-	req.Header.Set("User-Agent", "StreamNZB-Easynews/1.0")
-
+	if ua := env.IndexerQueryHeader(); ua != "" {
+		req.Header.Set("User-Agent", ua)
+	} else {
+		req.Header.Set("User-Agent", "StreamNZB-Easynews/1.0")
+	}
 	resp, err := c.client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("Easynews search request failed: %w", err)
@@ -342,8 +346,9 @@ func (c *Client) downloadNZBInternal(payload map[string]interface{}) ([]byte, er
 
 	req.SetBasicAuth(c.username, c.password)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("User-Agent", "StreamNZB-Easynews/1.0")
-
+	if ua := env.IndexerGrabHeader(); ua != "" {
+		req.Header.Set("User-Agent", ua)
+	}
 	resp, err := c.client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("Easynews NZB download request failed: %w", err)

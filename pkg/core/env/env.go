@@ -32,6 +32,9 @@ const (
 	TZVar                    = "TZ"
 	ProviderPrefix           = "PROVIDER_"
 	IndexerPrefix            = "INDEXER_"
+	IndexerQueryHeaderEnv    = "INDEXER_QUERY_HEADER"
+	IndexerGrabHeaderEnv     = "INDEXER_GRAB_HEADER"
+	ProviderHeaderEnv        = "PROVIDER_HEADER"
 )
 
 // Config JSON keys returned by OverrideKeys (for UI warnings)
@@ -64,6 +67,21 @@ const AdminUsernameEnv = "ADMIN_USERNAME"
 // TZ returns the TZ environment variable (e.g. for logger timezone).
 func TZ() string {
 	return os.Getenv(TZVar)
+}
+
+// IndexerQueryHeader returns User-Agent for indexer search/query requests. Empty if not set.
+func IndexerQueryHeader() string {
+	return os.Getenv(IndexerQueryHeaderEnv)
+}
+
+// IndexerGrabHeader returns User-Agent for indexer NZB download/grab requests. Empty if not set.
+func IndexerGrabHeader() string {
+	return os.Getenv(IndexerGrabHeaderEnv)
+}
+
+// ProviderHeader returns User-Agent for NNTP provider connections. Empty if not set.
+func ProviderHeader() string {
+	return os.Getenv(ProviderHeaderEnv)
 }
 
 // LogLevel returns LOG_LEVEL with default "INFO" (for early logger init before config).

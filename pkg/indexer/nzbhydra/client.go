@@ -9,8 +9,9 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
-	"streamnzb/pkg/indexer"
+	"streamnzb/pkg/core/env"
 	"streamnzb/pkg/core/logger"
+	"streamnzb/pkg/indexer"
 	"strings"
 	"sync"
 	"time"
@@ -70,7 +71,14 @@ type APIError struct {
 // Ping checks if the NZBHydra2 server is reachable and the API key is valid
 func (c *Client) Ping() error {
 	apiURL := fmt.Sprintf("%s/api?t=caps&apikey=%s", c.baseURL, c.apiKey)
-	resp, err := c.client.Get(apiURL)
+	req, err := http.NewRequestWithContext(context.Background(), "GET", apiURL, nil)
+	if err != nil {
+		return err
+	}
+	if ua := env.IndexerQueryHeader(); ua != "" {
+		req.Header.Set("User-Agent", ua)
+	}
+	resp, err := c.client.Do(req)
 	if err != nil {
 		return err
 	}
@@ -223,12 +231,16 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 	}
 
 	apiURL := fmt.Sprintf("%s/api?%s", c.baseURL, params.Encode())
-
-	// Debug: Log the actual API URL being called
-	// Debug: Log the actual API URL being called
 	logger.Debug("NZBHydra2 API URL", "url", apiURL)
 
-	resp, err := c.client.Get(apiURL)
+	httpReq, err := http.NewRequestWithContext(context.Background(), "GET", apiURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	if ua := env.IndexerQueryHeader(); ua != "" {
+		httpReq.Header.Set("User-Agent", ua)
+	}
+	resp, err := c.client.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query NZBHydra2: %w", err)
 	}
@@ -299,7 +311,9 @@ func (c *Client) DownloadNZB(ctx context.Context, nzbURL string) ([]byte, error)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
-
+	if ua := env.IndexerGrabHeader(); ua != "" {
+		req.Header.Set("User-Agent", ua)
+	}
 	resp, err := c.client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to download NZB: %w", err)

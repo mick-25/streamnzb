@@ -14,8 +14,9 @@ import (
 	"sync"
 	"time"
 
-	"streamnzb/pkg/indexer"
+	"streamnzb/pkg/core/env"
 	"streamnzb/pkg/core/logger"
+	"streamnzb/pkg/indexer"
 	"streamnzb/pkg/release"
 )
 
@@ -137,7 +138,9 @@ func (c *Client) Ping() error {
 		return err
 	}
 	req.Header.Set("X-Api-Key", c.apiKey)
-
+	if ua := env.IndexerQueryHeader(); ua != "" {
+		req.Header.Set("User-Agent", ua)
+	}
 	logger.Debug("Prowlarr Ping URL", "url", apiURL)
 	resp, err := c.client.Do(req)
 	if err != nil {
@@ -212,7 +215,9 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 		return nil, err
 	}
 	reqBod.Header.Set("X-Api-Key", c.apiKey)
-
+	if ua := env.IndexerQueryHeader(); ua != "" {
+		reqBod.Header.Set("User-Agent", ua)
+	}
 	resp, err := c.client.Do(reqBod)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query Prowlarr: %w", err)
@@ -341,7 +346,9 @@ func (c *Client) DownloadNZB(ctx context.Context, nzbURL string) ([]byte, error)
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 	req.Header.Set("X-Api-Key", c.apiKey)
-
+	if ua := env.IndexerGrabHeader(); ua != "" {
+		req.Header.Set("User-Agent", ua)
+	}
 	logger.Debug("Prowlarr Download URL", "url", nzbURL)
 	resp, err := c.client.Do(req)
 	if err != nil {
