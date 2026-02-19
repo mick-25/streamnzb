@@ -9,9 +9,11 @@ import (
 
 // UsageData stores the usage for a specific indexer
 type UsageData struct {
-	LastResetDay  string `json:"last_reset_day"`
-	APIHitsUsed   int    `json:"api_hits_used"`
-	DownloadsUsed int    `json:"downloads_used"`
+	LastResetDay         string `json:"last_reset_day"`
+	APIHitsUsed          int    `json:"api_hits_used"`
+	DownloadsUsed        int    `json:"downloads_used"`
+	AllTimeAPIHitsUsed   int    `json:"all_time_api_hits_used"`
+	AllTimeDownloadsUsed int    `json:"all_time_downloads_used"`
 }
 
 // UsageManager handles persistent storage of indexer usage via StateManager
@@ -51,7 +53,28 @@ func (m *UsageManager) load() error {
 	defer m.mu.Unlock()
 
 	_, err := m.state.Get("indexer_usage", &m.data)
-	return err
+	if err != nil {
+		return err
+	}
+
+	var needSave bool
+	for _, data := range m.data {
+		if data == nil {
+			continue
+		}
+		if data.AllTimeAPIHitsUsed != 0 || data.AllTimeDownloadsUsed != 0 {
+			continue
+		}
+		if data.APIHitsUsed > 0 || data.DownloadsUsed > 0 {
+			data.AllTimeAPIHitsUsed = data.APIHitsUsed
+			data.AllTimeDownloadsUsed = data.DownloadsUsed
+			needSave = true
+		}
+	}
+	if needSave {
+		_ = m.state.Set("indexer_usage", m.data)
+	}
+	return nil
 }
 
 func (m *UsageManager) save() error {
@@ -96,15 +119,29 @@ func (m *UsageManager) UpdateUsage(name string, apiHits, downloads int) {
 
 	if data.LastResetDay != today {
 		data.LastResetDay = today
+		// Add previous day's final counts to all-time before resetting
+		data.AllTimeAPIHitsUsed += data.APIHitsUsed
+		data.AllTimeDownloadsUsed += data.DownloadsUsed
 		data.APIHitsUsed = apiHits
 		data.DownloadsUsed = downloads
+		// Add today's usage from indexer headers (may be >0 if searches already done today)
+		data.AllTimeAPIHitsUsed += apiHits
+		data.AllTimeDownloadsUsed += downloads
 	} else {
 		// Newznab headers often give us the TOTAL spent or REMAINING.
 		// If apiHits is provided as an absolute "used" value, we set it.
 		// If it's a delta, we should add it.
 		// Let's assume absolute "used" for simplicity if possible.
+		deltaHits := apiHits - data.APIHitsUsed
+		deltaDls := downloads - data.DownloadsUsed
 		data.APIHitsUsed = apiHits
 		data.DownloadsUsed = downloads
+		if deltaHits > 0 {
+			data.AllTimeAPIHitsUsed += deltaHits
+		}
+		if deltaDls > 0 {
+			data.AllTimeDownloadsUsed += deltaDls
+		}
 	}
 	m.mu.Unlock()
 
@@ -131,6 +168,8 @@ func (m *UsageManager) IncrementUsed(name string, hits, downloads int) {
 		data.APIHitsUsed += hits
 		data.DownloadsUsed += downloads
 	}
+	data.AllTimeAPIHitsUsed += hits
+	data.AllTimeDownloadsUsed += downloads
 	m.mu.Unlock()
 
 	if err := m.save(); err != nil {
@@ -138,7 +177,25 @@ func (m *UsageManager) IncrementUsed(name string, hits, downloads int) {
 	}
 }
 
-// SyncUsage removes usage data for indexers that are no longer active
+// GetUsageByPrefix returns usage data for all indexers whose name has the given prefix.
+// Used by meta-indexers (e.g. NZBHydra) to report per-indexer stats.
+func (m *UsageManager) GetUsageByPrefix(prefix string) map[string]*UsageData {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	result := make(map[string]*UsageData)
+	for name, data := range m.data {
+		if len(name) >= len(prefix) && name[:len(prefix)] == prefix {
+			// Return a copy to avoid concurrent modification
+			cp := *data
+			result[name] = &cp
+		}
+	}
+	return result
+}
+
+// SyncUsage removes usage data for indexers that are no longer active.
+// Keeps sub-indexers (e.g. "NZBHydra2: NZBgeek") when their parent (e.g. "NZBHydra2") is active.
 func (m *UsageManager) SyncUsage(activeNames []string) {
 	m.mu.Lock()
 
@@ -147,9 +204,24 @@ func (m *UsageManager) SyncUsage(activeNames []string) {
 		activeMap[name] = true
 	}
 
+	// Check if name is active (directly or as sub-indexer of an active parent)
+	isActive := func(name string) bool {
+		if activeMap[name] {
+			return true
+		}
+		// Check if this is a sub-indexer (e.g. "NZBHydra2: NZBgeek")
+		for active := range activeMap {
+			prefix := active + ": "
+			if len(name) > len(prefix) && name[:len(prefix)] == prefix {
+				return true
+			}
+		}
+		return false
+	}
+
 	changed := false
 	for name := range m.data {
-		if !activeMap[name] {
+		if !isActive(name) {
 			logger.Info("Removing orphaned usage data for indexer", "name", name)
 			delete(m.data, name)
 			changed = true

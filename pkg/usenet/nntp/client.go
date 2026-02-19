@@ -8,6 +8,7 @@ import (
 	"net/textproto"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -135,16 +136,43 @@ func (c *Client) Group(group string) error {
 	return errors.New("group command failed after retries")
 }
 
+// bodyReader calls EndResponse when the body is fully read (on EOF), so the
+// pipeline is notified only after consumption, per textproto semantics.
+type bodyReader struct {
+	io.Reader
+	endResponse func()
+	once        sync.Once
+}
+
+func (b *bodyReader) Read(p []byte) (n int, err error) {
+	n, err = b.Reader.Read(p)
+	if err == io.EOF {
+		b.once.Do(b.endResponse)
+	}
+	return n, err
+}
+
+// formatMessageID returns the message-id for NNTP BODY: must be in angle brackets.
+// NZB segment IDs are usually "id@host"; some include "<>". Avoid double-wrapping.
+func formatMessageID(messageID string) string {
+	s := strings.TrimSpace(messageID)
+	if len(s) >= 2 && s[0] == '<' && s[len(s)-1] == '>' {
+		return s
+	}
+	return "<" + s + ">"
+}
+
 // Body returns a Reader for the body of the article.
-// Caller is responsible for reading until EOF (dot).
+// Caller is responsible for reading until EOF (dot). EndResponse is called only after EOF.
 func (c *Client) Body(messageID string) (io.Reader, error) {
 	const maxRetries = 2
 	var lastErr error
 
 	for i := 0; i <= maxRetries; i++ {
-		// 1. Send Command
+		// 1. Send Command (message-id must be in angle brackets)
 		c.setDeadline()
-		id, err := c.conn.Cmd("BODY <%s>", messageID)
+		bodyArg := formatMessageID(messageID)
+		id, err := c.conn.Cmd("BODY %s", bodyArg)
 		if err != nil {
 			// Network error sending command?
 			// Force reconnect and retry
@@ -158,39 +186,32 @@ func (c *Client) Body(messageID string) (io.Reader, error) {
 			return nil, err
 		}
 
-		// 2. Read Response
+		// 2. Read Response (do NOT call EndResponse yet — body must be consumed first)
 		c.conn.StartResponse(id)
 		code, _, err := c.conn.ReadCodeLine(222)
-		c.conn.EndResponse(id)
-
-		if err == nil {
-			// Set deadline for body read to prevent indefinite blocking
-			// Use a longer timeout (5 minutes) for large segments
-			c.setDeadline()
-			if c.netConn != nil {
-				c.netConn.SetDeadline(time.Now().Add(5 * time.Minute))
+		if err != nil {
+			c.conn.EndResponse(id)
+			lastErr = err
+			if c.shouldRetry(code, err) {
+				if recErr := c.Reconnect(); recErr == nil {
+					continue
+				}
 			}
-			// Wrap reader to track metrics
-			return &metricReader{r: c.conn.DotReader(), client: c}, nil
-		}
-
-		lastErr = err
-
-		// 3. Handle Errors
-		// Retry on 480 (Auth) or 0 (Network)
-		if c.shouldRetry(code, err) {
-			// If we reconnected successfully, loop again
-			if recErr := c.Reconnect(); recErr == nil {
-				continue
-			}
-			// If reconnect fails, we probably return the reconnect error or original?
-			// Let's return the original error wrapped or just fail.
-		} else {
-			// Unrecoverable error (e.g. 430 Not Found)
 			return nil, err
 		}
-	}
 
+		// Set deadline for body read to prevent indefinite blocking
+		c.setDeadline()
+		if c.netConn != nil {
+			c.netConn.SetDeadline(time.Now().Add(5 * time.Minute))
+		}
+		metricR := &metricReader{r: c.conn.DotReader(), client: c}
+		// Defer EndResponse until caller reads to EOF so pipeline matches actual consumption
+		return &bodyReader{
+			Reader:      metricR,
+			endResponse: func() { c.conn.EndResponse(id) },
+		}, nil
+	}
 	return nil, lastErr
 }
 

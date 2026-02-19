@@ -46,7 +46,7 @@ func GetConfiguredIndexers(baseURL, apiKey, displayName string, um *indexer.Usag
 	params.Set("apikey", apiKey)
 	params.Set("t", "search")
 	params.Set("q", "sample")
-	params.Set("limit", "10") // We only need one result per indexer
+	params.Set("limit", "100") // We only need one result per indexer
 	params.Set("o", "xml")
 
 	apiURL := fmt.Sprintf("%s/api?%s", baseURL, params.Encode())

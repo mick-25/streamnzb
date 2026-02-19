@@ -4,7 +4,7 @@ streamnzb.exe~
 .git
 dist/
 config.json
-pkg/web/static
+pkg/server/web/static
 state.json
 *.log
 .cursor

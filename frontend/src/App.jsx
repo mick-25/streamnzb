@@ -9,12 +9,13 @@ import { Badge } from "@/components/ui/badge"
 import { 
   ChartContainer, 
   ChartTooltip, 
-  ChartTooltipContent 
+  ChartTooltipContent,
+  ChartLegendContent,
 } from "@/components/ui/chart"
-import { Area, AreaChart, ResponsiveContainer, XAxis, YAxis } from "recharts"
+import { Area, AreaChart, ComposedChart, Line, Legend, ResponsiveContainer, XAxis, YAxis } from "recharts"
 import { 
   Activity, Server, Zap, Globe, Settings as SettingsIcon, AlertCircle, 
-  Sun, Moon, Monitor, X, Loader2, Tv, Clipboard, Check, ChevronDown, MonitorPlay, Menu, LogOut
+  Sun, Moon, Monitor, X, Loader2, Tv, Clipboard, Check, ChevronDown, ChevronUp, MonitorPlay, Menu, LogOut
 } from "lucide-react"
 import {
   DropdownMenu,
@@ -34,6 +35,12 @@ const chartConfig = {
     label: "Connections",
     color: "hsl(var(--chart-2))",
   },
+}
+
+function formatDownloadedMb(mb) {
+  const n = Number(mb) || 0
+  if (n >= 1000) return { value: (n / 1000).toFixed(2), unit: 'GB' }
+  return { value: n.toFixed(1), unit: 'MB' }
 }
 
 const DiscordIcon = (props) => (
@@ -67,9 +74,17 @@ function App() {
   
   const [logs, setLogs] = useState([])
   const logsEndRef = useRef(null)
-  
+  const [logsCollapsed, setLogsCollapsed] = useState(true)
+
   const MAX_HISTORY = 60
   const MAX_LOGS = 200
+
+  // Merged series for dual-axis chart (speed + connections over time)
+  const chartData = history.map((h, i) => ({
+    time: h.time,
+    speed: h.speed,
+    conns: connHistory[i]?.conns ?? 0,
+  }))
 
   // Fetch app info (version) on mount - public endpoint
   useEffect(() => {
@@ -671,238 +686,236 @@ function App() {
         />
       )}
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-        <Card className="flex flex-col">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Active Connections</CardTitle>
-            <Activity className={`h-4 w-4 ${stats.active_sessions?.length > 0 ? 'text-primary animate-pulse' : 'text-muted-foreground'}`} />
-          </CardHeader>
-          <CardContent className="flex-1 overflow-y-auto max-h-[140px] pt-2">
-            {stats.active_sessions?.length > 0 ? (
-                <div className="space-y-3">
-                    {stats.active_sessions.map(sess => (
-                        <div key={sess.id} className="group relative bg-secondary/30 rounded-md p-2 pr-10">
-                            <div className="text-xs font-bold truncate pr-2" title={sess.title}>{sess.title}</div>
-                            <div className="text-[10px] text-muted-foreground truncate">
-                                {sess.clients.join(', ')}
-                            </div>
-                            <Button 
-                                variant="ghost" 
-                                size="icon" 
-                                className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7 text-destructive hover:bg-destructive/10"
-                                onClick={() => sendCommand('close_session', { id: sess.id })}
-                            >
-                                <X className="h-4 w-4" />
-                            </Button>
-                        </div>
-                    ))}
-                </div>
-            ) : (
-                <div className="flex flex-col items-center justify-center h-full text-muted-foreground py-4">
-                    <div className="text-2xl font-bold text-foreground">0</div>
-                    <p className="text-xs mt-1">No active playback</p>
-                </div>
-            )}
+      {/* Top row: compact KPI cards */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
+        <Card className="bg-card/80 border-border/80 shadow-sm">
+          <CardContent className="p-4">
+            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Total Speed</p>
+            <p className="text-2xl md:text-3xl font-bold mt-1 tabular-nums">{(stats.total_speed_mbps ?? 0).toFixed(1)} <span className="text-sm font-normal text-muted-foreground">Mbps</span></p>
           </CardContent>
         </Card>
-
-        <Card className="md:col-span-2 overflow-hidden flex flex-col">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <div>
-                <CardTitle className="text-sm font-medium">Total Speed</CardTitle>
-                <div className="text-2xl font-bold mt-1">{stats.total_speed_mbps.toFixed(1)} <span className="text-sm font-normal text-muted-foreground">Mbps</span></div>
-            </div>
-            <Zap className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent className="p-0 flex-1">
-            <ChartContainer config={chartConfig} className="h-[120px] w-full">
-                <AreaChart data={history}>
-                    <defs>
-                        <linearGradient id="fillSpeed" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="5%" stopColor="hsl(var(--chart-1))" stopOpacity={0.4}/>
-                            <stop offset="100%" stopColor="hsl(var(--chart-1))" stopOpacity={0.1}/>
-                        </linearGradient>
-                    </defs>
-                    <Area 
-                        type="monotone" 
-                        dataKey="speed" 
-                        stroke="hsl(var(--chart-1))" 
-                        fill="url(#fillSpeed)" 
-                        strokeWidth={2}
-                        isAnimationActive={false}
-                    />
-                    <ChartTooltip content={<ChartTooltipContent hideLabel />} />
-                </AreaChart>
-            </ChartContainer>
+        <Card className="bg-card/80 border-border/80 shadow-sm">
+          <CardContent className="p-4">
+            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Active Connections</p>
+            <p className="text-2xl md:text-3xl font-bold mt-1 tabular-nums">{stats.active_sessions?.length ?? 0}</p>
+            <p className="text-xs text-muted-foreground mt-0.5">streaming</p>
           </CardContent>
         </Card>
-
-        <Card className="md:col-span-3 overflow-hidden flex flex-col">
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <div>
-                    <CardTitle className="text-sm font-medium">Pool Connections</CardTitle>
-                    <div className="text-2xl font-bold mt-1">
-                        {stats.active_connections} <span className="text-sm font-normal text-muted-foreground">/ {stats.total_connections} active</span>
-                    </div>
-                </div>
-                <Server className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent className="p-0 flex-1">
-               <ChartContainer config={chartConfig} className="h-[80px] w-full">
-                    <AreaChart data={connHistory}>
-                        <defs>
-                            <linearGradient id="fillConns" x1="0" y1="0" x2="0" y2="1">
-                                <stop offset="5%" stopColor="hsl(var(--chart-2))" stopOpacity={0.4}/>
-                                <stop offset="100%" stopColor="hsl(var(--chart-2))" stopOpacity={0.1}/>
-                            </linearGradient>
-                        </defs>
-                        <Area 
-                            type="step" 
-                            dataKey="conns" 
-                            stroke="hsl(var(--chart-2))" 
-                            fill="url(#fillConns)" 
-                            strokeWidth={2}
-                            isAnimationActive={false}
-                        />
-                        <ChartTooltip content={<ChartTooltipContent hideLabel />} />
-                    </AreaChart>
-                </ChartContainer>
-            </CardContent>
+        <Card className="bg-card/80 border-border/80 shadow-sm">
+          <CardContent className="p-4">
+            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Pool Connections</p>
+            <p className="text-2xl md:text-3xl font-bold mt-1 tabular-nums">{stats.active_connections} <span className="text-sm font-normal text-muted-foreground">/ {stats.total_connections}</span></p>
+          </CardContent>
+        </Card>
+        <Card className="bg-card/80 border-border/80 shadow-sm">
+          <CardContent className="p-4">
+            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Downloaded Today</p>
+            <p className="text-2xl md:text-3xl font-bold mt-1 tabular-nums">
+              {(() => {
+                const { value, unit } = formatDownloadedMb(stats.total_downloaded_mb)
+                return <>{value} <span className="text-sm font-normal text-muted-foreground">{unit}</span></>
+              })()}
+            </p>
+          </CardContent>
         </Card>
       </div>
 
-      <div className="space-y-4">
-        <div className="flex items-center gap-2">
-            <Globe className="h-5 w-5 text-muted-foreground" />
-            <h2 className="text-xl font-semibold tracking-tight">Usenet Providers</h2>
-        </div>
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-          {stats.providers.map((p) => (
-            <Card key={p.name} className="bg-card/50">
-               <CardHeader className="p-4 pb-2">
-                  <div className="flex justify-between items-start">
-                    <CardTitle className="text-sm font-bold truncate leading-tight" title={p.name}>{p.name}</CardTitle>
-                    <Badge variant="outline" className="text-[10px] py-0 h-4">{p.max_conns}</Badge>
-                  </div>
-                  <p className="text-[10px] text-muted-foreground truncate" title={p.host}>{p.host}</p>
-               </CardHeader>
-               <CardContent className="p-4 pt-0">
-                  <div className="flex items-center justify-between mt-2">
-                     <div className="flex flex-col">
-                        <span className="text-[10px] uppercase text-muted-foreground font-medium">Load</span>
-                        <span className="text-sm font-bold">{((p.active_conns / (p.max_conns || 1)) * 100).toFixed(0)}%</span>
-                     </div>
-                     <div className="flex flex-col text-right">
-                        <span className="text-[10px] uppercase text-muted-foreground font-medium">Speed</span>
-                        <span className="text-sm font-bold text-primary">{p.current_speed_mbps.toFixed(1)} <span className="text-[10px]">M</span></span>
-                     </div>
-                  </div>
-                  <div className="w-full bg-secondary h-1 rounded-full mt-2 overflow-hidden">
-                     <div 
-                        className="bg-primary h-full transition-all duration-500" 
-                        style={{ width: `${(p.active_conns / (p.max_conns || 1)) * 100}%` }} 
-                     />
-                  </div>
-                  <div className="mt-3 flex items-center justify-between text-[10px] text-muted-foreground">
-                    <span>
-                      Downloaded:&nbsp;
-                      <span className="font-semibold text-foreground">
-                        {p.downloaded_mb?.toFixed ? p.downloaded_mb.toFixed(1) : p.downloaded_mb.toFixed(1)} MB
-                      </span>
-                    </span>
-                    {stats.total_downloaded_mb > 0 && (
-                      <span>
-                        Usage:&nbsp;
-                        <span className="font-semibold text-foreground">
-                          {p.usage_percent.toFixed(0)}%
-                        </span>
-                      </span>
-                    )}
-                  </div>
-               </CardContent>
-            </Card>
-          ))}
-        </div>
-      </div>
+      {/* Main visualization: dual-axis Speed + Connections */}
+      <Card className="mb-6 bg-card/80 border-border/80 shadow-sm overflow-hidden">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm font-medium">Network activity</CardTitle>
+          <p className="text-xs text-muted-foreground">Speed (Mbps) and active connections over time</p>
+        </CardHeader>
+        <CardContent className="p-0">
+          <ChartContainer config={chartConfig} className="h-[200px] w-full">
+            <ComposedChart data={chartData} margin={{ top: 36, right: 8, bottom: 8, left: 32 }}>
+              <Legend content={<ChartLegendContent />} verticalAlign="top" align="right" wrapperStyle={{ paddingBottom: 4 }} />
+              <XAxis dataKey="time" tick={{ fontSize: 10 }} />
+              <YAxis yAxisId="left" tick={{ fontSize: 10 }} width={28} />
+              <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10 }} allowDecimals={false} width={28} />
+              <ChartTooltip content={<ChartTooltipContent />} />
+              <Line yAxisId="left" type="monotone" dataKey="speed" stroke="hsl(var(--chart-1))" strokeWidth={2} dot={false} isAnimationActive={false} name="speed" />
+              <Line yAxisId="right" type="monotone" dataKey="conns" stroke="hsl(var(--chart-2))" strokeWidth={2} dot={false} isAnimationActive={false} name="conns" />
+            </ComposedChart>
+          </ChartContainer>
+        </CardContent>
+      </Card>
 
-      <div className="space-y-4 mt-8">
-        <div className="flex items-center gap-2">
-            <MonitorPlay className="h-5 w-5 text-muted-foreground" />
-            <h2 className="text-xl font-semibold tracking-tight">Indexers</h2>
-        </div>
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-          {stats.indexers?.map((idx) => (
-            <Card key={idx.name} className="bg-card/50">
-               <CardHeader className="p-4 pb-2">
-                  <div className="flex justify-between items-start">
-                    <CardTitle className="text-sm font-bold truncate leading-tight" title={idx.name}>{idx.name}</CardTitle>
-                    <Badge variant="secondary" className="text-[10px] py-0 h-4">Indexer</Badge>
-                  </div>
-               </CardHeader>
-               <CardContent className="p-4 pt-0 space-y-3">
-                  {/* API Hits */}
-                  <div>
-                    <div className="flex items-center justify-between text-[10px] uppercase text-muted-foreground font-medium mb-1">
-                        <span>API Hits</span>
-                        <span>
-                          {idx.api_hits_used} / {idx.api_hits_limit > 0 ? idx.api_hits_limit : '∞'}
-                        </span>
-                    </div>
-                    {idx.api_hits_limit > 0 && (
-                        <div className="w-full bg-secondary h-1.5 rounded-full overflow-hidden">
-                            <div 
-                                className={`h-full transition-all duration-500 ${(idx.api_hits_remaining / idx.api_hits_limit) < 0.2 ? 'bg-destructive' : 'bg-primary'}`} 
-                                style={{ width: `${((idx.api_hits_limit - idx.api_hits_remaining) / idx.api_hits_limit) * 100}%` }} 
-                            />
-                        </div>
-                    )}
-                  </div>
-
-                  {/* Downloads */}
-                  <div>
-                    <div className="flex items-center justify-between text-[10px] uppercase text-muted-foreground font-medium mb-1">
-                        <span>Downloads</span>
-                        <span>
-                          {idx.downloads_used} / {idx.downloads_limit > 0 ? idx.downloads_limit : '∞'}
-                        </span>
-                    </div>
-                    {idx.downloads_limit > 0 && (
-                        <div className="w-full bg-secondary h-1.5 rounded-full overflow-hidden">
-                            <div 
-                                className={`h-full transition-all duration-500 ${(idx.downloads_remaining / idx.downloads_limit) < 0.2 ? 'bg-destructive' : 'bg-primary'}`} 
-                                style={{ width: `${((idx.downloads_limit - idx.downloads_remaining) / idx.downloads_limit) * 100}%` }} 
-                            />
-                        </div>
-                    )}
-                  </div>
-               </CardContent>
-            </Card>
-          ))}
-          {(!stats.indexers || stats.indexers.length === 0) && (
-              <div className="col-span-full py-8 text-center border border-dashed rounded-lg text-muted-foreground text-sm">
-                  No internal indexers configured.
+      {/* Active sessions list (compact, when any) */}
+      {stats.active_sessions?.length > 0 && (
+        <div className="mb-6">
+          <div className="flex items-center gap-2 mb-2">
+            <Activity className="h-4 w-4 text-primary" />
+            <h2 className="text-sm font-semibold">Active streams</h2>
+          </div>
+          <div className="grid gap-2 md:grid-cols-2 lg:grid-cols-3">
+            {stats.active_sessions.map(sess => (
+              <div key={sess.id} className="group relative min-w-0 bg-card/80 border border-border/80 rounded-lg p-3 pr-10 shadow-sm">
+                <div className="text-sm font-medium truncate pr-2 min-w-0" title={sess.title}>{sess.title}</div>
+                <div className="text-xs text-muted-foreground truncate min-w-0">{sess.clients.join(', ')}</div>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 h-7 w-7 text-red-500 hover:text-red-400 hover:bg-red-500/15 transition-colors"
+                  onClick={() => sendCommand('close_session', { id: sess.id })}
+                  title="End stream"
+                >
+                  <X className="h-4 w-4" />
+                </Button>
               </div>
-          )}
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Bottom row: Providers (left) | Indexers (right) */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+        {/* Left: Usenet Providers */}
+        <div className="space-y-3">
+          <div className="flex items-center gap-2">
+            <Globe className="h-5 w-5 text-muted-foreground" />
+            <h2 className="text-lg font-semibold tracking-tight">Usenet Providers</h2>
+          </div>
+          <div className="grid gap-3 grid-cols-1 sm:grid-cols-2">
+            {stats.providers.map((p) => {
+              const loadPct = (p.active_conns / (p.max_conns || 1)) * 100
+              const trafficSharePct = p.usage_percent ?? 0
+              const isHealthy = (p.active_conns >= 0 && p.max_conns > 0)
+              return (
+                <Card key={p.name} className="bg-card/80 border-border/80 shadow-sm">
+                  <CardHeader className="p-3 pb-1">
+                    <div className="flex items-center gap-2">
+                      <span className={`h-2 w-2 rounded-full shrink-0 ${isHealthy ? 'bg-emerald-500' : 'bg-muted-foreground/50'}`} title={isHealthy ? 'Connected' : 'Idle'} />
+                      <CardTitle className="text-sm font-bold truncate leading-tight" title={p.name}>{p.name}</CardTitle>
+                      <Badge variant="outline" className="text-[10px] py-0 h-4 ml-auto">{p.max_conns}</Badge>
+                    </div>
+                    <p className="text-[10px] text-muted-foreground truncate pl-4" title={p.host}>{p.host}</p>
+                  </CardHeader>
+                  <CardContent className="p-3 pt-0">
+                    <div className="flex items-center justify-between mt-2">
+                      <div className="flex flex-col">
+                        <span className="text-[10px] uppercase text-muted-foreground font-medium">Load</span>
+                        <span className="text-sm font-bold">{loadPct.toFixed(0)}%</span>
+                      </div>
+                      <div className="flex flex-col text-right">
+                        <span className="text-[10px] uppercase text-muted-foreground font-medium">Speed</span>
+                        <span className="text-sm font-bold text-primary">{(p.current_speed_mbps ?? 0).toFixed(1)} <span className="text-[10px]">Mbps</span></span>
+                      </div>
+                    </div>
+                    <div className="w-full bg-secondary h-1.5 rounded-full mt-2 overflow-hidden">
+                      <div className="bg-primary h-full transition-all duration-500 rounded-full" style={{ width: `${loadPct}%` }} />
+                    </div>
+                    {stats.total_downloaded_mb > 0 && (
+                      <>
+                        <p className="text-[10px] text-muted-foreground mt-2 mb-1">Traffic share</p>
+                        <div className="w-full bg-secondary h-2 rounded-full overflow-hidden">
+                          <div className="h-full transition-all duration-500 rounded-full bg-[hsl(var(--chart-1))]/70" style={{ width: `${Math.min(trafficSharePct, 100)}%` }} />
+                        </div>
+                        <p className="text-[10px] text-muted-foreground mt-1">Downloaded: {(p.downloaded_mb ?? 0).toFixed(1)} MB · {trafficSharePct.toFixed(0)}% of total</p>
+                      </>
+                    )}
+                    {stats.total_downloaded_mb <= 0 && (
+                      <p className="text-[10px] text-muted-foreground mt-2">Downloaded: {(p.downloaded_mb ?? 0).toFixed(1)} MB</p>
+                    )}
+                  </CardContent>
+                </Card>
+              )
+            })}
+          </div>
+        </div>
+
+        {/* Right: Indexers */}
+        <div className="space-y-3">
+          <div className="flex items-center gap-2">
+            <MonitorPlay className="h-5 w-5 text-muted-foreground" />
+            <h2 className="text-lg font-semibold tracking-tight">Indexers</h2>
+          </div>
+          <div className="grid gap-3 grid-cols-1 sm:grid-cols-2">
+            {stats.indexers?.map((idx) => {
+              const apiUsedPct = idx.api_hits_limit > 0 ? ((idx.api_hits_limit - idx.api_hits_remaining) / idx.api_hits_limit) * 100 : 0
+              const dlUsedPct = idx.downloads_limit > 0 ? ((idx.downloads_limit - idx.downloads_remaining) / idx.downloads_limit) * 100 : 0
+              const barColor = (pct) => pct >= 90 ? 'bg-destructive' : pct >= 75 ? 'bg-yellow-500 dark:bg-yellow-600' : 'bg-emerald-500 dark:bg-emerald-600'
+              const hasApiLimit = idx.api_hits_limit > 0
+              const hasDlLimit = idx.downloads_limit > 0
+              return (
+                <Card key={idx.name} className="relative bg-card/80 border-border/80 shadow-sm overflow-hidden">
+                  <div className="absolute left-0 top-0 bottom-0 w-1 bg-primary/30 rounded-l-md" aria-hidden />
+                  <CardHeader className="p-4 pb-2">
+                    <CardTitle className="text-base font-semibold truncate leading-tight" title={idx.name}>{idx.name}</CardTitle>
+                  </CardHeader>
+                  <CardContent className="p-4 pt-0">
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-1.5">
+                        <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">API hits</p>
+                        <p className="text-lg font-bold tabular-nums">{idx.api_hits_used}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {hasApiLimit ? `of ${idx.api_hits_limit} today` : 'Unlimited'}
+                        </p>
+                        {hasApiLimit && (
+                          <div className="w-full bg-secondary h-2 rounded-full overflow-hidden mt-1">
+                            <div className={`h-full transition-all duration-500 rounded-full ${barColor(apiUsedPct)}`} style={{ width: `${apiUsedPct}%` }} />
+                          </div>
+                        )}
+                        <p className="text-[11px] text-muted-foreground">All-time: {idx.api_hits_used_all_time ?? 0}</p>
+                      </div>
+                      <div className="space-y-1.5">
+                        <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">Downloads</p>
+                        <p className="text-lg font-bold tabular-nums">{idx.downloads_used}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {hasDlLimit ? `of ${idx.downloads_limit} today` : 'Unlimited'}
+                        </p>
+                        {hasDlLimit && (
+                          <div className="w-full bg-secondary h-2 rounded-full overflow-hidden mt-1">
+                            <div className={`h-full transition-all duration-500 rounded-full ${barColor(dlUsedPct)}`} style={{ width: `${dlUsedPct}%` }} />
+                          </div>
+                        )}
+                        <p className="text-[11px] text-muted-foreground">All-time: {idx.downloads_used_all_time ?? 0}</p>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              )
+            })}
+            {(!stats.indexers || stats.indexers.length === 0) && (
+              <div className="col-span-full py-8 text-center border border-dashed rounded-lg text-muted-foreground text-sm bg-card/40">
+                No internal indexers configured.
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
-      <div className="mt-8">
-        <Card className="flex flex-col h-[300px]">
-            <CardHeader className="py-3 px-4 border-b bg-muted/20">
-                <div className="flex items-center gap-2">
-                    <Clipboard className="h-4 w-4 text-muted-foreground" />
-                    <CardTitle className="text-sm font-medium">System Logs</CardTitle>
-                </div>
-            </CardHeader>
-            <CardContent className="flex-1 p-0 overflow-hidden relative">
-                 <div className="absolute inset-0 overflow-y-auto p-4 font-mono text-xs space-y-1">
-                    {logs.length === 0 && <div className="text-muted-foreground italic">Waiting for logs...</div>}
-                    {logs.map((log, i) => (
-                        <div key={i} className="whitespace-pre-wrap break-all border-b border-border/40 pb-0.5 mb-0.5 last:border-0">{log}</div>
-                    ))}
-                    <div ref={logsEndRef} />
-                 </div>
+      {/* System logs: collapsible */}
+      <div className="mt-6">
+        <Card className={`flex flex-col bg-card/80 border-border/80 shadow-sm overflow-hidden ${logsCollapsed ? '' : 'min-h-[200px]'}`}>
+          <CardHeader
+            className="py-3 px-4 border-b bg-muted/20 cursor-pointer select-none flex flex-row items-center justify-between space-y-0"
+            onClick={() => setLogsCollapsed((c) => !c)}
+          >
+            <div className="flex items-center gap-2">
+              <Clipboard className="h-4 w-4 text-muted-foreground" />
+              <CardTitle className="text-sm font-medium">System Logs</CardTitle>
+              {logsCollapsed && logs.length > 0 && (
+                <span className="text-xs text-muted-foreground font-mono truncate max-w-[min(50vw,320px)]" title={logs[logs.length - 1]}>
+                  {logs[logs.length - 1]}
+                </span>
+              )}
+            </div>
+            <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0">
+              {logsCollapsed ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
+            </Button>
+          </CardHeader>
+          {!logsCollapsed && (
+            <CardContent className="flex-1 p-0 overflow-hidden relative min-h-[240px]">
+              <div className="absolute inset-0 overflow-y-auto p-4 font-mono text-xs space-y-1">
+                {logs.length === 0 && <div className="text-muted-foreground italic">Waiting for logs...</div>}
+                {logs.map((log, i) => (
+                  <div key={i} className="whitespace-pre-wrap break-all border-b border-border/40 pb-0.5 mb-0.5 last:border-0">{log}</div>
+                ))}
+                <div ref={logsEndRef} />
+              </div>
             </CardContent>
+          )}
         </Card>
       </div>
 

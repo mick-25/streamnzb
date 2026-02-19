@@ -159,8 +159,7 @@ func (c *Client) Name() string {
 // GetUsage returns the current usage stats
 func (c *Client) GetUsage() indexer.Usage {
 	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return indexer.Usage{
+	u := indexer.Usage{
 		APIHitsLimit:       c.apiLimit,
 		APIHitsUsed:        c.apiUsed,
 		APIHitsRemaining:   c.apiRemaining,
@@ -168,6 +167,13 @@ func (c *Client) GetUsage() indexer.Usage {
 		DownloadsUsed:      c.downloadUsed,
 		DownloadsRemaining: c.downloadRemaining,
 	}
+	c.mu.RUnlock()
+	if c.usageManager != nil {
+		ud := c.usageManager.GetIndexerUsage(c.Name())
+		u.AllTimeAPIHitsUsed = ud.AllTimeAPIHitsUsed
+		u.AllTimeDownloadsUsed = ud.AllTimeDownloadsUsed
+	}
+	return u
 }
 
 // Search queries NZBHydra2 for content
@@ -266,7 +272,7 @@ func (c *Client) Search(req indexer.SearchRequest) (*indexer.SearchResponse, err
 		return nil, fmt.Errorf("failed to parse NZBHydra2 response: %w", err)
 	}
 
-	// Populate SourceIndexer for each item
+	// Populate SourceIndexer and ActualIndexer for each item
 	for i := range result.Channel.Items {
 		result.Channel.Items[i].SourceIndexer = c
 

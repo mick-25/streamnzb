@@ -6,9 +6,10 @@ if %errorlevel% neq 0 exit /b %errorlevel%
 cd ..
 
 echo Clearing static assets...
-del /q pkg\web\static\* >nul 2>&1
+if exist pkg\server\web\static rmdir /s /q pkg\server\web\static
+mkdir pkg\server\web\static
 echo Copying new assets...
-xcopy /E /I /Y frontend\dist\* pkg\web\static\
+xcopy /E /I /Y frontend\dist\* pkg\server\web\static\
 
 echo Building Go Binary...
 set SHORT_SHA=unknown

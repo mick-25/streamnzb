@@ -109,8 +109,7 @@ func (c *Client) Name() string {
 // GetUsage returns the current usage stats
 func (c *Client) GetUsage() indexer.Usage {
 	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return indexer.Usage{
+	u := indexer.Usage{
 		APIHitsLimit:       c.apiLimit,
 		APIHitsUsed:        c.apiUsed,
 		APIHitsRemaining:   c.apiRemaining,
@@ -118,6 +117,13 @@ func (c *Client) GetUsage() indexer.Usage {
 		DownloadsUsed:      c.downloadUsed,
 		DownloadsRemaining: c.downloadRemaining,
 	}
+	c.mu.RUnlock()
+	if c.usageManager != nil && c.name != "" {
+		ud := c.usageManager.GetIndexerUsage(c.name)
+		u.AllTimeAPIHitsUsed = ud.AllTimeAPIHitsUsed
+		u.AllTimeDownloadsUsed = ud.AllTimeDownloadsUsed
+	}
+	return u
 }
 
 // Ping checks if Easynews credentials are valid

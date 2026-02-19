@@ -931,7 +931,6 @@ func (s *Server) validateCandidate(ctx context.Context, cand triage.Candidate, d
 		if err != nil {
 			return Stream{}, fmt.Errorf("failed to download NZB: %w", err)
 		}
-
 		// Parse NZB
 		nzbParsed, err := nzb.Parse(bytes.NewReader(nzbData))
 		if err != nil {

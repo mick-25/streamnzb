@@ -19,16 +19,15 @@ type ClientPool struct {
 	idleClients chan *Client
 	slots       chan struct{} // Semaphore tokens for creating new connections
 	// Metrics
-	bytesRead      int64   // bytes since last speed sample
-	totalBytesRead int64   // cumulative bytes read (lifetime)
-	lastSpeed      float64 // Mbps
-	lastCheck      time.Time
+	bytesRead         int64   // bytes since last speed sample (kept for compatibility)
+	totalBytesRead    int64   // cumulative bytes read (lifetime)
+	lastTotalBytes    int64   // totalBytesRead at last GetSpeed sample (for delta-based speed)
+	lastSpeed         float64 // Mbps
+	lastCheck         time.Time
 
-	// Persistence
+	// Reporting: pool reports bytes to usage manager; manager owns persistence
 	providerName  string
 	usageManager  *ProviderUsageManager
-	lastSyncBytes int64 // Last synced totalBytesRead value
-	lastSyncTime  time.Time
 
 	mu     sync.Mutex
 	closed bool
@@ -52,9 +51,7 @@ func NewClientPool(host string, port int, ssl bool, user, pass string, maxConn i
 		p.slots <- struct{}{}
 	}
 
-	// Start Reaper
 	go p.reaperLoop()
-
 	return p
 }
 
@@ -71,50 +68,35 @@ func (p *ClientPool) RestoreTotalBytes(total int64) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.totalBytesRead = total
-	p.lastSyncBytes = total
-	p.lastSyncTime = time.Now() // Initialize to avoid immediate sync
+	p.lastTotalBytes = total // avoid fake speed spike from delta at startup
 }
 
-// SyncUsage persists the current totalBytesRead if it has changed significantly
-// This should be called periodically (e.g., every 30 seconds or when collecting stats)
-func (p *ClientPool) SyncUsage() {
-	p.mu.Lock()
-	currentTotal := p.totalBytesRead
-	lastSynced := p.lastSyncBytes
-	lastSyncTime := p.lastSyncTime
-	providerName := p.providerName
-	usageMgr := p.usageManager
-	p.mu.Unlock()
-
-	if usageMgr == nil || providerName == "" {
-		return
-	}
-
-	// Only sync if there's a meaningful change (at least 1MB difference) or it's been >30s
-	delta := currentTotal - lastSynced
-	if delta >= 1024*1024 || time.Since(lastSyncTime) > 30*time.Second {
-		if delta > 0 {
-			usageMgr.IncrementBytes(providerName, delta)
-			p.mu.Lock()
-			p.lastSyncBytes = currentTotal
-			p.lastSyncTime = time.Now()
-			p.mu.Unlock()
-		}
-	}
-}
-
-// TrackRead updates the total bytes read
+// TrackRead updates the total bytes read and reports the delta to the usage manager.
+// The pool only records; ProviderUsageManager owns when to persist.
 func (p *ClientPool) TrackRead(n int) {
 	p.mu.Lock()
 	p.bytesRead += int64(n)
 	p.totalBytesRead += int64(n)
+	usageMgr := p.usageManager
+	providerName := p.providerName
 	p.mu.Unlock()
+
+	if usageMgr != nil && providerName != "" && n > 0 {
+		usageMgr.AddBytes(providerName, int64(n))
+	}
 }
 
-// GetSpeed returns the current speed in Mbps and resets the counter.
-// When there is no traffic in the sampling window, lastSpeed decays instead of
-// snapping to zero so short bursts (e.g. after seeking) remain visible for a few
-// stats cycles and match the connection "load" activity.
+// minSpeedWindow is the minimum duration (seconds) before we report speed from delta.
+const minSpeedWindow = 0.05
+
+// maxSpeedDuration caps the duration used for speed calculation so that after
+// idle we don't show an artificially low speed (delta/small over huge seconds).
+const maxSpeedDuration = 5.0
+
+// GetSpeed returns the current speed in Mbps.
+// Speed is derived from the delta of totalBytesRead over time so that any
+// TrackRead() activity is reflected. The clock (lastCheck) is advanced on
+// every call so seeking or a new stream sees correct speed immediately.
 func (p *ClientPool) GetSpeed() float64 {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -122,24 +104,32 @@ func (p *ClientPool) GetSpeed() float64 {
 	now := time.Now()
 	duration := now.Sub(p.lastCheck).Seconds()
 
-	if duration >= 1.0 {
-		// Calculate Mbps: (bytes * 8) / (1024*1024) / seconds
-		mbps := (float64(p.bytesRead) * 8) / (1024 * 1024) / duration
-		if mbps > 0 {
-			p.lastSpeed = mbps
-		} else {
-			// No traffic in this window: decay so UI doesn't snap to 0 while "load" still showed activity
-			const decay = 0.35
-			p.lastSpeed *= decay
-			if p.lastSpeed < 0.1 {
-				p.lastSpeed = 0
-			}
-		}
+	// Always advance the clock so the next sample has a correct window (avoids
+	// "stuck" speed after idle or when starting a new stream).
+	p.lastCheck = now
 
-		p.bytesRead = 0
-		p.lastCheck = now
+	if duration < minSpeedWindow {
+		return p.lastSpeed
 	}
 
+	// Cap duration so we don't understate speed after long idle
+	if duration > maxSpeedDuration {
+		duration = maxSpeedDuration
+	}
+
+	delta := p.totalBytesRead - p.lastTotalBytes
+	p.lastTotalBytes = p.totalBytesRead
+
+	if delta > 0 {
+		// Mbps = (bytes * 8) / (1024*1024) / seconds
+		p.lastSpeed = (float64(delta) * 8) / (1024 * 1024) / duration
+	} else {
+		const decay = 0.35
+		p.lastSpeed *= decay
+		if p.lastSpeed < 0.1 {
+			p.lastSpeed = 0
+		}
+	}
 	return p.lastSpeed
 }
 
@@ -203,6 +193,7 @@ func (p *ClientPool) Get(ctx context.Context) (*Client, error) {
 			p.slots <- struct{}{}
 			return nil, err
 		}
+		c.SetPool(p)
 		if err := c.Authenticate(p.user, p.pass); err != nil {
 			c.Quit()
 			p.slots <- struct{}{}
@@ -234,6 +225,7 @@ func (p *ClientPool) TryGet(ctx context.Context) (*Client, bool) {
 			p.slots <- struct{}{}
 			return nil, false
 		}
+		c.SetPool(p)
 		if err := c.Authenticate(p.user, p.pass); err != nil {
 			c.Quit()
 			p.slots <- struct{}{}
@@ -354,7 +346,7 @@ func (p *ClientPool) ActiveConnections() int {
 	return p.TotalConnections() - p.IdleConnections()
 }
 
-// Shutdown closes all connections in the pool
+// Shutdown closes all connections and asks the usage manager to flush this provider's total.
 func (p *ClientPool) Shutdown() {
 	p.mu.Lock()
 	if p.closed {
@@ -362,9 +354,14 @@ func (p *ClientPool) Shutdown() {
 		return
 	}
 	p.closed = true
+	usageMgr := p.usageManager
+	providerName := p.providerName
 	p.mu.Unlock()
 
-	// Drain idle clients
+	if usageMgr != nil && providerName != "" {
+		usageMgr.FlushProvider(providerName)
+	}
+
 	close(p.idleClients)
 	for c := range p.idleClients {
 		c.Quit()

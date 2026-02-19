@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"sync"
-	"time"
 
 	"github.com/gorilla/websocket"
 
@@ -90,9 +89,6 @@ func NewServerWithApp(cfg *config.Config, pools map[string]*nntp.ClientPool, ses
 	// Start log broadcaster
 	logger.SetBroadcast(s.logCh)
 	go s.broadcastLogs()
-
-	// Start background sync for provider usage stats
-	go s.syncProviderUsageLoop()
 
 	return s
 }
@@ -253,22 +249,6 @@ func (s *Server) cleanupProviderUsage() {
 	}
 
 	usageMgr.SyncUsage(activeNames)
-}
-
-// syncProviderUsageLoop periodically syncs provider usage stats to persistent storage
-func (s *Server) syncProviderUsageLoop() {
-	ticker := time.NewTicker(30 * time.Second) // Sync every 30 seconds
-	defer ticker.Stop()
-
-	for range ticker.C {
-		s.mu.RLock()
-		pools := s.providerPools
-		s.mu.RUnlock()
-
-		for _, pool := range pools {
-			pool.SyncUsage()
-		}
-	}
 }
 
 // Handler returns the HTTP handler for the API

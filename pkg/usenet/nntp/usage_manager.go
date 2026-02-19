@@ -11,11 +11,13 @@ type ProviderUsageData struct {
 	TotalBytes int64 `json:"total_bytes"`
 }
 
-// ProviderUsageManager handles persistent storage of provider usage via StateManager
+// ProviderUsageManager handles persistent storage of provider usage via StateManager.
+// It owns when to persist: pools report bytes via AddBytes; the manager batches and writes.
 type ProviderUsageManager struct {
-	state *persistence.StateManager
-	data  map[string]*ProviderUsageData
-	mu    sync.RWMutex
+	state         *persistence.StateManager
+	data          map[string]*ProviderUsageData
+	lastPersisted map[string]int64 // per-provider total at last save (for batching)
+	mu            sync.RWMutex
 }
 
 var providerManager *ProviderUsageManager
@@ -31,13 +33,15 @@ func GetProviderUsageManager(sm *persistence.StateManager) (*ProviderUsageManage
 	}
 
 	m := &ProviderUsageManager{
-		state: sm,
-		data:  make(map[string]*ProviderUsageData),
+		state:         sm,
+		data:          make(map[string]*ProviderUsageData),
+		lastPersisted: make(map[string]int64),
 	}
 
 	if err := m.load(); err != nil {
 		return nil, err
 	}
+	m.initLastPersisted()
 
 	providerManager = m
 	return m, nil
@@ -49,6 +53,17 @@ func (m *ProviderUsageManager) load() error {
 
 	_, err := m.state.Get("provider_usage", &m.data)
 	return err
+}
+
+// initLastPersisted sets lastPersisted from loaded data so we don't re-persist on first AddBytes.
+func (m *ProviderUsageManager) initLastPersisted() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for name, d := range m.data {
+		if d != nil {
+			m.lastPersisted[name] = d.TotalBytes
+		}
+	}
 }
 
 func (m *ProviderUsageManager) save() error {
@@ -68,8 +83,12 @@ func (m *ProviderUsageManager) GetUsage(name string) *ProviderUsageData {
 	return data
 }
 
-// IncrementBytes increments the total bytes for a provider and persists
-func (m *ProviderUsageManager) IncrementBytes(name string, delta int64) {
+// AddBytes records bytes read for a provider. The manager batches writes and persists
+// when unsynced bytes for that provider reach 1MB (or on FlushProvider / shutdown).
+func (m *ProviderUsageManager) AddBytes(name string, delta int64) {
+	if delta <= 0 {
+		return
+	}
 	m.mu.Lock()
 	data, ok := m.data[name]
 	if !ok {
@@ -77,10 +96,44 @@ func (m *ProviderUsageManager) IncrementBytes(name string, delta int64) {
 		m.data[name] = data
 	}
 	data.TotalBytes += delta
+	total := data.TotalBytes
+	last := m.lastPersisted[name]
 	m.mu.Unlock()
 
+	if total-last >= 1024*1024 { // 1 MB
+		m.persistAndUpdateLast()
+	}
+}
+
+// persistAndUpdateLast writes state and updates lastPersisted for all providers.
+func (m *ProviderUsageManager) persistAndUpdateLast() {
 	if err := m.save(); err != nil {
 		logger.Error("Failed to save provider usage data", "err", err)
+		return
+	}
+	m.mu.Lock()
+	for n, d := range m.data {
+		if d != nil {
+			m.lastPersisted[n] = d.TotalBytes
+		}
+	}
+	m.mu.Unlock()
+}
+
+// FlushProvider persists the current total for the provider (e.g. on pool shutdown).
+func (m *ProviderUsageManager) FlushProvider(name string) {
+	m.mu.Lock()
+	data := m.data[name]
+	if data == nil {
+		m.mu.Unlock()
+		return
+	}
+	total := data.TotalBytes
+	last := m.lastPersisted[name]
+	m.mu.Unlock()
+
+	if total > last {
+		m.persistAndUpdateLast()
 	}
 }
 
@@ -98,6 +151,7 @@ func (m *ProviderUsageManager) SyncUsage(activeNames []string) {
 		if !activeMap[name] {
 			logger.Info("Removing orphaned usage data for provider", "name", name)
 			delete(m.data, name)
+			delete(m.lastPersisted, name)
 			changed = true
 		}
 	}

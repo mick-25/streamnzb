@@ -26,13 +26,15 @@ type SystemStats struct {
 
 // IndexerStats represents statistics and usage for an indexer
 type IndexerStats struct {
-	Name               string `json:"name"`
-	APIHitsLimit       int    `json:"api_hits_limit"`
-	APIHitsUsed        int    `json:"api_hits_used"`
-	APIHitsRemaining   int    `json:"api_hits_remaining"`
-	DownloadsLimit     int    `json:"downloads_limit"`
-	DownloadsUsed      int    `json:"downloads_used"`
-	DownloadsRemaining int    `json:"downloads_remaining"`
+	Name                   string `json:"name"`
+	APIHitsLimit           int    `json:"api_hits_limit"`
+	APIHitsUsed            int    `json:"api_hits_used"`
+	APIHitsRemaining       int    `json:"api_hits_remaining"`
+	AllTimeAPIHitsUsed     int    `json:"api_hits_used_all_time"`
+	DownloadsLimit         int    `json:"downloads_limit"`
+	DownloadsUsed          int    `json:"downloads_used"`
+	DownloadsRemaining     int    `json:"downloads_remaining"`
+	AllTimeDownloadsUsed   int    `json:"downloads_used_all_time"`
 }
 
 // ProviderStats represents statistics for a single NNTP provider
@@ -63,9 +65,6 @@ func (s *Server) collectStats() SystemStats {
 	s.mu.RUnlock()
 
 	for name, pool := range pools {
-		// Sync usage to persistent storage periodically
-		pool.SyncUsage()
-
 		downloadedMB := pool.TotalMegabytes()
 
 		pStats := ProviderStats{
@@ -125,13 +124,15 @@ func (s *Server) collectStats() SystemStats {
 		for _, idx := range indexers {
 			usage := idx.GetUsage()
 			stats.Indexers = append(stats.Indexers, IndexerStats{
-				Name:               idx.Name(),
-				APIHitsLimit:       usage.APIHitsLimit,
-				APIHitsUsed:        usage.APIHitsUsed,
-				APIHitsRemaining:   usage.APIHitsRemaining,
-				DownloadsLimit:     usage.DownloadsLimit,
-				DownloadsUsed:      usage.DownloadsUsed,
-				DownloadsRemaining: usage.DownloadsRemaining,
+				Name:                 idx.Name(),
+				APIHitsLimit:         usage.APIHitsLimit,
+				APIHitsUsed:          usage.APIHitsUsed,
+				APIHitsRemaining:     usage.APIHitsRemaining,
+				AllTimeAPIHitsUsed:   usage.AllTimeAPIHitsUsed,
+				DownloadsLimit:       usage.DownloadsLimit,
+				DownloadsUsed:        usage.DownloadsUsed,
+				DownloadsRemaining:   usage.DownloadsRemaining,
+				AllTimeDownloadsUsed: usage.AllTimeDownloadsUsed,
 			})
 		}
 	}

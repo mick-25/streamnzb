@@ -86,7 +86,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	logger.Debug("WS Client connected", "remote", r.RemoteAddr)
 
-	ticker := time.NewTicker(1 * time.Second) // Throttled to reduce load from collectStats/SyncUsage
+	ticker := time.NewTicker(1 * time.Second) // Throttled to reduce load from collectStats
 	defer ticker.Stop()
 
 	// Notify current stats and config immediately
@@ -182,7 +182,6 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			s.sendStats(client)
 		case msg, ok := <-client.send:
 			if !ok {
-				// Channel closed by RemoveClient
 				conn.WriteMessage(websocket.CloseMessage, []byte{})
 				return
 			}

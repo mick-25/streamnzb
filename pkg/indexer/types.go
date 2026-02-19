@@ -28,12 +28,14 @@ type IndexerWithResolve interface {
 
 // Usage represents the current API and download usage for an indexer
 type Usage struct {
-	APIHitsLimit       int
-	APIHitsUsed        int
-	APIHitsRemaining   int
-	DownloadsLimit     int
-	DownloadsUsed      int
-	DownloadsRemaining int
+	APIHitsLimit         int
+	APIHitsUsed          int
+	APIHitsRemaining     int
+	DownloadsLimit       int
+	DownloadsUsed        int
+	DownloadsRemaining   int
+	AllTimeAPIHitsUsed   int
+	AllTimeDownloadsUsed int
 }
 
 // SearchRequest represents a search query

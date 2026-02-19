@@ -10,10 +10,10 @@ npm run build
 cd ..
 
 echo "Clearing static assets..."
-rm -rf pkg/web/static/*
+rm -rf pkg/server/web/static
 echo "Copying new assets..."
-mkdir -p pkg/web/static
-cp -r frontend/dist/* pkg/web/static/
+mkdir -p pkg/server/web/static
+cp -r frontend/dist/* pkg/server/web/static/
 
 echo "Building Go Binary..."
 SHORT_SHA=$(git rev-parse --short HEAD 2>/dev/null || echo 'unknown')

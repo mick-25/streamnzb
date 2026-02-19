@@ -33,9 +33,13 @@ func (a *Aggregator) GetUsage() Usage {
 	for _, idx := range a.Indexers {
 		u := idx.GetUsage()
 		usage.APIHitsLimit += u.APIHitsLimit
+		usage.APIHitsUsed += u.APIHitsUsed
 		usage.APIHitsRemaining += u.APIHitsRemaining
 		usage.DownloadsLimit += u.DownloadsLimit
+		usage.DownloadsUsed += u.DownloadsUsed
 		usage.DownloadsRemaining += u.DownloadsRemaining
+		usage.AllTimeAPIHitsUsed += u.AllTimeAPIHitsUsed
+		usage.AllTimeDownloadsUsed += u.AllTimeDownloadsUsed
 	}
 	return usage
 }
