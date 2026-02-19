@@ -48,7 +48,7 @@ type Server struct {
 	triageService        *triage.Service
 	availClient          *availnzb.Client
 	availReporter        *availnzb.Reporter
-	availNZBIndexerHosts []string // Underlying indexer hostnames for AvailNZB GetReleases (e.g. nzbgeek.info from NZBHydra)
+	availNZBIndexerHosts []string // Underlying indexer hostnames for AvailNZB GetReleases
 	tmdbClient           *tmdb.Client
 	tvdbClient           *tvdb.Client
 	deviceManager        *auth.DeviceManager
@@ -266,7 +266,7 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request, device *au
 		return "legacy"
 	}())
 
-	// Allow time for indexer search (e.g. NZBHydra/Prowlarr) plus NNTP validation across providers.
+	// Allow time for indexer search plus NNTP validation across providers.
 	// 5s was too short: slow indexers + validation often exceeded it and returned 0 streams.
 	const streamRequestTimeout = 30 * time.Second
 	ctx, cancel := context.WithTimeout(r.Context(), streamRequestTimeout)
@@ -405,7 +405,7 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string, 
 			}
 		}
 	}
-	// AvailNZB indexer filter: use underlying hostnames (e.g. nzbgeek.info from NZBHydra) so GetReleases returns matches
+	// AvailNZB indexer filter: use underlying hostnames so GetReleases returns matches
 	availIndexers := s.availNZBIndexerHosts
 	logger.Debug("searchAndValidate", "imdb", req.IMDbID, "tvdb", req.TVDBID, "season", req.Season, "ep", req.Episode, "maxStreams", maxStreams)
 
@@ -787,7 +787,7 @@ func (s *Server) warmAvailNZBCache(ctx context.Context, req indexer.SearchReques
 			continue
 		}
 		rel := cand.Release
-		// 30s for validation/cache warming (NZBHydra proxies can be slow)
+		// 30s for validation/cache warming
 		dlCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		var nzbData []byte
 		if rel.SourceIndexer != nil {
@@ -854,9 +854,6 @@ func (s *Server) validateCandidate(ctx context.Context, cand triage.Candidate, d
 	if indexerName == "" && rel.SourceIndexer != nil {
 		if idx, ok := rel.SourceIndexer.(indexer.Indexer); ok {
 			indexerName = idx.Name()
-			if strings.HasPrefix(indexerName, "Prowlarr:") {
-				indexerName = strings.TrimSpace(strings.TrimPrefix(indexerName, "Prowlarr:"))
-			}
 		}
 	}
 
@@ -911,7 +908,7 @@ func (s *Server) validateCandidate(ctx context.Context, cand triage.Candidate, d
 			return Stream{}, fmt.Errorf("failed to create deferred session: %w", err)
 		}
 	} else {
-		// IMMEDIATE - Download and validate (30s; NZBHydra often proxies to indexer)
+		// IMMEDIATE - Download and validate (30s)
 		logger.Debug("Downloading NZB for validation", "title", rel.Title)
 
 		dlCtx, cancel := context.WithTimeout(ctx, 30*time.Second)

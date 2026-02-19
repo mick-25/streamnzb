@@ -88,6 +88,14 @@ func (f *File) TotalConnections() int {
 
 // --- Segment size detection ---
 
+// SegmentMapDetected reports whether decoded segment boundaries are known.
+// When false, EnsureSegmentMap() would block on downloading segment 0.
+func (f *File) SegmentMapDetected() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.detected
+}
+
 func (f *File) EnsureSegmentMap() error {
 	f.mu.Lock()
 	if f.detected {

@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
@@ -17,8 +16,6 @@ import (
 	"streamnzb/pkg/core/logger"
 	"streamnzb/pkg/core/paths"
 	"streamnzb/pkg/indexer/newznab"
-	"streamnzb/pkg/indexer/nzbhydra"
-	"streamnzb/pkg/indexer/prowlarr"
 	"streamnzb/pkg/initialization"
 	"streamnzb/pkg/search/triage"
 	"streamnzb/pkg/services/availnzb"
@@ -271,35 +268,6 @@ func (s *Server) handleSaveConfigWS(conn *websocket.Conn, client *Client, payloa
 			})
 			trySendWS(client, WSMessage{Type: "save_status", Payload: errorPayload})
 			return
-		}
-
-		// Clear legacy fields if migrated indexers were removed
-		// Check if migrated Prowlarr indexer was removed
-		hasProwlarrMigrated := false
-		for _, idx := range newCfg.Indexers {
-			if idx.Type == "prowlarr" && (idx.Name == "Prowlarr (Migrated)" || strings.Contains(idx.Name, "Prowlarr")) {
-				hasProwlarrMigrated = true
-				break
-			}
-		}
-		if !hasProwlarrMigrated {
-			// Migrated Prowlarr was removed, clear legacy fields
-			newCfg.ProwlarrAPIKey = ""
-			newCfg.ProwlarrURL = ""
-		}
-
-		// Check if migrated NZBHydra2 indexer was removed
-		hasHydraMigrated := false
-		for _, idx := range newCfg.Indexers {
-			if idx.Type == "nzbhydra" && (idx.Name == "NZBHydra2 (Migrated)" || strings.Contains(idx.Name, "NZBHydra2")) {
-				hasHydraMigrated = true
-				break
-			}
-		}
-		if !hasHydraMigrated {
-			// Migrated NZBHydra2 was removed, clear legacy fields
-			newCfg.NZBHydra2APIKey = ""
-			newCfg.NZBHydra2URL = ""
 		}
 
 		// Preserve effective values for any key that has an env override, so we don't
@@ -703,54 +671,7 @@ func (s *Server) validateConfig(cfg *config.Config) map[string]string {
 		}(i, p)
 	}
 
-	// 2. Validate NZBHydra2 (use discovery to verify API key)
-	if cfg.NZBHydra2URL != "" {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			indexers, _, err := nzbhydra.GetConfiguredIndexers(cfg.NZBHydra2URL, cfg.NZBHydra2APIKey, "NZBHydra2", nil)
-			if err != nil {
-				mu.Lock()
-				errStr := err.Error()
-				if strings.Contains(strings.ToLower(errStr), "api key") || strings.Contains(strings.ToLower(errStr), "forbidden") || strings.Contains(strings.ToLower(errStr), "wrong") {
-					errors["nzbhydra_api_key"] = errStr
-				} else {
-					errors["nzbhydra_url"] = errStr
-				}
-				mu.Unlock()
-			} else if cfg.NZBHydra2APIKey != "" && len(indexers) == 0 {
-				mu.Lock()
-				errors["nzbhydra_api_key"] = "Success, but found no indexers (search returned no results)"
-				mu.Unlock()
-			}
-		}()
-	}
-
-	// 3. Validate Prowlarr
-	if cfg.ProwlarrURL != "" {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			// Fetch indexers to verify connectivity AND API Key
-			indexers, _, err := prowlarr.GetConfiguredIndexers(cfg.ProwlarrURL, cfg.ProwlarrAPIKey, nil)
-			if err != nil {
-				mu.Lock()
-				errStr := err.Error()
-				if strings.Contains(errStr, "401") || strings.Contains(errStr, "403") {
-					errors["prowlarr_api_key"] = "Invalid Prowlarr API key"
-				} else {
-					errors["prowlarr_url"] = errStr
-				}
-				mu.Unlock()
-			} else if cfg.ProwlarrAPIKey != "" && len(indexers) == 0 {
-				mu.Lock()
-				errors["prowlarr_api_key"] = "Success, but found no Usenet indexers in Prowlarr"
-				mu.Unlock()
-			}
-		}()
-	}
-
-	// 4. Validate Internal Indexers
+	// 2. Validate Internal Indexers
 	for i, idx := range cfg.Indexers {
 		wg.Add(1)
 		go func(index int, indexerCfg config.IndexerConfig) {

@@ -203,11 +203,11 @@ func (s *VirtualStream) Seek(offset int64, whence int) (int64, error) {
 	s.offset = target
 
 	// Prefetch the target segment immediately when seeking (before Read() is called).
-	// This ensures the segment is downloading while http.ServeContent processes the Range header.
+	// Only when segment map is already detected, so we don't block Seek on segment 0 download.
 	if part != nil {
 		localOff := target - part.VirtualStart
 		volOff := part.VolOffset + localOff
-		if volFile, ok := part.VolFile.(*loader.File); ok && volOff > 0 {
+		if volFile, ok := part.VolFile.(*loader.File); ok && volOff > 0 && volFile.SegmentMapDetected() {
 			logger.Debug("VirtualStream.Seek: prefetching target segment", "volOff", volOff, "partIdx", partIdx)
 			logger.Trace("VirtualStream.Seek: prefetching target segment", "volOff", volOff, "partIdx", partIdx)
 			if err := volFile.EnsureSegmentMap(); err == nil {

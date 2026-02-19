@@ -263,7 +263,7 @@ func (s *Session) GetOrDownloadNZB(manager *Manager) (*nzb.NZB, error) {
 			resolved, resolveErr := res.ResolveDownloadURL(ctx, nzbURL, itemTitle, reportSize, reportCat)
 			if resolveErr != nil {
 				logger.Debug("Resolve failed for direct indexer URL", "url", nzbURL, "title", itemTitle, "err", resolveErr)
-				return nil, fmt.Errorf("no API key in URL and could not resolve via Hydra/Prowlarr: %w", resolveErr)
+				return nil, fmt.Errorf("no API key in URL and could not resolve: %w", resolveErr)
 			}
 			if resolved == "" {
 				return nil, fmt.Errorf("no API key in URL and resolver returned empty proxy URL")
@@ -271,7 +271,7 @@ func (s *Session) GetOrDownloadNZB(manager *Manager) (*nzb.NZB, error) {
 			logger.Debug("Resolved to proxy URL via search", "title", itemTitle)
 			data, err = idx.DownloadNZB(downloadCtx, resolved)
 		} else if !hasAPIKey {
-			return nil, fmt.Errorf("URL has no API key (indexer: %s); add indexer with API key or use Hydra/Prowlarr", indexerName)
+			return nil, fmt.Errorf("URL has no API key (indexer: %s); add indexer with API key", indexerName)
 		}
 	}
 	if err != nil {

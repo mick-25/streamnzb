@@ -178,7 +178,6 @@ func (m *UsageManager) IncrementUsed(name string, hits, downloads int) {
 }
 
 // GetUsageByPrefix returns usage data for all indexers whose name has the given prefix.
-// Used by meta-indexers (e.g. NZBHydra) to report per-indexer stats.
 func (m *UsageManager) GetUsageByPrefix(prefix string) map[string]*UsageData {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -195,7 +194,7 @@ func (m *UsageManager) GetUsageByPrefix(prefix string) map[string]*UsageData {
 }
 
 // SyncUsage removes usage data for indexers that are no longer active.
-// Keeps sub-indexers (e.g. "NZBHydra2: NZBgeek") when their parent (e.g. "NZBHydra2") is active.
+// Keeps sub-indexers (e.g. "Parent: Child") when their parent is active.
 func (m *UsageManager) SyncUsage(activeNames []string) {
 	m.mu.Lock()
 
@@ -209,7 +208,7 @@ func (m *UsageManager) SyncUsage(activeNames []string) {
 		if activeMap[name] {
 			return true
 		}
-		// Check if this is a sub-indexer (e.g. "NZBHydra2: NZBgeek")
+		// Check if this is a sub-indexer (e.g. "Parent: Child")
 		for active := range activeMap {
 			prefix := active + ": "
 			if len(name) > len(prefix) && name[:len(prefix)] == prefix {

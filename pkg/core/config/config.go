@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"streamnzb/pkg/core/env"
 	"streamnzb/pkg/core/logger"
@@ -149,7 +148,7 @@ type IndexerConfig struct {
 	URL          string `json:"url"`
 	APIKey       string `json:"api_key"`
 	APIPath      string `json:"api_path"` // API path (default: "/api"), e.g., "/api" or "/api/v1"
-	Type         string `json:"type"`     // "newznab", "prowlarr", "nzbhydra", "easynews"
+	Type         string `json:"type"`     // "newznab", "easynews"
 	APIHitsDay   int    `json:"api_hits_day"`
 	DownloadsDay int    `json:"downloads_day"`
 	// Easynews-specific fields
@@ -159,14 +158,6 @@ type IndexerConfig struct {
 
 // Config holds application configuration
 type Config struct {
-	// NZBHydra2 settings
-	NZBHydra2URL    string `json:"nzbhydra_url"`
-	NZBHydra2APIKey string `json:"nzbhydra_api_key"`
-
-	// Prowlarr settings
-	ProwlarrURL    string `json:"prowlarr_url"`
-	ProwlarrAPIKey string `json:"prowlarr_api_key"`
-
 	// Internal Indexers
 	Indexers []IndexerConfig `json:"indexers"`
 
@@ -246,7 +237,6 @@ func Load() (*Config, error) {
 	// 2. Load config.json (or create with defaults if it doesn't exist)
 	cfg := &Config{
 		// Set defaults
-		NZBHydra2URL:            "",
 		AddonPort:               7000,
 		AddonBaseURL:            "http://localhost:7000",
 		LogLevel:                "INFO",
@@ -394,64 +384,8 @@ func (c *Config) ApplyProviderDefaults() bool {
 	return changed
 }
 
-// MigrateLegacyIndexers moves old Prowlarr/Hydra settings into the unified Indexers list
-func (c *Config) MigrateLegacyIndexers() {
-	migrated := false
-
-	// Migrate NZBHydra2
-	if c.NZBHydra2APIKey != "" {
-		migratedURL := strings.TrimRight(c.NZBHydra2URL, "/")
-		exists := false
-		for _, idx := range c.Indexers {
-			if idx.Type == "nzbhydra" && strings.TrimRight(idx.URL, "/") == migratedURL {
-				exists = true
-				break
-			}
-		}
-		if !exists && migratedURL != "" {
-			c.Indexers = append(c.Indexers, IndexerConfig{
-				Name:   "NZBHydra2 (Migrated)",
-				URL:    migratedURL,
-				APIKey: c.NZBHydra2APIKey,
-				Type:   "nzbhydra",
-			})
-			logger.Debug("Migrated NZBHydra2", "url", migratedURL)
-			migrated = true
-		}
-		c.NZBHydra2APIKey = "" // Clear legacy
-		c.NZBHydra2URL = ""
-
-	}
-
-	// Migrate Prowlarr
-	if c.ProwlarrAPIKey != "" {
-		migratedURL := strings.TrimRight(c.ProwlarrURL, "/")
-		exists := false
-		for _, idx := range c.Indexers {
-			if idx.Type == "prowlarr" && strings.TrimRight(idx.URL, "/") == migratedURL {
-				exists = true
-				break
-			}
-		}
-		if !exists && migratedURL != "" {
-			c.Indexers = append(c.Indexers, IndexerConfig{
-				Name:   "Prowlarr (Migrated)",
-				URL:    migratedURL,
-				APIKey: c.ProwlarrAPIKey,
-				Type:   "prowlarr",
-			})
-			logger.Debug("Migrated Prowlarr", "url", migratedURL)
-			migrated = true
-		}
-		c.ProwlarrAPIKey = "" // Clear legacy
-		c.ProwlarrURL = ""
-
-	}
-
-	if migrated {
-		logger.Info("Migrated legacy meta-indexers to unified Indexers list")
-	}
-}
+// MigrateLegacyIndexers applies any one-off config migrations (currently a no-op).
+func (c *Config) MigrateLegacyIndexers() {}
 
 // Save saves the current configuration to the file it was loaded from
 func (c *Config) Save() error {
@@ -488,18 +422,6 @@ func keySet(list []string, s string) bool {
 // ApplyEnvOverrides applies environment-derived overrides to cfg (used at startup only).
 // Only fields present in keys are applied, so env vars override file values per setting.
 func ApplyEnvOverrides(cfg *Config, o env.ConfigOverrides, keys []string) {
-	if keySet(keys, env.KeyNZBHydraURL) {
-		cfg.NZBHydra2URL = o.NZBHydra2URL
-	}
-	if keySet(keys, env.KeyNZBHydraAPIKey) {
-		cfg.NZBHydra2APIKey = o.NZBHydra2APIKey
-	}
-	if keySet(keys, env.KeyProwlarrURL) {
-		cfg.ProwlarrURL = o.ProwlarrURL
-	}
-	if keySet(keys, env.KeyProwlarrAPIKey) {
-		cfg.ProwlarrAPIKey = o.ProwlarrAPIKey
-	}
 	if keySet(keys, env.KeyAddonPort) {
 		cfg.AddonPort = o.AddonPort
 	}
@@ -597,14 +519,6 @@ func CopyEnvOverridesFrom(src, dst *Config) {
 	keys := env.OverrideKeys()
 	for _, k := range keys {
 		switch k {
-		case env.KeyNZBHydraURL:
-			dst.NZBHydra2URL = src.NZBHydra2URL
-		case env.KeyNZBHydraAPIKey:
-			dst.NZBHydra2APIKey = src.NZBHydra2APIKey
-		case env.KeyProwlarrURL:
-			dst.ProwlarrURL = src.ProwlarrURL
-		case env.KeyProwlarrAPIKey:
-			dst.ProwlarrAPIKey = src.ProwlarrAPIKey
 		case env.KeyAddonPort:
 			dst.AddonPort = src.AddonPort
 		case env.KeyAddonBaseURL:

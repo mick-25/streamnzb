@@ -7,7 +7,7 @@ import (
 )
 
 // IsPrivateReleaseURL returns true if the URL host is private/local (localhost).
-// We must not report such URLs to AvailNZB — they're from someone's NZBHydra proxy and useless to others.
+// We must not report such URLs to AvailNZB — they are private and useless to others.
 func IsPrivateReleaseURL(rawURL string) bool {
 	u, err := url.Parse(rawURL)
 	if err != nil || u.Host == "" {

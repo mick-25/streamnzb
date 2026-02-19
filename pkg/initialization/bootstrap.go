@@ -12,8 +12,6 @@ import (
 	"streamnzb/pkg/indexer"
 	"streamnzb/pkg/indexer/easynews"
 	"streamnzb/pkg/indexer/newznab"
-	"streamnzb/pkg/indexer/nzbhydra"
-	"streamnzb/pkg/indexer/prowlarr"
 	"streamnzb/pkg/usenet/nntp"
 	"strings"
 )
@@ -88,49 +86,12 @@ func BuildComponents(cfg *config.Config) (*InitializedComponents, error) {
 		if indexerType == "" {
 			indexerType = "newznab" // Default
 		}
+		if indexerType == "nzbhydra" || indexerType == "prowlarr" {
+			logger.Warn("NZBHydra and Prowlarr are no longer supported; skipping indexer", "name", idxCfg.Name)
+			continue
+		}
 
 		switch indexerType {
-		case "nzbhydra":
-			displayName := idxCfg.Name
-			if displayName == "" {
-				displayName = "NZBHydra2"
-			}
-			discovered, hydraHosts, err := nzbhydra.GetConfiguredIndexers(idxCfg.URL, idxCfg.APIKey, displayName, usageMgr)
-			if err != nil {
-				logger.Error("Failed to initialize NZBHydra2", "name", idxCfg.Name, "err", err)
-			} else {
-				indexers = append(indexers, discovered...)
-				logger.Info("Initialized NZBHydra2 indexers", "name", idxCfg.Name, "count", len(discovered))
-				for _, h := range hydraHosts {
-					if h != "" && !seenHost[h] {
-						seenHost[h] = true
-						availNzbHosts = append(availNzbHosts, h)
-					}
-				}
-			}
-		case "prowlarr":
-			discovered, prowlarrHosts, err := prowlarr.GetConfiguredIndexers(idxCfg.URL, idxCfg.APIKey, usageMgr)
-			if err != nil {
-				logger.Error("Failed to initialize Prowlarr from indexer list", "name", idxCfg.Name, "err", err)
-			} else {
-				if len(discovered) > 0 {
-					indexers = append(indexers, discovered...)
-					logger.Info("Initialized Prowlarr from indexer list", "name", idxCfg.Name, "count", len(discovered))
-				}
-				for _, h := range prowlarrHosts {
-					if h != "" && !seenHost[h] {
-						seenHost[h] = true
-						availNzbHosts = append(availNzbHosts, h)
-					}
-				}
-				// Fallback if API didn't return IndexerUrls
-				if len(prowlarrHosts) == 0 {
-					if h := hostFromIndexerURL(idxCfg.URL); h != "" && !seenHost[h] {
-						seenHost[h] = true
-						availNzbHosts = append(availNzbHosts, h)
-					}
-				}
-			}
 		case "easynews":
 			// Determine download base URL (for proxying NZB downloads)
 			downloadBase := cfg.AddonBaseURL
@@ -165,7 +126,7 @@ func BuildComponents(cfg *config.Config) (*InitializedComponents, error) {
 	}
 
 	if len(indexers) == 0 {
-		logger.Warn("!! No indexers (Internal/Hydra/Prowlarr) configured. Add some via the web UI or config.json !!")
+		logger.Warn("!! No indexers configured. Add some via the web UI or config.json !!")
 	}
 
 	aggregator := indexer.NewAggregator(indexers...)

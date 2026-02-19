@@ -18,9 +18,9 @@ type Indexer interface {
 	GetUsage() Usage
 }
 
-// IndexerWithResolve is an optional interface implemented by Prowlarr client and Aggregator.
+// IndexerWithResolve is an optional interface implemented by Aggregator (and indexers that can resolve proxy URLs).
 // When a direct indexer URL comes from AvailNZB, ResolveDownloadURL searches by title/size/cat
-// and returns the result's Link (e.g. Prowlarr proxy URL) so DownloadNZB succeeds.
+// and returns the result's Link so DownloadNZB succeeds.
 // cat is the Newznab category: "2000" for movies, "5000" for TV, or "" for general.
 type IndexerWithResolve interface {
 	ResolveDownloadURL(ctx context.Context, directURL, title string, size int64, cat string) (resolvedURL string, err error)
@@ -88,12 +88,10 @@ type Item struct {
 	// This is not part of the XML, but populated by the client
 	SourceIndexer Indexer `xml:"-"`
 
-	// ActualIndexer is the real indexer name when using meta-indexers like NZBHydra2
-	// This is populated from Newznab attributes and not part of the XML
+	// ActualIndexer is the underlying indexer name when aggregated (from Newznab attributes).
 	ActualIndexer string `xml:"-"`
 
-	// ActualGUID is the real indexer GUID when using meta-indexers like NZBHydra2
-	// This is extracted from the link field and not part of the XML
+	// ActualGUID is the underlying indexer GUID when aggregated (extracted from the link field).
 	ActualGUID string `xml:"-"`
 
 	// QuerySource is "id" or "text" when using ForceQuery dual search. Used to prioritize ID-based results.
@@ -161,7 +159,7 @@ func (i *Item) ReleaseDetailsURL() string {
 }
 
 // NormalizeItem fills Link and Size from Enclosure or attributes when missing, so all indexers
-// produce a consistent Item shape regardless of backend XML differences (e.g. NZBHydra2 vs Prowlarr).
+// produce a consistent Item shape regardless of backend XML differences.
 // Call this after parsing search results so downstream code can rely on Link and Size.
 func NormalizeItem(item *Item) {
 	if item == nil {

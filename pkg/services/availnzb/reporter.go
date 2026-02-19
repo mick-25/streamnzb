@@ -56,7 +56,7 @@ func (r *Reporter) report(sess *session.Session, available bool) {
 			return
 		}
 		if release.IsPrivateReleaseURL(releaseURL) {
-			logger.Debug("Skipping AvailNZB report: release URL is private (e.g. NZBHydra proxy)", "url", releaseURL)
+			logger.Debug("Skipping AvailNZB report: release URL is private", "url", releaseURL)
 			return
 		}
 		meta := ReportMeta{ReleaseName: sess.ReportReleaseName(), Size: sess.ReportSize()}

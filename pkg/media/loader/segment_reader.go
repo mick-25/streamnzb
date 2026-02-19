@@ -125,8 +125,8 @@ func (r *SegmentReader) startPrefetch() {
 	r.mu.Unlock()
 
 	maxWorkers := r.file.TotalConnections()
-	if maxWorkers > 15 {
-		maxWorkers = 15
+	if maxWorkers > 20 {
+		maxWorkers = 20
 	}
 	if maxWorkers < 1 {
 		maxWorkers = 1
@@ -198,13 +198,26 @@ func (r *SegmentReader) Seek(offset int64, whence int) (int64, error) {
 		return target, nil
 	}
 
-	// Cancel any ongoing prefetch operations since we're seeking to a new position
-	// The context cancellation will stop them gracefully
+	// Cancel any ongoing prefetch operations since we're seeking to a new position.
+	// The context cancellation will stop them gracefully.
 	r.cancel()
 	// Create new context for the new position (using same parent)
 	r.ctx, r.cancel = context.WithCancel(r.parent)
 	// Clear prefetching map - old prefetch goroutines will exit via context cancellation
 	r.prefetching = make(map[int]bool)
+
+	// Drain prefetch goroutines with a short timeout so they release NNTP connections
+	// before we return. Otherwise the next Read() blocks on pool.Get while cancelled
+	// prefetches still hold connections until their current Body()+decode finishes.
+	done := make(chan struct{})
+	go func() {
+		r.prefetchWg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(800 * time.Millisecond):
+	}
 
 	r.offset = target
 	if target >= r.file.Size() {

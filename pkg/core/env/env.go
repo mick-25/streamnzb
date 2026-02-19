@@ -11,10 +11,6 @@ import (
 
 // Environment variable names (single source of truth)
 const (
-	NZBHYDRA2URL          = "NZBHYDRA2_URL"
-	NZBHYDRA2APIKey       = "NZBHYDRA2_API_KEY"
-	PROWLARRURL           = "PROWLARR_URL"
-	PROWLARRAPIKey        = "PROWLARR_API_KEY"
 	ADDONPort             = "ADDON_PORT"
 	ADDONBaseURL          = "ADDON_BASE_URL"
 	LOGLevel              = "LOG_LEVEL"
@@ -39,10 +35,6 @@ const (
 
 // Config JSON keys returned by OverrideKeys (for UI warnings)
 const (
-	KeyNZBHydraURL    = "nzbhydra_url"
-	KeyNZBHydraAPIKey = "nzbhydra_api_key"
-	KeyProwlarrURL    = "prowlarr_url"
-	KeyProwlarrAPIKey = "prowlarr_api_key"
 	KeyAddonPort      = "addon_port"
 	KeyAddonBaseURL   = "addon_base_url"
 	KeyLogLevel       = "log_level"
@@ -114,10 +106,6 @@ type Indexer struct {
 // ConfigOverrides holds all config values that can be set via environment variables.
 // Used at startup by config.Load to apply overrides.
 type ConfigOverrides struct {
-	NZBHydra2URL         string
-	NZBHydra2APIKey      string
-	ProwlarrURL          string
-	ProwlarrAPIKey       string
 	AddonPort            int
 	AddonBaseURL         string
 	LogLevel             string
@@ -144,22 +132,6 @@ func ReadConfigOverrides() (ConfigOverrides, []string) {
 	var o ConfigOverrides
 	var keys []string
 
-	if v := os.Getenv(NZBHYDRA2URL); v != "" {
-		o.NZBHydra2URL = v
-		keys = append(keys, KeyNZBHydraURL)
-	}
-	if v := os.Getenv(NZBHYDRA2APIKey); v != "" {
-		o.NZBHydra2APIKey = v
-		keys = append(keys, KeyNZBHydraAPIKey)
-	}
-	if v := os.Getenv(PROWLARRURL); v != "" {
-		o.ProwlarrURL = v
-		keys = append(keys, KeyProwlarrURL)
-	}
-	if v := os.Getenv(PROWLARRAPIKey); v != "" {
-		o.ProwlarrAPIKey = v
-		keys = append(keys, KeyProwlarrAPIKey)
-	}
 	if v := os.Getenv(ADDONPort); v != "" {
 		if port, err := strconv.Atoi(v); err == nil {
 			o.AddonPort = port

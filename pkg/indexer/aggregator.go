@@ -89,7 +89,7 @@ func (a *Aggregator) DownloadNZB(ctx context.Context, nzbURL string) ([]byte, er
 }
 
 // ResolveDownloadURL searches all indexers by title and returns the first matching item's Link
-// (e.g. Prowlarr proxy URL) so DownloadNZB works for direct indexer URLs from AvailNZB.
+// so DownloadNZB works for direct indexer URLs from AvailNZB.
 func (a *Aggregator) ResolveDownloadURL(ctx context.Context, directURL, title string, size int64, cat string) (string, error) {
 	if title == "" {
 		return "", fmt.Errorf("title required to resolve download URL")
