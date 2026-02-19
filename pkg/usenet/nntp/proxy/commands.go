@@ -11,6 +11,21 @@ import (
 // Prevents indefinite hang when all pool connections are in use or stuck.
 const poolGetTimeout = 60 * time.Second
 
+// normalizeMessageID ensures the message ID has angle brackets as required by NNTP.
+func normalizeMessageID(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return s
+	}
+	if !strings.HasPrefix(s, "<") {
+		s = "<" + s
+	}
+	if !strings.HasSuffix(s, ">") {
+		s = s + ">"
+	}
+	return s
+}
+
 // handleQuit handles the QUIT command
 func (s *Session) handleQuit(args []string) error {
 	s.shouldQuit = true
@@ -106,7 +121,7 @@ func (s *Session) handleArticle(args []string) error {
 		return s.WriteLine("501 Syntax error")
 	}
 
-	messageID := args[0]
+	messageID := normalizeMessageID(args[0])
 
 	ctx, cancel := context.WithTimeout(context.Background(), poolGetTimeout)
 	defer cancel()
@@ -116,7 +131,6 @@ func (s *Session) handleArticle(args []string) error {
 			continue
 		}
 
-		// Try to fetch article
 		article, err := client.GetArticle(messageID)
 		pool.Put(client)
 
@@ -145,7 +159,7 @@ func (s *Session) handleBody(args []string) error {
 		return s.WriteLine("501 Syntax error")
 	}
 
-	messageID := args[0]
+	messageID := normalizeMessageID(args[0])
 
 	ctx, cancel := context.WithTimeout(context.Background(), poolGetTimeout)
 	defer cancel()
@@ -180,7 +194,7 @@ func (s *Session) handleHead(args []string) error {
 		return s.WriteLine("501 Syntax error")
 	}
 
-	messageID := args[0]
+	messageID := normalizeMessageID(args[0])
 
 	ctx, cancel := context.WithTimeout(context.Background(), poolGetTimeout)
 	defer cancel()
@@ -215,7 +229,7 @@ func (s *Session) handleStat(args []string) error {
 		return s.WriteLine("501 Syntax error")
 	}
 
-	messageID := args[0]
+	messageID := normalizeMessageID(args[0])
 
 	ctx, cancel := context.WithTimeout(context.Background(), poolGetTimeout)
 	defer cancel()

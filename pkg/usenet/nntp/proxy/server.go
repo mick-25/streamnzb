@@ -109,8 +109,6 @@ func (s *Server) handleConnection(conn net.Conn) {
 		s.mu.Unlock()
 	}()
 
-	logger.Debug("NNTP proxy: New connection", "remote", conn.RemoteAddr())
-
 	// Send welcome banner
 	session.WriteLine("200 StreamNZB NNTP Proxy ready (posting prohibited)")
 
@@ -123,8 +121,6 @@ func (s *Server) handleConnection(conn net.Conn) {
 		if line == "" {
 			continue
 		}
-
-		logger.Debug("NNTP proxy command", "remote", conn.RemoteAddr(), "cmd", line)
 
 		// Parse command
 		parts := strings.Fields(line)
@@ -150,8 +146,6 @@ func (s *Server) handleConnection(conn net.Conn) {
 	if err := scanner.Err(); err != nil {
 		logger.Error("NNTP proxy scanner error", "remote", conn.RemoteAddr(), "err", err)
 	}
-
-	logger.Debug("NNTP proxy: Connection closed", "remote", conn.RemoteAddr())
 }
 
 // ProxySessionInfo represents a snapshot of an active proxy session
