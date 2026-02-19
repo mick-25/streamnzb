@@ -60,8 +60,8 @@ jobs:
           npm install
           npm run build
           cd ..
-          mkdir -p pkg/web/static
-          cp -r frontend/dist/* pkg/web/static/
+          mkdir -p pkg/server/web/static
+          cp -r frontend/dist/* pkg/server/web/static/
 
       - name: Set version
         id: version
