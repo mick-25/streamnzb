@@ -1,6 +1,7 @@
 package validation
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -11,9 +12,11 @@ import (
 	"streamnzb/pkg/media/decode"
 	"streamnzb/pkg/media/nzb"
 	"streamnzb/pkg/usenet/nntp"
+
+	"github.com/javi11/rardecode/v2"
+	"github.com/javi11/sevenzip"
 )
 
-const probeSegments = 3
 
 // Checker validates article availability across providers
 type Checker struct {
@@ -99,7 +102,8 @@ func (c *Checker) ValidateNZBSingleProviderExtended(ctx context.Context, nzbData
 	return c.validateProviderExtended(ctx, nzbData, providerName, pool)
 }
 
-// ValidateNZB checks article availability for an NZB across all providers
+// ValidateNZB checks article availability for an NZB across all providers.
+// Each provider runs STAT + BODY/yEnc probe in parallel.
 func (c *Checker) ValidateNZB(ctx context.Context, nzbData *nzb.NZB) map[string]*ValidationResult {
 	results := make(map[string]*ValidationResult)
 	var mu sync.Mutex
@@ -117,7 +121,7 @@ func (c *Checker) ValidateNZB(ctx context.Context, nzbData *nzb.NZB) map[string]
 		go func(name string, p *nntp.ClientPool) {
 			defer wg.Done()
 
-			result := c.validateProvider(ctx, nzbData, name, p)
+			result := c.validateProviderExtended(ctx, nzbData, name, p)
 
 			mu.Lock()
 			results[name] = result
@@ -254,10 +258,9 @@ func (c *Checker) validateProviderExtended(ctx context.Context, nzbData *nzb.NZB
 	}
 
 	segments := info.File.Segments
-	count := probeSegments
-	if count > len(segments) {
-		count = len(segments)
-	}
+
+	// Pick probe indices: first, last, middle -- deduplicated for small files.
+	probeIndices := probeSegmentIndices(len(segments))
 
 	client, ok := pool.TryGet(ctx)
 	if !ok {
@@ -283,34 +286,75 @@ func (c *Checker) validateProviderExtended(ctx context.Context, nzbData *nzb.NZB
 		_ = client.Group(info.File.Groups[0])
 	}
 
-	for i := 0; i < count; i++ {
-		body, err := client.Body(segments[i].ID)
+	ct := nzbData.CompressionType()
+	var firstSegData []byte
+	var lastSegData []byte
+
+	for _, idx := range probeIndices {
+		body, err := client.Body(segments[idx].ID)
 		if err != nil {
 			result.Available = false
-			result.Error = fmt.Errorf("body probe segment %d: %w", i, err)
-			logger.Debug("Extended check BODY failed", "provider", providerName, "segment", i, "err", err)
+			result.Error = fmt.Errorf("body probe segment %d: %w", idx, err)
+			logger.Debug("Extended check BODY failed", "provider", providerName, "segment", idx, "err", err)
 			return result
 		}
 		frame, err := decode.DecodeToBytes(body)
 		if err != nil {
-			// Drain remaining body so the connection is not left dirty.
 			_, _ = io.Copy(io.Discard, body)
 			result.Available = false
-			result.Error = fmt.Errorf("decode probe segment %d: %w", i, err)
-			logger.Debug("Extended check decode failed", "provider", providerName, "segment", i, "err", err)
+			result.Error = fmt.Errorf("decode probe segment %d: %w", idx, err)
+			logger.Debug("Extended check decode failed", "provider", providerName, "segment", idx, "err", err)
 			return result
 		}
 		if len(frame.Data) == 0 {
 			result.Available = false
-			result.Error = fmt.Errorf("probe segment %d decoded to empty data", i)
-			logger.Debug("Extended check empty segment", "provider", providerName, "segment", i)
+			result.Error = fmt.Errorf("probe segment %d decoded to empty data", idx)
+			logger.Debug("Extended check empty segment", "provider", providerName, "segment", idx)
+			return result
+		}
+		if idx == 0 {
+			firstSegData = frame.Data
+		}
+		if idx == len(segments)-1 {
+			lastSegData = frame.Data
+		}
+	}
+
+	if firstSegData == nil {
+		firstSegData = lastSegData
+	}
+	if lastSegData == nil {
+		lastSegData = firstSegData
+	}
+
+	if ct != "direct" && len(firstSegData) > 0 {
+		if err := verifyArchiveHeader(ct, firstSegData, lastSegData, info); err != nil {
+			result.Available = false
+			result.Error = err
+			logger.Debug("Extended check archive header failed", "provider", providerName, "compression", ct, "err", err)
 			return result
 		}
 	}
 
 	releaseOk = true
-	logger.Debug("Extended check passed", "provider", providerName, "probed", count)
+	logger.Debug("Extended check passed", "provider", providerName, "probed", len(probeIndices), "compression", ct)
 	return result
+}
+
+// probeSegmentIndices returns deduplicated indices for first, last, and middle
+// segments. For files with 1 segment it returns [0]; for 2 segments [0, 1];
+// for 3+ segments [0, mid, last].
+func probeSegmentIndices(total int) []int {
+	if total <= 0 {
+		return nil
+	}
+	if total == 1 {
+		return []int{0}
+	}
+	if total == 2 {
+		return []int{0, 1}
+	}
+	return []int{0, total / 2, total - 1}
 }
 
 // getSampleArticles returns a sample of article IDs to check.
@@ -373,6 +417,140 @@ func (c *Checker) getSampleArticles(nzbData *nzb.NZB) []string {
 	}
 
 	return articles
+}
+
+// verifyArchiveHeader parses downloaded segment data to confirm the archive
+// is valid and uses STORE mode (required for streaming).
+//
+// For RAR: feeds the first segment to rardecode and checks the Stored flag.
+// For 7z: builds a sparse ReaderAt from first + last segment data and uses
+// sevenzip.NewReader to parse the encoded header (which lives at the archive tail).
+func verifyArchiveHeader(ct string, firstSeg, lastSeg []byte, info *nzb.FileInfo) error {
+	switch ct {
+	case "rar":
+		r, err := rardecode.NewReader(bytes.NewReader(firstSeg))
+		if err != nil {
+			return fmt.Errorf("invalid RAR archive: %w", err)
+		}
+		hdr, err := r.Next()
+		if err != nil {
+			return fmt.Errorf("cannot read RAR file entry: %w", err)
+		}
+		if !hdr.Stored {
+			return fmt.Errorf("RAR archive uses compression (STORE mode required for streaming)")
+		}
+	case "7z":
+		if err := verify7zHeader(firstSeg, lastSeg, info); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// verify7zHeader constructs a sparse ReaderAt covering the head and tail of
+// the 7z volume and lets the sevenzip library parse the encoded header.
+func verify7zHeader(headData, tailData []byte, info *nzb.FileInfo) error {
+	if info == nil {
+		return nil
+	}
+	totalSize := info.Size
+	if totalSize <= 0 {
+		return nil
+	}
+
+	// If the file is small enough that head covers everything, use it directly.
+	if int64(len(headData)) >= totalSize {
+		ra := bytes.NewReader(headData[:totalSize])
+		return parse7z(ra, totalSize)
+	}
+
+	if len(tailData) == 0 {
+		return nil
+	}
+
+	tailOffset := totalSize - int64(len(tailData))
+	if tailOffset < 0 {
+		tailOffset = 0
+	}
+	ra := &sparse7zReader{
+		head:       headData,
+		tail:       tailData,
+		tailOffset: tailOffset,
+		totalSize:  totalSize,
+	}
+	return parse7z(ra, totalSize)
+}
+
+func parse7z(ra io.ReaderAt, size int64) error {
+	r, err := sevenzip.NewReader(ra, size)
+	if err != nil {
+		return fmt.Errorf("invalid 7z archive: %w", err)
+	}
+	infos, err := r.ListFilesWithOffsets()
+	if err != nil {
+		return fmt.Errorf("cannot list 7z contents: %w", err)
+	}
+	for _, fi := range infos {
+		if fi.Size > 50*1024*1024 && fi.Compressed {
+			return fmt.Errorf("7z archive uses compression (STORE mode required for streaming)")
+		}
+	}
+	return nil
+}
+
+// sparse7zReader implements io.ReaderAt backed by a head and tail byte slice
+// with a zero-filled gap in between. This lets sevenzip parse the signature
+// header (at offset 0) and encoded header (near the end) without downloading
+// the entire archive.
+type sparse7zReader struct {
+	head       []byte
+	tail       []byte
+	tailOffset int64
+	totalSize  int64
+}
+
+func (s *sparse7zReader) ReadAt(p []byte, off int64) (int, error) {
+	if off < 0 || off >= s.totalSize {
+		return 0, io.EOF
+	}
+	n := 0
+	for n < len(p) && off < s.totalSize {
+		pos := off
+		if pos < int64(len(s.head)) {
+			// Read from head region
+			copied := copy(p[n:], s.head[pos:])
+			n += copied
+			off += int64(copied)
+		} else if pos >= s.tailOffset {
+			// Read from tail region
+			idx := pos - s.tailOffset
+			if idx >= int64(len(s.tail)) {
+				break
+			}
+			copied := copy(p[n:], s.tail[idx:])
+			n += copied
+			off += int64(copied)
+		} else {
+			// Gap between head and tail: fill with zeros
+			end := s.tailOffset
+			if end > off+int64(len(p)-n) {
+				end = off + int64(len(p)-n)
+			}
+			gap := int(end - off)
+			for i := 0; i < gap; i++ {
+				p[n+i] = 0
+			}
+			n += gap
+			off += int64(gap)
+		}
+	}
+	if n == 0 {
+		return 0, io.EOF
+	}
+	if off >= s.totalSize && n < len(p) {
+		return n, io.EOF
+	}
+	return n, nil
 }
 
 // GetBestProvider returns the provider with highest availability

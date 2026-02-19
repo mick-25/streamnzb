@@ -42,6 +42,7 @@ type FileHeader struct {
 	Name             string    // file name using '/' as the directory separator
 	IsDir            bool      // is a directory
 	Solid            bool      // is a solid file
+	Stored           bool      // data is stored without compression
 	Encrypted        bool      // file contents are encrypted
 	HeaderEncrypted  bool      // file header is encrypted
 	HostOS           byte      // Host OS the archive was created on
@@ -726,6 +727,7 @@ func (r *Reader) Next() (*FileHeader, error) {
 		return nil, err
 	}
 	h := blocks.firstBlock()
+	h.FileHeader.Stored = h.decVer == 0
 	return &h.FileHeader, nil
 }
 
@@ -800,6 +802,7 @@ func List(name string, opts ...Option) ([]*File, error) {
 	var fl []*File
 	for _, blocks := range fileBlocks {
 		h := blocks.firstBlock()
+		h.FileHeader.Stored = h.decVer == 0
 		f := &File{
 			FileHeader: h.FileHeader,
 			blocks:     blocks,
