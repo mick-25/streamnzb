@@ -348,6 +348,78 @@ func (c *Client) GetBody(messageID string) (string, error) {
 	return result, nil
 }
 
+// drainBackendBody reads and discards lines from the backend until "." or error.
+// Used when StreamBody fails so the connection is not left with unconsumed data (which causes "short response" on reuse).
+func (c *Client) drainBackendBody() {
+	const maxDrainLines = 10_000_000
+	for i := 0; i < maxDrainLines; i++ {
+		line, err := c.conn.ReadLine()
+		if err != nil {
+			return
+		}
+		if line == "." {
+			return
+		}
+	}
+}
+
+// StreamBody fetches article body by message ID and streams it to w in NNTP format (222 line + body + .).
+// This sends the first bytes to the client as soon as the backend responds, reducing client timeouts.
+// On any error after sending BODY, the backend response is drained so the connection is safe to reuse.
+func (c *Client) StreamBody(messageID string, w io.Writer) (written int64, err error) {
+	c.setDeadline()
+	id, err := c.conn.Cmd("BODY %s", messageID)
+	if err != nil {
+		return 0, err
+	}
+
+	c.conn.StartResponse(id)
+	defer func() {
+		c.conn.EndResponse(id)
+		if err != nil {
+			c.drainBackendBody()
+		}
+	}()
+
+	_, _, err = c.conn.ReadCodeLine(222)
+	if err != nil {
+		return 0, err
+	}
+
+	header := "222 0 " + messageID + "\r\n"
+	n, err := w.Write([]byte(header))
+	written += int64(n)
+	if err != nil {
+		return written, err
+	}
+
+	for {
+		line, err := c.conn.ReadLine()
+		if err != nil {
+			return written, err
+		}
+		if line == "." {
+			break
+		}
+		line = line + "\r\n"
+		n, err = w.Write([]byte(line))
+		written += int64(n)
+		if err != nil {
+			return written, err
+		}
+	}
+
+	n, err = w.Write([]byte(".\r\n"))
+	written += int64(n)
+	if err != nil {
+		return written, err
+	}
+	if c.pool != nil {
+		c.pool.TrackRead(int(written))
+	}
+	return written, nil
+}
+
 // GetHead fetches article headers by message ID (for proxy)
 func (c *Client) GetHead(messageID string) (string, error) {
 	c.setDeadline()

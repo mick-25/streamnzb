@@ -95,6 +95,12 @@ func (s *Session) HandleCommand(cmd string, args []string) error {
 		return s.handleList(args)
 	case "DATE":
 		return s.handleDate(args)
+	case "MODE":
+		// MODE READER - we are already in reader mode
+		if len(args) >= 1 && strings.ToUpper(args[0]) == "READER" {
+			return s.WriteLine("201 StreamNZB proxy (reader mode)")
+		}
+		return s.WriteLine(fmt.Sprintf("500 Unknown command: %s", cmd))
 	default:
 		return s.WriteLine(fmt.Sprintf("500 Unknown command: %s", cmd))
 	}

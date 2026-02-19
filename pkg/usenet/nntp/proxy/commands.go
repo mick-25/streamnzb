@@ -5,11 +5,28 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"streamnzb/pkg/core/logger"
+	"streamnzb/pkg/usenet/nntp"
 )
 
 // poolGetTimeout limits how long a proxy command waits for an NNTP connection.
 // Prevents indefinite hang when all pool connections are in use or stuck.
 const poolGetTimeout = 60 * time.Second
+
+// isClientWriteError reports whether err indicates the client connection failed while we were writing.
+// In that case we must not retry other pools or send 430 — we already started the response and the client is gone.
+func isClientWriteError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "forcibly closed") ||
+		strings.Contains(msg, "broken pipe") ||
+		strings.Contains(msg, "connection reset") ||
+		strings.Contains(msg, "wsasend") ||
+		strings.Contains(msg, "use of closed network connection")
+}
 
 // normalizeMessageID ensures the message ID has angle brackets as required by NNTP.
 func normalizeMessageID(s string) string {
@@ -115,6 +132,19 @@ func (s *Session) handleDate(args []string) error {
 	return s.WriteLine(fmt.Sprintf("111 %s", dateStr))
 }
 
+// ensureGroup selects the current group on the backend client if set (required by many NNTP servers for ARTICLE/BODY/HEAD/STAT).
+func (s *Session) ensureGroup(client *nntp.Client, pool *nntp.ClientPool) bool {
+	if s.currentGroup == "" {
+		return true
+	}
+	if err := client.Group(s.currentGroup); err != nil {
+		logger.Debug("NNTP proxy: GROUP failed on backend", "group", s.currentGroup, "err", err)
+		pool.Put(client)
+		return false
+	}
+	return true
+}
+
 // handleArticle handles the ARTICLE command (with failover)
 func (s *Session) handleArticle(args []string) error {
 	if len(args) < 1 {
@@ -128,6 +158,10 @@ func (s *Session) handleArticle(args []string) error {
 	for _, pool := range s.pools {
 		client, err := pool.Get(ctx)
 		if err != nil {
+			logger.Debug("NNTP proxy: pool Get failed", "err", err)
+			continue
+		}
+		if !s.ensureGroup(client, pool) {
 			continue
 		}
 
@@ -135,21 +169,22 @@ func (s *Session) handleArticle(args []string) error {
 		pool.Put(client)
 
 		if err != nil {
-			// If article not found, try next provider
 			if strings.Contains(err.Error(), "430") || strings.Contains(err.Error(), "No such article") {
 				continue
 			}
-			// Other error, try next provider
+			logger.Debug("NNTP proxy: GetArticle failed", "messageID", messageID, "err", err)
 			continue
 		}
 
-		// Success! Return article
+		// Success! Return article (normalize line endings for NNTP)
 		lines := []string{fmt.Sprintf("220 0 %s", messageID)}
-		lines = append(lines, strings.Split(article, "\n")...)
+		for _, line := range strings.Split(strings.ReplaceAll(article, "\r\n", "\n"), "\n") {
+			lines = append(lines, strings.TrimSuffix(line, "\r"))
+		}
 		return s.WriteMultiLine(lines)
 	}
 
-	// All providers failed
+	logger.Info("NNTP proxy: ARTICLE failed (all pools)", "messageID", messageID)
 	return s.WriteLine("430 No such article")
 }
 
@@ -166,25 +201,31 @@ func (s *Session) handleBody(args []string) error {
 	for _, pool := range s.pools {
 		client, err := pool.Get(ctx)
 		if err != nil {
+			logger.Debug("NNTP proxy: pool Get failed", "err", err)
+			continue
+		}
+		if !s.ensureGroup(client, pool) {
 			continue
 		}
 
-		body, err := client.GetBody(messageID)
+		_, err = client.StreamBody(messageID, s.conn)
 		pool.Put(client)
 
 		if err != nil {
+			if isClientWriteError(err) {
+				return err
+			}
 			if strings.Contains(err.Error(), "430") || strings.Contains(err.Error(), "No such article") {
 				continue
 			}
+			logger.Debug("NNTP proxy: GetBody failed", "messageID", messageID, "err", err)
 			continue
 		}
 
-		// Success
-		lines := []string{fmt.Sprintf("222 0 %s", messageID)}
-		lines = append(lines, strings.Split(body, "\n")...)
-		return s.WriteMultiLine(lines)
+		return nil
 	}
 
+	logger.Info("NNTP proxy: BODY failed (all pools)", "messageID", messageID)
 	return s.WriteLine("430 No such article")
 }
 
@@ -201,6 +242,10 @@ func (s *Session) handleHead(args []string) error {
 	for _, pool := range s.pools {
 		client, err := pool.Get(ctx)
 		if err != nil {
+			logger.Debug("NNTP proxy: pool Get failed", "err", err)
+			continue
+		}
+		if !s.ensureGroup(client, pool) {
 			continue
 		}
 
@@ -211,15 +256,19 @@ func (s *Session) handleHead(args []string) error {
 			if strings.Contains(err.Error(), "430") || strings.Contains(err.Error(), "No such article") {
 				continue
 			}
+			logger.Debug("NNTP proxy: GetHead failed", "messageID", messageID, "err", err)
 			continue
 		}
 
-		// Success
+		// Success (normalize line endings)
 		lines := []string{fmt.Sprintf("221 0 %s", messageID)}
-		lines = append(lines, strings.Split(head, "\n")...)
+		for _, line := range strings.Split(strings.ReplaceAll(head, "\r\n", "\n"), "\n") {
+			lines = append(lines, strings.TrimSuffix(line, "\r"))
+		}
 		return s.WriteMultiLine(lines)
 	}
 
+	logger.Info("NNTP proxy: HEAD failed (all pools)", "messageID", messageID)
 	return s.WriteLine("430 No such article")
 }
 
@@ -236,6 +285,10 @@ func (s *Session) handleStat(args []string) error {
 	for _, pool := range s.pools {
 		client, err := pool.Get(ctx)
 		if err != nil {
+			logger.Debug("NNTP proxy: pool Get failed", "err", err)
+			continue
+		}
+		if !s.ensureGroup(client, pool) {
 			continue
 		}
 
@@ -243,13 +296,14 @@ func (s *Session) handleStat(args []string) error {
 		pool.Put(client)
 
 		if err != nil {
+			logger.Debug("NNTP proxy: CheckArticle failed", "messageID", messageID, "err", err)
 			continue
 		}
-
 		if exists {
 			return s.WriteLine(fmt.Sprintf("223 0 %s", messageID))
 		}
 	}
 
+	logger.Info("NNTP proxy: STAT failed (all pools)", "messageID", messageID)
 	return s.WriteLine("430 No such article")
 }

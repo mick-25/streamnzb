@@ -132,9 +132,10 @@ func (s *Server) handleConnection(conn net.Conn) {
 		args := parts[1:]
 
 		// Handle command
-		if err := session.HandleCommand(cmd, args); err != nil {
-			logger.Error("NNTP proxy command error", "remote", conn.RemoteAddr(), "err", err)
-			session.WriteLine(fmt.Sprintf("500 %v", err))
+		err := session.HandleCommand(cmd, args)
+		if err != nil {
+			logger.Error("NNTP proxy command error", "remote", conn.RemoteAddr(), "cmd", cmd, "err", err)
+			_ = session.WriteLine(fmt.Sprintf("500 %v", err))
 		}
 
 		// Check if session should quit

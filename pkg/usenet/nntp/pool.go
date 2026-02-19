@@ -111,8 +111,10 @@ func (p *ClientPool) TrackRead(n int) {
 	p.mu.Unlock()
 }
 
-// GetSpeed returns the current speed in Mbps and resets the counter
-// This should be called periodically (e.g. by the stats collector)
+// GetSpeed returns the current speed in Mbps and resets the counter.
+// When there is no traffic in the sampling window, lastSpeed decays instead of
+// snapping to zero so short bursts (e.g. after seeking) remain visible for a few
+// stats cycles and match the connection "load" activity.
 func (p *ClientPool) GetSpeed() float64 {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -123,9 +125,17 @@ func (p *ClientPool) GetSpeed() float64 {
 	if duration >= 1.0 {
 		// Calculate Mbps: (bytes * 8) / (1024*1024) / seconds
 		mbps := (float64(p.bytesRead) * 8) / (1024 * 1024) / duration
-		p.lastSpeed = mbps
+		if mbps > 0 {
+			p.lastSpeed = mbps
+		} else {
+			// No traffic in this window: decay so UI doesn't snap to 0 while "load" still showed activity
+			const decay = 0.35
+			p.lastSpeed *= decay
+			if p.lastSpeed < 0.1 {
+				p.lastSpeed = 0
+			}
+		}
 
-		// Reset
 		p.bytesRead = 0
 		p.lastCheck = now
 	}
