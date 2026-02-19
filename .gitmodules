@@ -1,3 +1,0 @@
-[submodule "pkg/external/sevenzip"]
-	path = pkg/external/sevenzip
-	url = https://github.com/javi11/sevenzip.git
