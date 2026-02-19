@@ -29,7 +29,7 @@ const INDEXER_PRESETS = [
     { name: 'Tabula Rasa', url: 'https://www.tabula-rasa.pw', api_path: '/api/v1', type: 'newznab' },
     { name: 'Usenet Crawler', url: 'https://www.usenet-crawler.com', api_path: '/api', type: 'newznab' },
     //{ name: 'Easynews (Experimental)', url: '', api_path: '/api', type: 'easynews' },
-    { name: 'Custom Newznab', url: '', api_path: '/api', type: 'newznab' }
+    //{ name: 'Custom Newznab', url: '', api_path: '/api', type: 'newznab' }
 ]
 
 export function IndexerSettings({ control, indexerFields, appendIndexer, removeIndexer, watch, setValue }) {

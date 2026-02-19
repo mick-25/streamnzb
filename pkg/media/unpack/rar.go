@@ -31,6 +31,12 @@ type VirtualPartDef struct {
 	VolOffset    int64
 }
 
+// StreamFromBlueprint returns a reader over the virtual file. We do not use rardecode
+// for the read path: rardecode is only used for scanning (ListArchiveInfo) to get
+// DataOffset per volume. For STORE mode, the bytes at DataOffset in each volume are
+// the raw file content, so we read via the loader at VolOffset (DataOffset) and never
+// decode through rardecode.Reader (which is sequential and would force "download from
+// start" on seek).
 func StreamFromBlueprint(ctx context.Context, bp *ArchiveBlueprint) (io.ReadSeekCloser, string, int64, error) {
 	if bp.IsCompressed {
 		return nil, "", 0, fmt.Errorf("compressed RAR archive (file: %s) -- STORE mode required for streaming", bp.MainFileName)
@@ -226,15 +232,20 @@ func buildBlueprint(parts []filePart, allRarFiles []UnpackableFile) (*ArchiveBlu
 	}
 
 	var vOffset int64
-	for _, p := range mainParts {
+	for i, p := range mainParts {
 		bp.Parts = append(bp.Parts, VirtualPartDef{
 			VirtualStart: vOffset,
 			VirtualEnd:   vOffset + p.packedSize,
 			VolFile:      p.volFile,
 			VolOffset:    p.dataOffset,
 		})
+		if i < 3 || i >= len(mainParts)-2 {
+			logger.Debug("Blueprint part", "idx", i, "vStart", vOffset, "vEnd", vOffset+p.packedSize, "volOff", p.dataOffset, "packed", p.packedSize)
+		}
 		vOffset += p.packedSize
 	}
+
+	logger.Debug("Blueprint total", "vOffset", vOffset, "headerSize", headerSize, "parts", len(mainParts))
 
 	if vOffset < headerSize {
 		logger.Debug("Adjusting stream size", "header", headerSize, "actual", vOffset)
@@ -320,18 +331,41 @@ func aggregateRemainingVolumes(mainParts []filePart, allRarFiles []UnpackableFil
 	}
 
 	// Probe the first continuation volume to determine the RAR header
-	// overhead. Each continuation volume has a signature + archive header +
-	// file continuation header before the actual data. Without this, the
-	// VirtualStream reads RAR header bytes as media data, corrupting the
-	// stream at every volume boundary.
-	contDataOffset := probeContinuationOffset(allRarFiles, startIdx, name)
-	if contDataOffset > 0 {
-		logger.Debug("Probed continuation volume header", "dataOffset", contDataOffset)
+	// overhead AND the exact packed data size per continuation volume.
+	// Using f.Size() - headerOverhead is wrong because f.Size() is based on
+	// estimated segment sizes (the last segment's decoded size is a ratio
+	// estimate). Even ~80 bytes of error per volume causes cumulative
+	// misalignment of VirtualStart/VirtualEnd, so seeks to later volumes
+	// read from the wrong byte offset and produce corrupt data.
+	probe := probeContinuation(allRarFiles, startIdx, name)
+	if probe.dataOffset > 0 {
+		logger.Debug("Probed continuation volume", "dataOffset", probe.dataOffset, "packedSize", probe.packedSize)
 	}
 
 	first := mainParts[0]
 	result := []filePart{first}
 
+	numContVolumes := len(allRarFiles) - startIdx - 1
+	if numContVolumes <= 0 {
+		return result
+	}
+
+	// For standard RAR splits, all non-last continuation volumes have the
+	// same packed data size. Use the probed PackedSize for them and derive
+	// the last volume's size from the total file size.
+	contPackedSize := probe.packedSize
+	contDataOffset := probe.dataOffset
+
+	// Calculate the last volume's exact data size from the total.
+	// totalFileData = firstPart + (numContVolumes-1)*contPackedSize + lastPartData
+	var lastPartData int64
+	if contPackedSize > 0 && numContVolumes > 1 {
+		lastPartData = headerSize - first.packedSize - int64(numContVolumes-1)*contPackedSize
+	} else if contPackedSize > 0 && numContVolumes == 1 {
+		lastPartData = headerSize - first.packedSize
+	}
+
+	added := 0
 	for i := startIdx + 1; i < len(allRarFiles); i++ {
 		f := allRarFiles[i]
 		if sm, ok := f.(segmentMapper); ok {
@@ -340,7 +374,23 @@ func aggregateRemainingVolumes(mainParts []filePart, allRarFiles []UnpackableFil
 		if f.Size() <= 0 {
 			continue
 		}
-		dataSize := f.Size() - contDataOffset
+
+		isLastVolume := i == len(allRarFiles)-1
+		var dataSize int64
+		if contPackedSize > 0 {
+			if isLastVolume && lastPartData > 0 {
+				dataSize = lastPartData
+			} else if !isLastVolume {
+				dataSize = contPackedSize
+			} else {
+				// Last volume, but couldn't compute lastPartData (only 1 cont volume)
+				dataSize = contPackedSize
+			}
+		} else {
+			// Fallback: no probe data, use estimated size
+			dataSize = f.Size() - contDataOffset
+		}
+
 		if dataSize <= 0 {
 			continue
 		}
@@ -353,14 +403,21 @@ func aggregateRemainingVolumes(mainParts []filePart, allRarFiles []UnpackableFil
 			volName:      f.Name(),
 			isMedia:      true,
 		})
+		added++
 	}
-	logger.Debug("Manual volume aggregation", "added", len(result)-1, "total", len(result))
+	logger.Debug("Manual volume aggregation", "added", added, "total", len(result))
 	return result
 }
 
-func probeContinuationOffset(allRarFiles []UnpackableFile, startIdx int, targetName string) int64 {
+// continuationProbe holds exact offset and packed size for continuation volumes.
+type continuationProbe struct {
+	dataOffset int64
+	packedSize int64
+}
+
+func probeContinuation(allRarFiles []UnpackableFile, startIdx int, targetName string) continuationProbe {
 	if startIdx+1 >= len(allRarFiles) {
-		return 0
+		return continuationProbe{}
 	}
 
 	firstFile := allRarFiles[startIdx]
@@ -379,7 +436,7 @@ func probeContinuationOffset(allRarFiles []UnpackableFile, startIdx int, targetN
 	)
 	if err != nil {
 		logger.Debug("Continuation probe failed, falling back to zero offset", "err", err)
-		return 0
+		return continuationProbe{}
 	}
 
 	lowerTarget := strings.ToLower(targetName)
@@ -388,10 +445,13 @@ func probeContinuationOffset(allRarFiles []UnpackableFile, startIdx int, targetN
 			continue
 		}
 		if len(info.Parts) >= 2 {
-			return info.Parts[1].DataOffset
+			return continuationProbe{
+				dataOffset: info.Parts[1].DataOffset,
+				packedSize: info.Parts[1].PackedSize,
+			}
 		}
 	}
-	return 0
+	return continuationProbe{}
 }
 
 // --- nested archive handling ---

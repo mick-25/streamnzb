@@ -1197,11 +1197,8 @@ func (s *Server) handleDebugPlay(w http.ResponseWriter, r *http.Request, device 
 		return
 	}
 
-	if nzbParsed.IsRARRelease() {
-		logger.Info("RAR playback not supported (seeking issues)", "nzb", nzbPath)
-		forceDisconnect(w, s.baseURL)
-		return
-	}
+	// RAR is allowed only for debug play (for testing); seeking may not work.
+	// Other paths (stream, play) reject RAR in validateCandidate / handlePlay.
 
 	// Create Session
 	// Use hash of path as ID to allow repeating same path

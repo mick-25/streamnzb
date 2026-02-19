@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"time"
 
 	"streamnzb/pkg/core/logger"
 	"streamnzb/pkg/media/loader"
@@ -32,6 +33,12 @@ type VirtualStream struct {
 	currentReader io.ReadCloser
 	currentPart   int
 	closed        bool
+
+	// lastSeekWasEnd tracks if the previous Seek was SeekEnd (size probe). ServeContent
+	// does Seek(0, SeekEnd) then Seek(0, SeekStart) then Seek(rangeStart, SeekStart).
+	// We skip prefetch for SeekEnd; we also skip prefetch for the following Seek(0)
+	// so we don't download the start of the file on every range request.
+	lastSeekWasEnd bool
 }
 
 func NewVirtualStream(ctx context.Context, parts []virtualPart, totalSize int64, startOffset int64) *VirtualStream {
@@ -202,25 +209,49 @@ func (s *VirtualStream) Seek(offset int64, whence int) (int64, error) {
 	s.closeReader()
 	s.offset = target
 
+	// Skip prefetch when ServeContent is only probing for size (SeekEnd). Prefetching the
+	// last segment here would hold an NNTP connection and compete with the real range read,
+	// causing seek-to-position playback to stall.
+	if whence == io.SeekEnd {
+		s.lastSeekWasEnd = true
+		return target, nil
+	}
+
+	// Skip prefetch when this is the inevitable Seek(0) after SeekEnd. Otherwise we
+	// download segment 0 (start of the file) on every range request, making it feel like
+	// we're downloading the movie from the start until we reach the seek position.
+	if target == 0 && s.lastSeekWasEnd {
+		s.lastSeekWasEnd = false
+		return target, nil
+	}
+	s.lastSeekWasEnd = false
+
 	// Prefetch the target segment immediately when seeking (before Read() is called).
-	// Only when segment map is already detected, so we don't block Seek on segment 0 download.
+	// Call EnsureSegmentMap first so we have segment boundaries (for a new volume this may
+	// block on segment 0 once); then prefetch and wait for the target segment so the first
+	// Read() after seek doesn't block and the client doesn't timeout and retry range=0-.
 	if part != nil {
 		localOff := target - part.VirtualStart
 		volOff := part.VolOffset + localOff
-		if volFile, ok := part.VolFile.(*loader.File); ok && volOff > 0 && volFile.SegmentMapDetected() {
+		if volFile, ok := part.VolFile.(*loader.File); ok && volOff > 0 {
 			logger.Debug("VirtualStream.Seek: prefetching target segment", "volOff", volOff, "partIdx", partIdx)
 			logger.Trace("VirtualStream.Seek: prefetching target segment", "volOff", volOff, "partIdx", partIdx)
 			if err := volFile.EnsureSegmentMap(); err == nil {
 				if segIdx := volFile.FindSegmentIndex(volOff); segIdx >= 0 {
-					if _, cached := volFile.GetCachedSegment(segIdx); !cached {
-						logger.Debug("VirtualStream.Seek: starting prefetch", "segIdx", segIdx, "volOff", volOff)
-						logger.Trace("VirtualStream.Seek: starting prefetch", "segIdx", segIdx)
-						done := volFile.StartDownloadSegment(s.ctx, segIdx)
-						logger.Debug("VirtualStream.Seek: prefetch registered", "segIdx", segIdx, "hasChannel", done != nil)
-						logger.Trace("VirtualStream.Seek: prefetch registered", "segIdx", segIdx, "hasChannel", done != nil)
-					} else {
-						logger.Debug("VirtualStream.Seek: segment already cached", "segIdx", segIdx)
-						logger.Trace("VirtualStream.Seek: segment already cached", "segIdx", segIdx)
+					// Always start prefetch and wait (done closes immediately if already cached).
+					// Skipping wait when "already cached" was wrong for other RAR volumes (e.g. part 2):
+					// each volume has its own segment cache, so part 2's seg 0 is rarely cached until
+					// we request it; without waiting, first Read() blocks and client gets no data,
+					// then may open range=0- ("download from start").
+					logger.Debug("VirtualStream.Seek: starting prefetch", "segIdx", segIdx, "volOff", volOff, "partIdx", partIdx)
+					done := volFile.StartDownloadSegment(s.ctx, segIdx)
+					logger.Debug("VirtualStream.Seek: prefetch registered", "segIdx", segIdx, "hasChannel", done != nil)
+					select {
+					case <-done:
+						logger.Trace("VirtualStream.Seek: target segment ready", "segIdx", segIdx)
+					case <-s.ctx.Done():
+					case <-time.After(15 * time.Second):
+						logger.Trace("VirtualStream.Seek: prefetch wait timeout", "segIdx", segIdx)
 					}
 				} else {
 					logger.Debug("VirtualStream.Seek: segment index not found", "volOff", volOff)
@@ -280,16 +311,24 @@ func (s *VirtualStream) ensureReader(part *virtualPart, partIdx int) error {
 	volOff := part.VolOffset + localOff
 	logger.Trace("VirtualStream.ensureReader: calculated offsets", "localOff", localOff, "volOff", volOff)
 
-	// For loader.File volumes, prefetch the target segment before opening the reader.
+	// For loader.File volumes, ensure segment map and wait for the target segment before
+	// opening the reader, so the first Read() returns quickly instead of blocking in
+	// DownloadSegment (which can cause client timeouts and range=0- retries).
 	if volFile, ok := part.VolFile.(*loader.File); ok && volOff > 0 {
 		logger.Trace("VirtualStream.ensureReader: RAR volume detected", "volOff", volOff)
 		if err := volFile.EnsureSegmentMap(); err == nil {
 			if segIdx := volFile.FindSegmentIndex(volOff); segIdx >= 0 {
-				cached := false
-				if _, cached = volFile.GetCachedSegment(segIdx); !cached {
-					logger.Trace("VirtualStream.ensureReader: starting prefetch", "segIdx", segIdx, "volOff", volOff)
+				if _, cached := volFile.GetCachedSegment(segIdx); !cached {
+					logger.Trace("VirtualStream.ensureReader: starting prefetch and waiting", "segIdx", segIdx, "volOff", volOff)
 					done := volFile.StartDownloadSegment(s.ctx, segIdx)
 					logger.Trace("VirtualStream.ensureReader: prefetch registered", "segIdx", segIdx, "hasChannel", done != nil)
+					select {
+					case <-done:
+						logger.Trace("VirtualStream.ensureReader: target segment ready", "segIdx", segIdx)
+					case <-s.ctx.Done():
+					case <-time.After(15 * time.Second):
+						logger.Trace("VirtualStream.ensureReader: prefetch wait timeout", "segIdx", segIdx)
+					}
 				} else {
 					logger.Trace("VirtualStream.ensureReader: segment already cached", "segIdx", segIdx)
 				}
