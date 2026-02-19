@@ -23,6 +23,14 @@ const MaxZeroFills = 10
 // more than MaxZeroFills times. Callers can use errors.Is to detect and redirect.
 var ErrTooManyZeroFills = errors.New("too many failed segments")
 
+// IsFailed returns true when this file has accumulated too many segment
+// download failures and further read attempts would immediately error.
+func (f *File) IsFailed() bool {
+	f.zeroFillMu.Lock()
+	defer f.zeroFillMu.Unlock()
+	return f.zeroFillCount >= MaxZeroFills
+}
+
 type Segment struct {
 	nzb.Segment
 	StartOffset int64

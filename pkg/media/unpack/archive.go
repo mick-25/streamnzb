@@ -23,6 +23,12 @@ type DirectBlueprint struct {
 	FileIndex int
 }
 
+// FailedBlueprint is a sentinel cached after a scan failure so that
+// retry requests skip re-scanning and fail immediately.
+type FailedBlueprint struct {
+	Err error
+}
+
 // GetMediaStream finds a video file inside the provided NZB files and returns
 // a seekable stream. ctx controls the lifetime of the returned stream.
 // cachedBP is an optional cached blueprint to avoid re-scanning headers.
@@ -47,6 +53,9 @@ func GetMediaStream(ctx context.Context, files []*loader.File, cachedBP interfac
 				}
 				return stream, bp.FileName, f.Size(), bp, nil
 			}
+		case *FailedBlueprint:
+			logger.Debug("Using cached scan failure", "err", bp.Err)
+			return nil, "", 0, bp, bp.Err
 		}
 	}
 
@@ -155,5 +164,5 @@ func GetMediaStream(ctx context.Context, files []*loader.File, cachedBP interfac
 	}
 
 	logger.Warn("GetMediaStream found no suitable media", "files", len(files), "rar_candidates", len(rarFiles))
-	return nil, "", 0, nil, io.EOF
+	return nil, "", 0, &FailedBlueprint{Err: io.EOF}, io.EOF
 }

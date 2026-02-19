@@ -1,6 +1,7 @@
 package availnzb
 
 import (
+	"strings"
 	"streamnzb/pkg/core/logger"
 	"streamnzb/pkg/release"
 	"streamnzb/pkg/session"
@@ -78,10 +79,14 @@ func (r *Reporter) report(sess *session.Session, available bool) {
 		if sess.NZB != nil {
 			meta.CompressionType = sess.NZB.CompressionType()
 		}
-		providerURL := "ALL"
-		if hosts := r.providerSrc.GetProviderHosts(); len(hosts) > 0 {
-			providerURL = hosts[0]
+		hosts := r.providerSrc.GetProviderHosts()
+		if len(hosts) == 0 {
+			return
 		}
-		_ = r.client.ReportAvailability(releaseURL, providerURL, available, meta)
+		if !available {
+			_ = r.client.ReportAvailability(releaseURL, strings.Join(hosts, ","), false, meta)
+		} else {
+			_ = r.client.ReportAvailability(releaseURL, hosts[0], true, meta)
+		}
 	}()
 }

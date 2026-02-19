@@ -27,7 +27,7 @@ var videoExts = []string{
 	ExtVob, ExtWmv, ExtFlv, ExtWebm, ExtMov,
 }
 
-// ExtractFilename extracts a clean filename from an NZB subject line.
+// ExtractFilename extracts a clean filename from an NZB subject line or file path.
 func ExtractFilename(subject string) string {
 	// Quoted filename takes priority
 	if start := strings.Index(subject, "\""); start != -1 {
@@ -54,7 +54,17 @@ func ExtractFilename(subject string) string {
 
 	// Strip trailing " yEnc"
 	clean = strings.TrimSuffix(clean, " yEnc")
-	return strings.TrimSpace(clean)
+	clean = strings.TrimSpace(clean)
+
+	// Handle file paths (RAR entry names can contain directory separators)
+	if idx := strings.LastIndex(clean, "/"); idx != -1 {
+		clean = clean[idx+1:]
+	}
+	if idx := strings.LastIndex(clean, "\\"); idx != -1 {
+		clean = clean[idx+1:]
+	}
+
+	return clean
 }
 
 func IsVideoFile(name string) bool {
@@ -104,10 +114,10 @@ func IsMiddleRarVolume(name string) bool {
 		return true
 	}
 
-	// .rNN: first = .r00, middle = .r01+
+	// .rNN: ALL .rNN are continuations; the first volume is always .rar
 	if len(name) >= 4 && name[len(name)-4:len(name)-2] == ".r" {
 		last := name[len(name)-2:]
-		if last != "ar" && last != "00" {
+		if last != "ar" {
 			return true
 		}
 	}

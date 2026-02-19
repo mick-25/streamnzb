@@ -451,18 +451,11 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string, 
 		return true
 	}
 
-	// AvailNZB: one call for all releases, split streamable vs RAR client-side
 	var availResult *availnzb.ReleasesResult
-	rarTitles := make(map[string]bool)
 	if s.availClient != nil && s.availClient.BaseURL != "" && (contentIDs.ImdbID != "" || contentIDs.TvdbID != "") {
 		availResult, _ = s.availClient.GetReleases(contentIDs.ImdbID, contentIDs.TvdbID, contentIDs.Season, contentIDs.Episode, availIndexers, "")
 		if availResult != nil {
-			for _, rws := range availResult.Releases {
-				if rws != nil && strings.ToLower(rws.CompressionType) == "rar" && rws.Release != nil && rws.Release.Title != "" {
-					rarTitles[release.NormalizeTitle(rws.Release.Title)] = true
-				}
-			}
-			logger.Debug("AvailNZB releases", "total", len(availResult.Releases), "rar", len(rarTitles))
+			logger.Debug("AvailNZB releases", "total", len(availResult.Releases))
 		}
 	}
 
@@ -474,7 +467,7 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string, 
 				continue
 			}
 			ct := strings.ToLower(rws.CompressionType)
-			if ct == "rar" || (ct != "" && ct != "direct" && ct != "7z") {
+			if ct != "" && ct != "direct" && ct != "7z" && ct != "rar" {
 				continue
 			}
 			availReleases = append(availReleases, rws.Release)
@@ -523,7 +516,7 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string, 
 						knownURLs[rel.DetailsURL] = true
 					}
 				}
-				go s.warmAvailNZBCache(context.Background(), req, contentIDs, knownURLs, rarTitles)
+				go s.warmAvailNZBCache(context.Background(), req, contentIDs, knownURLs)
 			}
 		}
 	}
@@ -567,18 +560,6 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string, 
 						cachedUnhealthyForUs[detailsURL] = true
 					}
 				}
-			}
-			// Filter out known RAR releases (skip validation)
-			if len(rarTitles) > 0 {
-				before := len(candidates)
-				filtered := candidates[:0]
-				for _, c := range candidates {
-					if c.Release == nil || !rarTitles[release.NormalizeTitle(c.Release.Title)] {
-						filtered = append(filtered, c)
-					}
-				}
-				candidates = filtered
-				logger.Debug("Filtered RAR releases from indexer candidates", "removed", before-len(candidates), "remaining", len(candidates))
 			}
 			// Filter out indexer candidates that AvailNZB marks as unhealthy for our providers
 			if len(cachedUnhealthyForUs) > 0 {
@@ -759,8 +740,8 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string, 
 }
 
 // warmAvailNZBCache validates one indexer candidate that isn't in AvailNZB with each provider
-// and reports all results to AvailNZB (good or bad). Skips releases known to be RAR.
-func (s *Server) warmAvailNZBCache(ctx context.Context, req indexer.SearchRequest, contentIDs *session.AvailReportMeta, knownURLs map[string]bool, rarTitles map[string]bool) {
+// and reports all results to AvailNZB (good or bad).
+func (s *Server) warmAvailNZBCache(ctx context.Context, req indexer.SearchRequest, contentIDs *session.AvailReportMeta, knownURLs map[string]bool) {
 	if s.availClient == nil || s.availClient.BaseURL == "" || (contentIDs.ImdbID == "" && contentIDs.TvdbID == "") {
 		return
 	}
@@ -781,9 +762,6 @@ func (s *Server) warmAvailNZBCache(ctx context.Context, req indexer.SearchReques
 		}
 		detailsURL := cand.Release.DetailsURL
 		if detailsURL == "" || knownURLs[detailsURL] || release.IsPrivateReleaseURL(detailsURL) {
-			continue
-		}
-		if rarTitles != nil && rarTitles[release.NormalizeTitle(cand.Release.Title)] {
 			continue
 		}
 		rel := cand.Release
@@ -999,10 +977,6 @@ func (s *Server) validateCandidate(ctx context.Context, cand triage.Candidate, d
 			return Stream{}, fmt.Errorf("no best provider")
 		}
 
-		if nzbParsed.IsRARRelease() {
-			return Stream{}, fmt.Errorf("RAR playback not supported (seeking issues)")
-		}
-
 		// Store NZB in session manager
 		logger.Trace("validateCandidate: CreateSession start", "title", rel.Title)
 		_, err = s.sessionManager.CreateSession(sessionID, nzbParsed, rel, contentIDs)
@@ -1050,15 +1024,6 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 		return
 	}
 
-	if sess.NZB != nil && sess.NZB.IsRARRelease() {
-		logger.Info("RAR playback not supported (seeking issues)", "id", sessionID)
-		if s.availReporter != nil {
-			s.availReporter.ReportRAR(sess)
-		}
-		forceDisconnect(w, s.baseURL)
-		return
-	}
-
 	files := sess.Files
 	if len(files) == 0 {
 		if sess.File != nil {
@@ -1073,10 +1038,27 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 		}
 	}
 
+	// If any file has exceeded its failure threshold, redirect immediately
+	// instead of starting a stream that will fail on the first read.
+	for _, f := range files {
+		if f.IsFailed() {
+			logger.Error("Session file has too many failures, redirecting to error", "session", sessionID, "file", f.Name())
+			s.reportBadRelease(sess, loader.ErrTooManyZeroFills)
+			if sess.NZB != nil {
+				s.validator.InvalidateCache(sess.NZB.Hash())
+			}
+			forceDisconnect(w, s.baseURL)
+			return
+		}
+	}
+
 	// Each request gets its own stream, scoped to the HTTP request context.
 	// When the client disconnects, r.Context() is cancelled, which propagates
 	// down through VirtualStream -> SegmentReader -> DownloadSegment.
 	stream, name, size, bp, err := unpack.GetMediaStream(r.Context(), files, sess.Blueprint)
+	if bp != nil && sess.Blueprint == nil {
+		sess.SetBlueprint(bp)
+	}
 	if err != nil {
 		logger.Error("Failed to open media stream", "id", sessionID, "err", err)
 		s.reportBadRelease(sess, err)
@@ -1087,10 +1069,6 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request, device *auth
 		return
 	}
 	defer stream.Close()
-
-	if bp != nil && sess.Blueprint == nil {
-		sess.SetBlueprint(bp)
-	}
 
 	// Report successful fetch/stream to AvailNZB (lazy sessions weren't reported at catalog time)
 	if s.availReporter != nil {
@@ -1197,9 +1175,6 @@ func (s *Server) handleDebugPlay(w http.ResponseWriter, r *http.Request, device 
 		return
 	}
 
-	// RAR is allowed only for debug play (for testing); seeking may not work.
-	// Other paths (stream, play) reject RAR in validateCandidate / handlePlay.
-
 	// Create Session
 	// Use hash of path as ID to allow repeating same path
 	sessionID := fmt.Sprintf("debug-%x", nzbPath)
@@ -1222,16 +1197,15 @@ func (s *Server) handleDebugPlay(w http.ResponseWriter, r *http.Request, device 
 	}
 
 	stream, name, size, bp, err := unpack.GetMediaStream(r.Context(), files, sess.Blueprint)
+	if bp != nil && sess.Blueprint == nil {
+		sess.SetBlueprint(bp)
+	}
 	if err != nil {
 		logger.Error("Failed to open media stream", "err", err)
 		http.Error(w, "Failed to open media stream: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 	defer stream.Close()
-
-	if bp != nil && sess.Blueprint == nil {
-		sess.SetBlueprint(bp)
-	}
 
 	clientIP, _, _ := net.SplitHostPort(r.RemoteAddr)
 	if clientIP == "" {

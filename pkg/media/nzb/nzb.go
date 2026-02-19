@@ -261,7 +261,6 @@ func getFilePattern(filename string) string {
 }
 
 // IsRARRelease returns true if the main content of the release is RAR-based.
-// RAR playback is not supported due to seeking issues.
 func (n *NZB) IsRARRelease() bool {
 	return n.CompressionType() == "rar"
 }

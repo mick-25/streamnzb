@@ -27,3 +27,5 @@ require (
 	github.com/javi11/sevenzip v1.6.2-0.20251026160715-ca961b7f1239
 	golang.org/x/sync v0.19.0 // indirect
 )
+
+replace github.com/javi11/rardecode/v2 => ./third_party/rardecode
