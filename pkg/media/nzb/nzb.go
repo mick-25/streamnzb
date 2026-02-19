@@ -82,9 +82,12 @@ func (n *NZB) Hash() string {
 		return ""
 	}
 
-	// Use first file's subject as identifier
+	subject := n.Files[0].Subject
+	if subject == "" {
+		subject = n.Files[0].Poster
+	}
 	h := sha256.New()
-	h.Write([]byte(n.Files[0].Subject))
+	h.Write([]byte(subject))
 	return hex.EncodeToString(h.Sum(nil))[:16]
 }
 
@@ -372,9 +375,13 @@ func (n *NZB) GetMainVideoFile() *FileInfo {
 
 // analyzeFile extracts information from a file's subject line
 func analyzeFile(file *File) *FileInfo {
-	// Extract filename from subject
-	// Subject format is usually: "filename" yEnc (1/50) or similar
-	filename := ExtractFilename(file.Subject)
+	// Extract filename from subject or poster. Some indexers (e.g. NZBgeek) put
+	// the Usenet subject line in poster instead of subject; fall back to poster.
+	subject := file.Subject
+	if subject == "" {
+		subject = file.Poster
+	}
+	filename := ExtractFilename(subject)
 
 	// Calculate total size
 	var size int64
