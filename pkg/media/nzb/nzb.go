@@ -152,6 +152,24 @@ func (n *NZB) GetLargestContentFile() *FileInfo {
 	return largest
 }
 
+// GetPlaybackFile returns the NZB file most relevant to playback validation.
+// For RAR: the first volume (its headers must be readable for ScanArchive).
+// For everything else: the largest content file (the video or archive).
+func (n *NZB) GetPlaybackFile() *FileInfo {
+	ct := n.CompressionType()
+	if ct == "rar" {
+		for _, info := range n.GetContentFiles() {
+			lower := strings.ToLower(info.Filename)
+			if (strings.HasSuffix(lower, ".rar") && !strings.Contains(lower, ".part")) ||
+				strings.Contains(lower, ".part01.") || strings.Contains(lower, ".part1.") ||
+				strings.Contains(lower, ".part001.") {
+				return info
+			}
+		}
+	}
+	return n.GetLargestContentFile()
+}
+
 // GetContentFiles returns all files related to the main content (e.g. all rar volumes)
 func (n *NZB) GetContentFiles() []*FileInfo {
 	infos := n.GetFileInfo()

@@ -3,13 +3,17 @@ package validation
 import (
 	"context"
 	"fmt"
+	"io"
 	"sync"
 	"time"
 
 	"streamnzb/pkg/core/logger"
+	"streamnzb/pkg/media/decode"
 	"streamnzb/pkg/media/nzb"
 	"streamnzb/pkg/usenet/nntp"
 )
+
+const probeSegments = 3
 
 // Checker validates article availability across providers
 type Checker struct {
@@ -78,6 +82,21 @@ func (c *Checker) ValidateNZBSingleProvider(ctx context.Context, nzbData *nzb.NZ
 		return &ValidationResult{Provider: providerName, Error: fmt.Errorf("provider %q not found", providerName)}
 	}
 	return c.validateProvider(ctx, nzbData, providerName, pool)
+}
+
+// ValidateNZBSingleProviderExtended does a STAT check followed by a BODY+yEnc
+// probe on the leading segments of the playback-relevant file. The BODY step
+// catches corruption that STAT alone cannot detect (yEnc size mismatches,
+// truncated articles, etc.). Intended for background cache warming where
+// extra bandwidth is acceptable.
+func (c *Checker) ValidateNZBSingleProviderExtended(ctx context.Context, nzbData *nzb.NZB, providerName string) *ValidationResult {
+	c.mu.RLock()
+	pool, ok := c.providers[providerName]
+	c.mu.RUnlock()
+	if !ok || pool == nil {
+		return &ValidationResult{Provider: providerName, Error: fmt.Errorf("provider %q not found", providerName)}
+	}
+	return c.validateProviderExtended(ctx, nzbData, providerName, pool)
 }
 
 // ValidateNZB checks article availability for an NZB across all providers
@@ -221,14 +240,93 @@ func (c *Checker) validateProvider(ctx context.Context, nzbData *nzb.NZB, provid
 	return result
 }
 
-// getSampleArticles returns a sample of article IDs to check
+// validateProviderExtended runs the regular STAT check, then probes a few
+// leading segments with BODY + yEnc decode to verify actual data integrity.
+func (c *Checker) validateProviderExtended(ctx context.Context, nzbData *nzb.NZB, providerName string, pool *nntp.ClientPool) *ValidationResult {
+	result := c.validateProvider(ctx, nzbData, providerName, pool)
+	if result.Error != nil || !result.Available {
+		return result
+	}
+
+	info := nzbData.GetPlaybackFile()
+	if info == nil || info.File == nil || len(info.File.Segments) == 0 {
+		return result
+	}
+
+	segments := info.File.Segments
+	count := probeSegments
+	if count > len(segments) {
+		count = len(segments)
+	}
+
+	client, ok := pool.TryGet(ctx)
+	if !ok {
+		waitCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+		var err error
+		client, err = pool.Get(waitCtx)
+		if err != nil {
+			return result
+		}
+	}
+
+	releaseOk := false
+	defer func() {
+		if releaseOk {
+			pool.Put(client)
+		} else {
+			pool.Discard(client)
+		}
+	}()
+
+	if len(info.File.Groups) > 0 {
+		_ = client.Group(info.File.Groups[0])
+	}
+
+	for i := 0; i < count; i++ {
+		body, err := client.Body(segments[i].ID)
+		if err != nil {
+			result.Available = false
+			result.Error = fmt.Errorf("body probe segment %d: %w", i, err)
+			logger.Debug("Extended check BODY failed", "provider", providerName, "segment", i, "err", err)
+			return result
+		}
+		frame, err := decode.DecodeToBytes(body)
+		if err != nil {
+			// Drain remaining body so the connection is not left dirty.
+			_, _ = io.Copy(io.Discard, body)
+			result.Available = false
+			result.Error = fmt.Errorf("decode probe segment %d: %w", i, err)
+			logger.Debug("Extended check decode failed", "provider", providerName, "segment", i, "err", err)
+			return result
+		}
+		if len(frame.Data) == 0 {
+			result.Available = false
+			result.Error = fmt.Errorf("probe segment %d decoded to empty data", i)
+			logger.Debug("Extended check empty segment", "provider", providerName, "segment", i)
+			return result
+		}
+	}
+
+	releaseOk = true
+	logger.Debug("Extended check passed", "provider", providerName, "probed", count)
+	return result
+}
+
+// getSampleArticles returns a sample of article IDs to check.
+// Picks the file most relevant to playback: the first RAR volume for
+// RAR releases, or the largest content file for direct/7z.
 func (c *Checker) getSampleArticles(nzbData *nzb.NZB) []string {
 	if len(nzbData.Files) == 0 {
 		return nil
 	}
 
-	// Check first file only (usually the media file)
-	file := nzbData.Files[0]
+	var file *nzb.File
+	if info := nzbData.GetPlaybackFile(); info != nil {
+		file = info.File
+	} else {
+		file = &nzbData.Files[0]
+	}
 	segments := file.Segments
 
 	if len(segments) == 0 {

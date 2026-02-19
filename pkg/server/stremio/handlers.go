@@ -277,7 +277,9 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request, device *au
 	logger.Trace("stream request searchAndValidate returned", "count", len(streams), "err", err)
 	if err != nil {
 		logger.Error("Error searching for streams", "err", err)
-		streams = []Stream{} // Return empty list on error
+	}
+	if streams == nil {
+		streams = []Stream{}
 	}
 
 	response := StreamResponse{
@@ -739,8 +741,8 @@ func (s *Server) searchAndValidate(ctx context.Context, contentType, id string, 
 	return streams, nil
 }
 
-// warmAvailNZBCache validates one indexer candidate that isn't in AvailNZB with each provider
-// and reports all results to AvailNZB (good or bad).
+// warmAvailNZBCache validates one indexer candidate that isn't in AvailNZB with each
+// provider using extended validation (STAT + BODY/yEnc probe) and reports all results.
 func (s *Server) warmAvailNZBCache(ctx context.Context, req indexer.SearchRequest, contentIDs *session.AvailReportMeta, knownURLs map[string]bool) {
 	if s.availClient == nil || s.availClient.BaseURL == "" || (contentIDs.ImdbID == "" && contentIDs.TvdbID == "") {
 		return
@@ -806,7 +808,7 @@ func (s *Server) warmAvailNZBCache(ctx context.Context, req indexer.SearchReques
 		meta.Episode = contentIDs.Episode
 		// Check each provider and report all results to AvailNZB
 		for _, providerHost := range providerHosts {
-			result := s.validator.ValidateNZBSingleProvider(ctx, nzbParsed, providerHost)
+			result := s.validator.ValidateNZBSingleProviderExtended(ctx, nzbParsed, providerHost)
 			available := result.Error == nil && result.Available
 			if err := s.availClient.ReportAvailability(detailsURL, result.Host, available, meta); err != nil {
 				logger.Debug("AvailNZB cache warm: report failed", "title", rel.Title, "provider", providerHost, "err", err)
